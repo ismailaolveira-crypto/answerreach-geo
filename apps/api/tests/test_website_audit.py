@@ -18,7 +18,11 @@ from app.models.cleanroom_v1 import (
     GeoActionEvent,
     GeoActionOpportunity,
     GeoAgentRun,
+    GeoContentAsset,
+    GeoContentBrief,
+    GeoContentClaim,
     GeoOptimizationAction,
+    GeoPlatformVariant,
     GeoWebsiteAudit,
     GeoWorkspace,
 )
@@ -124,6 +128,20 @@ def test_audit_does_not_treat_javascript_shell_as_readable_product_content() -> 
     assert result["checks"]["accessible"]["passed"] is True
     assert result["checks"]["server_visible_content"]["passed"] is False
     assert "client_rendering_required" in {item["code"] for item in result["findings"]}
+
+
+def test_brand_fact_gate_only_applies_when_server_visible_product_copy_is_missing() -> None:
+    readable_opportunity = SimpleNamespace(
+        opportunity_type="website_citation_readiness",
+        scope_snapshot={"finding_codes": ["meta_description_missing", "canonical_missing"]},
+    )
+    js_shell_opportunity = SimpleNamespace(
+        opportunity_type="website_citation_readiness",
+        scope_snapshot={"finding_codes": ["client_rendering_required"]},
+    )
+
+    assert routes._website_requires_sourced_brand_facts(readable_opportunity) is False
+    assert routes._website_requires_sourced_brand_facts(js_shell_opportunity) is True
 
 
 def test_audit_blocks_private_network_targets_before_request() -> None:
@@ -276,5 +294,197 @@ def test_needs_work_audit_becomes_deduplicated_selectable_website_action(
         assert brief.evidence_ids == []
         assert context["action"]["source_type"] == "website_audit"
         assert context["website_audit_evidence"]["raw_html_sha256"]
+        assert context["website_audit_evidence"]["requires_sourced_brand_facts"] is True
         assert "<div id=\"app\">" in context["website_audit_evidence"]["raw_homepage_html_excerpt"]
         assert set(context["platforms"]) == {"official_site"}
+
+
+def test_website_draft_requires_active_sourced_brand_fact(
+    website_audit_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _needs_work_capture()
+    captured["checked_at"] = datetime.now(timezone.utc)
+    monkeypatch.setattr(routes, "audit_website", lambda _url, *, brand_name: dict(captured))
+    monkeypatch.setattr(
+        routes,
+        "diagnose_local_codex",
+        lambda: {
+            "runtime_key": "local_codex",
+            "sdk_installed": True,
+            "sdk_version": "test",
+            "runtime_version": "Codex Desktop/test",
+            "ready": True,
+            "login_status": "chatgpt_authenticated",
+            "default_model": "gpt-5-codex",
+            "available_models": ["gpt-5-codex"],
+            "error": None,
+        },
+    )
+    client: TestClient = website_audit_api.client
+    assert client.post("/api/v1/workspaces/1/website-audits").status_code == 201
+    opportunity = client.get("/api/v1/workspaces/1/action-opportunities").json()[0]
+    action = client.post(
+        f"/api/v1/workspaces/1/action-opportunities/{opportunity['id']}/select"
+    ).json()
+
+    blocked = client.post(
+        f"/api/v1/workspaces/1/actions/{action['id']}/agent-runs",
+        json={"selected_platforms": ["official_site"]},
+    )
+    assert blocked.status_code == 409
+    assert "品牌事实" in blocked.json()["detail"]
+
+    invalid_fact = client.post(
+        "/api/v1/workspaces/1/brand-facts",
+        json={
+            "title": "无效来源",
+            "statement": "这条记录不应被保存。",
+            "source_url": "not-a-public-url",
+        },
+    )
+    assert invalid_fact.status_code == 422
+    blank_fact = client.post(
+        "/api/v1/workspaces/1/brand-facts",
+        json={
+            "title": "   ",
+            "statement": "不能保存空白名称。",
+            "source_url": "https://brand.example/blank",
+        },
+    )
+    assert blank_fact.status_code == 422
+
+    created_fact = client.post(
+        "/api/v1/workspaces/1/brand-facts",
+        json={
+            "title": "产品定位",
+            "statement": "春秋元泉面向企业提供 Token 统一管控能力。",
+            "source_url": "https://brand.example/product",
+        },
+    )
+    assert created_fact.status_code == 201
+    fact_id = created_fact.json()["id"]
+    inactive = client.patch(
+        f"/api/v1/workspaces/1/brand-facts/{fact_id}", json={"status": "inactive"}
+    )
+    assert inactive.status_code == 200
+    assert inactive.json()["status"] == "inactive"
+    assert client.post(
+        f"/api/v1/workspaces/1/actions/{action['id']}/agent-runs",
+        json={"selected_platforms": ["official_site"]},
+    ).status_code == 409
+
+    active = client.patch(
+        f"/api/v1/workspaces/1/brand-facts/{fact_id}", json={"status": "active"}
+    )
+    assert active.status_code == 200
+    queued = client.post(
+        f"/api/v1/workspaces/1/actions/{action['id']}/agent-runs",
+        json={"selected_platforms": ["official_site"]},
+    )
+    assert queued.status_code == 202
+    assert queued.json()["selected_platforms"] == ["official_site"]
+
+    with website_audit_api.session_factory() as db:
+        brief = GeoContentBrief(
+            workspace_id=1,
+            action_id=action["id"],
+            audience="企业决策者",
+            intent="decision",
+            asset_type="article",
+            required_sections=[],
+            brand_fact_ids=[],
+            evidence_ids=[],
+            source_urls=["https://brand.example/"],
+            required_claims=[],
+            forbidden_claims=[],
+            open_questions=[],
+            input_fingerprint="website-review-gate",
+            status="ready",
+        )
+        db.add(brief)
+        db.flush()
+        asset = GeoContentAsset(
+            workspace_id=1,
+            brief_id=brief.id,
+            version=1,
+            title="官网整改框架",
+            summary="没有品牌事实的通用框架",
+            body_markdown="正文",
+            content_fingerprint="website-review-asset",
+            status="draft",
+        )
+        db.add(asset)
+        db.flush()
+        db.add(
+            GeoContentClaim(
+                content_asset_id=asset.id,
+                claim_key="source-1",
+                claim_text="公开规则要求正文可见。",
+                support_type="public_source",
+                source_url="https://developers.google.com/search/docs/",
+                verification_status="source_linked",
+                introduced_by_model=True,
+            )
+        )
+        db.add(
+            GeoPlatformVariant(
+                workspace_id=1,
+                content_asset_id=asset.id,
+                platform_key="official_site",
+                version=1,
+                policy_version="test",
+                title="官网整改框架",
+                summary="没有品牌事实的通用框架",
+                body_markdown="正文",
+                tags=[],
+                image_manifest=[],
+                adaptation_contract={},
+                content_fingerprint="website-review-variant",
+                status="ready",
+            )
+        )
+        run = db.get(GeoAgentRun, queued.json()["id"])
+        assert run is not None
+        run.status = "awaiting_review"
+        run.stage = "awaiting_review"
+        run.result_snapshot = {
+            "asset_id": asset.id,
+            "sourced_brand_fact_count": 0,
+        }
+        db.commit()
+        asset_id = asset.id
+
+    review_blocked = client.post(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["official_site"],
+            "note": "规则来源已核对",
+        },
+    )
+    assert review_blocked.status_code == 409
+    assert "通用整改框架" in review_blocked.json()["detail"]
+
+    with website_audit_api.session_factory() as db:
+        run = db.get(GeoAgentRun, queued.json()["id"])
+        assert run is not None
+        run.result_snapshot = {
+            **(run.result_snapshot or {}),
+            "sourced_brand_fact_count": 1,
+            "sourced_brand_fact_ids": [fact_id],
+        }
+        db.commit()
+
+    approved = client.post(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["official_site"],
+            "note": "规则与品牌事实均已核对",
+        },
+    )
+    assert approved.status_code == 201
+    assert approved.json()["approved_platform_keys"] == ["official_site"]

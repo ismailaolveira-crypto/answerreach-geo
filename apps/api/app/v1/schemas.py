@@ -1,7 +1,8 @@
 from datetime import datetime
 from typing import Literal
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class WorkspaceCreate(BaseModel):
@@ -1398,7 +1399,63 @@ class PromptTemplateRead(BaseModel):
 class BrandFactCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     statement: str = Field(min_length=1)
-    source_url: str | None = None
+    source_url: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("title", "statement")
+    @classmethod
+    def normalize_required_text(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("brand fact text cannot be blank")
+        return normalized
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: str | None):
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("source_url must be a public http or https URL")
+        return normalized
+
+
+class BrandFactUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    statement: str | None = Field(default=None, min_length=1)
+    source_url: str | None = Field(default=None, max_length=1000)
+    status: Literal["active", "inactive"] | None = None
+
+    @field_validator("title", "statement")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None):
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("brand fact text cannot be blank")
+        return normalized
+
+    @field_validator("source_url")
+    @classmethod
+    def validate_source_url(cls, value: str | None):
+        if value is None:
+            return None
+        normalized = value.strip()
+        parsed = urlparse(normalized)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("source_url must be a public http or https URL")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if not self.model_fields_set:
+            raise ValueError("At least one brand fact field must be provided")
+        for field_name in ("title", "statement", "status"):
+            if field_name in self.model_fields_set and getattr(self, field_name) is None:
+                raise ValueError(f"{field_name} cannot be null")
+        return self
 
 
 class BrandFactRead(BrandFactCreate):

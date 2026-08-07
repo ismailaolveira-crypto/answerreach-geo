@@ -26,6 +26,7 @@ type Props = {
 	initialScope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null };
 	actions: CleanroomAction[];
 	agentRuntime: AgentRuntime | null;
+	activeSourcedBrandFactCount: number;
 	websiteUrl: string | null;
 	initialWebsiteAudit: WebsiteAudit | null;
 	initialAgentRuns: CleanroomAgentRun[];
@@ -215,6 +216,13 @@ function actionStage(action?: CleanroomAction) {
 	return 1;
 }
 
+function initialSelectedOpportunityId(opportunities: PriorityActionOpportunity[]) {
+	const latestAction = opportunities
+		.filter((item) => item.existingAction)
+		.sort((left, right) => (right.existingAction?.id ?? 0) - (left.existingAction?.id ?? 0))[0];
+	return latestAction?.id ?? opportunities[0]?.id ?? "";
+}
+
 function ActionStage({ index, label, state, children }: { index: number; label: string; state: "done" | "active" | "idle"; children?: React.ReactNode }) {
 	return <li className={`pa-stage is-${state}`}>
 		<span>{state === "done" ? <Icon name="check" /> : index}</span>
@@ -300,9 +308,9 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
 	const router = useRouter();
-	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
+	const [selectedId, setSelectedId] = useState(() => initialSelectedOpportunityId(opportunities));
 	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
 	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
@@ -380,6 +388,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const currentRunStatus = currentRun?.status;
 	const currentAssetId = Number(currentRun?.result_snapshot.asset_id) || null;
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
+	const websiteGenerationReady = !selected?.requiresSourcedBrandFacts || activeSourcedBrandFactCount > 0;
+	const websiteDraftReadyForApproval = !selected?.requiresSourcedBrandFacts
+		|| Number(currentRun?.result_snapshot.sourced_brand_fact_count || 0) > 0;
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
@@ -929,7 +940,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					{!isTimelineCollapsed && selected ? <ol>
 						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={selected.type === "website" ? "完成官网内容修复后，以新一轮同版本审计验证服务端可读性与页面结构变化。" : `下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} />{selected.questionId ? <input type="hidden" name="question_plan_id" value={selected.questionId} /> : null}{selected.evidenceIds[0] ? <input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} /> : null}{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">{selected.sourceType === "website_audit" ? `已关联官网审计 #${selected.websiteAuditId} 的原始响应与问题清单。` : "已关联当前问题的真实模型观测与行动记录。"}</p>}</ActionStage>
 						<ActionStage index={2} label="Agent 调研与生成" state={runActive ? "active" : currentReviewPackage ? "done" : currentRun ? "idle" : stage === 1 ? "active" : "idle"}>
-							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>{selected.type === "website" ? selected.generationReady ? "Codex 会先读取本轮官网原始 HTML 和问题清单，再生成仅用于官网修复的待审核稿。" : "本轮没有回读到完整官网原始 HTML。请先恢复公网访问并重新检查，当前不会伪装生成内容。" : "Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。"}</p><div className="pa-platform-picker">{availableTargetPlatforms.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} disabled={selected.type === "website"} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={platform.key === "official_site" ? "春秋元泉 GEO 标志" : `${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentCanStart || !selected.generationReady} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : !selected.generationReady ? "等待官网重新检查" : !agentRuntime?.ready ? "Codex 未就绪，请先去设置" : !agentCapacityAvailable ? "Agent 正忙，请等待当前任务" : "启动本机 Codex Agent"}</button></div> : null}
+							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>{selected.type === "website" ? !selected.generationReady ? "本轮没有回读到完整官网原始 HTML。请先恢复公网访问并重新检查，当前不会伪装生成内容。" : !websiteGenerationReady ? "官网没有可回读的产品正文，品牌事实库也为空。先补齐至少一条带公开来源的事实，避免只生成通用整改框架。" : "Codex 会读取官网审计和品牌事实库，再生成仅用于官网修复的待审核稿。" : "Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。"}</p>{selected.type === "website" && !websiteGenerationReady ? <Link href={`/geo/${workspaceId}/settings`}>去设置补齐品牌事实 →</Link> : null}<div className="pa-platform-picker">{availableTargetPlatforms.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} disabled={selected.type === "website"} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={platform.key === "official_site" ? "春秋元泉 GEO 标志" : `${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentCanStart || !selected.generationReady || !websiteGenerationReady} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : !selected.generationReady ? "等待官网重新检查" : !websiteGenerationReady ? "先补齐品牌事实" : !agentRuntime?.ready ? "Codex 未就绪，请先去设置" : !agentCapacityAvailable ? "Agent 正忙，请等待当前任务" : "启动本机 Codex Agent"}</button></div> : null}
 							{currentRun ? <div className="pa-agent-run">
 								<div className="pa-agent-runtime">
 									<span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span>
@@ -996,6 +1007,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						return <button key={variant.id} type="button" className={reviewTab === variant.platform_key ? "is-active" : ""} onClick={() => setReviewTab(variant.platform_key)}>{platform ? <img src={platform.logo} alt="" /> : null}{platform?.label || variant.platform_key}<span>{variant.status === "approved" ? "已通过" : "待审"}</span></button>;
 					})}
 				</nav>
+				{!websiteDraftReadyForApproval ? <div className="pa-review-readiness" role="status"><div><b>这版内容是整改框架，不是可上线的品牌成稿</b><p>生成时品牌事实库为空。请先在设置中补齐带公开来源的品牌事实，再退回并生成新版本；系统不会允许直接批准这版官网稿。</p></div><Link href={`/geo/${workspaceId}/settings`}>补齐品牌事实 →</Link></div> : null}
 				<div className="pa-review-body">
 					<article className="pa-review-document">
 						{reviewTab === "master" ? <><small>母稿 · v{currentReviewPackage.asset.version}</small><h3>{currentReviewPackage.asset.title}</h3><p className="pa-review-summary">{currentReviewPackage.asset.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: basicMarkdownHtml(currentReviewPackage.asset.body_markdown) }} /></> : (() => {
@@ -1008,14 +1020,14 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						<section><header><div><b>事实与来源</b><small>{currentReviewPackage.claims.length - pendingClaims.length} 条已有来源 · {pendingClaims.length} 条待确认</small></div></header><div className="pa-claim-list">{currentReviewPackage.claims.map((claim) => {
 							const confirmed = ["source_linked", "verified", "human_confirmed"].includes(claim.verification_status) || confirmedClaimIds.includes(claim.id);
 							const needsHuman = !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status);
-							return <label key={claim.id} className={confirmed ? "is-confirmed" : "is-pending"}><input type="checkbox" checked={confirmed} disabled={!needsHuman || approvedPlatformKeys.length > 0} onChange={() => setConfirmedClaimIds((current) => current.includes(claim.id) ? current.filter((id) => id !== claim.id) : [...current, claim.id])} /><span><b>{needsHuman ? "需要你确认" : "已关联来源"}</b><small>{claim.claim_text}</small>{claim.source_url ? <a href={claim.source_url} target="_blank" rel="noreferrer">查看来源</a> : <em>无外部来源，勾选表示你对该品牌事实负责</em>}</span></label>;
+							return <label key={claim.id} className={confirmed ? "is-confirmed" : "is-pending"}><input type="checkbox" checked={confirmed} disabled={!needsHuman || approvedPlatformKeys.length > 0} onChange={() => setConfirmedClaimIds((current) => current.includes(claim.id) ? current.filter((id) => id !== claim.id) : [...current, claim.id])} /><span><b>{needsHuman ? "需要你确认" : "已关联来源"}</b><small>{claim.claim_text}</small>{claim.source_url ? <a href={claim.source_url} target="_blank" rel="noreferrer">查看来源</a> : <em>无外部来源，勾选表示你明确确认这条陈述</em>}</span></label>;
 						})}</div></section>
 						<section><header><div><b>通过的平台稿</b><small>只有选中的版本会开放同步</small></div></header><div className="pa-review-platforms">{currentReviewPackage.variants.map((variant) => { const platform = platformOptions.find((item) => item.key === variant.platform_key); return <label key={variant.id}><input type="checkbox" checked={reviewPlatformKeys.includes(variant.platform_key) || approvedPlatformKeys.includes(variant.platform_key)} disabled={approvedPlatformKeys.includes(variant.platform_key)} onChange={() => setReviewPlatformKeys((current) => current.includes(variant.platform_key) ? current.filter((key) => key !== variant.platform_key) : [...current, variant.platform_key])} />{platform ? <img src={platform.logo} alt="" /> : null}<span><b>{platform?.label || variant.platform_key}</b><small>{variant.title}</small></span></label>; })}</div></section>
 						<label className="pa-review-note"><span>审核意见</span><textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="退回修改时必填；通过时可记录核对说明。" rows={3} /></label>
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : `已确认 ${confirmedPendingClaimCount}/${pendingClaims.length} 条待确认事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。通过后仍不会写入草稿或发布。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : remainingPendingClaimCount > 0 ? `还需确认 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已确认 ${confirmedPendingClaimCount}/${pendingClaims.length} 条待确认事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。通过后仍不会写入草稿或发布。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需确认 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

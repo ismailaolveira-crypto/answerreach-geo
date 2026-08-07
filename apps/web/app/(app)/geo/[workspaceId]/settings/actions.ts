@@ -2,12 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import {
+	createCleanroomBrandFact,
 	getAgentRuntime,
+	getCleanroomBrandFacts,
 	getWorkspaceIntegrations,
 	testWorkspaceIntegration,
 	testAgentRuntime,
 	updateCleanroomWorkspace,
+	updateCleanroomBrandFact,
 	updateWorkspaceIntegrations,
+	type CleanroomBrandFact,
 	type WorkspaceIntegrationSettings,
 	type AgentRuntime,
 } from "@/lib/cleanroom-v1-api";
@@ -43,6 +47,35 @@ export async function saveWorkspaceIntegrations(
 
 export async function runWorkspaceIntegrationTest(workspaceId: number, integration: "deepseek" | "article_sync_mcp") {
 	return testWorkspaceIntegration(workspaceId, integration);
+}
+
+export async function readBrandFacts(workspaceId: number): Promise<CleanroomBrandFact[]> {
+	try {
+		return await getCleanroomBrandFacts(workspaceId);
+	} catch {
+		return [];
+	}
+}
+
+export async function saveBrandFact(
+	workspaceId: number,
+	payload: { title: string; statement: string; source_url: string },
+) {
+	const fact = await createCleanroomBrandFact(workspaceId, payload);
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	revalidatePath(`/geo/${workspaceId}/actions`);
+	return fact;
+}
+
+export async function setBrandFactStatus(
+	workspaceId: number,
+	factId: number,
+	status: "active" | "inactive",
+) {
+	const fact = await updateCleanroomBrandFact(workspaceId, factId, { status });
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	revalidatePath(`/geo/${workspaceId}/actions`);
+	return fact;
 }
 
 export async function saveWorkspaceSettings(

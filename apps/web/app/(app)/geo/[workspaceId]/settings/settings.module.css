@@ -22,6 +22,27 @@
 .success { background: #eaf8f1; color: #17875d; }.error { background: #fff0ef; color: #b84941; }
 .cardLink,.linkStack a { align-items: center; border: 1px solid #e4eaf2; border-radius: 11px; color: #3f526d; display: flex; font-size: 13px; font-weight: 700; justify-content: space-between; margin-top: 21px; padding: 13px; }.cardLink b,.linkStack b { color: #2868e8; }.linkStack { display: grid; gap: 9px; margin-top: 21px; }.linkStack a { margin: 0; }
 .integrationCard { background: rgb(255 255 255 / .92); border: 1px solid #dce6f2; border-radius: 20px; box-shadow: 0 12px 34px rgb(43 62 91 / 5%); margin-top: 18px; padding: 24px; }
+.brandFactsCard { background: rgb(255 255 255 / .92); border: 1px solid #dce6f2; border-radius: 20px; box-shadow: 0 12px 34px rgb(43 62 91 / 5%); margin-top: 18px; overflow: hidden; padding: 24px; }
+.brandFactsLayout { border-top: 1px solid #e6ecf4; display: grid; grid-template-columns: minmax(290px, .82fr) minmax(0, 1.18fr); margin-top: 20px; }
+.brandFactForm { border-right: 1px solid #e6ecf4; display: flex; flex-direction: column; gap: 13px; padding: 20px 22px 4px 0; }
+.brandFactForm label { color: #55647a; display: flex; flex-direction: column; font-size: 12px; font-weight: 700; gap: 7px; }
+.brandFactForm input,.brandFactForm textarea { background: #fbfcfe; border: 1px solid #dce5f0; border-radius: 10px; color: #25344b; font: inherit; font-size: 13px; outline: 0; padding: 10px 11px; resize: vertical; }
+.brandFactForm input:focus,.brandFactForm textarea:focus { background: #fff; border-color: #78a3f1; box-shadow: 0 0 0 3px rgb(40 104 232 / 9%); }
+.brandFactForm p { color: #8b98aa; font-size: 11px; line-height: 1.55; margin: -2px 0 0; }
+.brandFactForm button { background: #2868e8; border: 0; border-radius: 10px; color: #fff; cursor: pointer; font: inherit; font-size: 12px; font-weight: 750; min-height: 44px; }
+.brandFactForm button:active,.brandFactList article>button:active { transform: scale(.98); }
+.brandFactForm button:disabled,.brandFactList article>button:disabled { cursor: default; opacity: .58; }
+.brandFactList { min-width: 0; padding: 20px 0 0 22px; }
+.brandFactList>header { align-items: baseline; display: flex; justify-content: space-between; }
+.brandFactList>header b { color: #31425b; font-size: 13px; }.brandFactList>header small { color: #8b98aa; font-size: 10px; }
+.brandFactList>div:not(.brandFactEmpty) { margin-top: 9px; }
+.brandFactList article { align-items: flex-start; border-top: 1px solid #e8edf4; display: flex; gap: 16px; justify-content: space-between; padding: 15px 0; }
+.brandFactList article>div { min-width: 0; }.brandFactList article span { background: #eaf8f1; border-radius: 999px; color: #17875d; display: inline-flex; font-size: 9px; font-weight: 750; padding: 4px 7px; }
+.brandFactList article b { color: #32435a; display: block; font-size: 13px; margin-top: 8px; }.brandFactList article p { color: #68778b; font-size: 11px; line-height: 1.55; margin: 5px 0; overflow-wrap: anywhere; }
+.brandFactList article a { color: #2868e8; font-size: 10px; font-weight: 700; }.brandFactList article em { color: #b36a31; display: block; font-size: 10px; font-style: normal; }
+.brandFactList article>button { background: #fff; border: 1px solid #d8e1ec; border-radius: 9px; color: #65758b; cursor: pointer; flex: 0 0 auto; font: inherit; font-size: 10px; font-weight: 740; min-height: 44px; padding: 0 13px; }
+.brandFactList article.isInactive { opacity: .62; }.brandFactList article.isInactive span { background: #eef1f5; color: #758196; }
+.brandFactEmpty { background: linear-gradient(100deg,#f8faff,#fbfcfe); border: 1px dashed #cad7e8; border-radius: 12px; margin-top: 13px; padding: 20px; }.brandFactEmpty b { color: #43536a; font-size: 12px; }.brandFactEmpty p { color: #7f8da1; font-size: 11px; line-height: 1.6; margin: 7px 0 0; }
 .integrationHeader { align-items: flex-start; display: flex; justify-content: space-between; gap: 20px; }
 .integrationEyebrow { color: #2868e8; display: block; font-size: 11px; font-weight: 800; letter-spacing: .08em; margin-bottom: 7px; text-transform: uppercase; }
 .integrationHeader h2 { font-size: 19px; letter-spacing: -.03em; margin: 0; }.integrationHeader p { color: #8793a5; font-size: 12px; line-height: 1.6; margin: 6px 0 0; }
@@ -31,4 +52,5 @@
 .integrationBlock label { color: #55647a; display: flex; flex-direction: column; font-size: 12px; font-weight: 700; gap: 7px; margin-top: 12px; }.integrationBlock input { background: #fff; border: 1px solid #dce5f0; border-radius: 9px; color: #25344b; font: inherit; font-size: 13px; padding: 10px 11px; }.testButton { background: #fff; border: 1px solid #cbd9eb; border-radius: 9px; color: #2868e8; cursor: pointer; font-size: 12px; font-weight: 750; margin-top: 15px; min-height: 36px; padding: 0 12px; }.testButton:disabled,.integrationSave:disabled { cursor: default; opacity: .6; }
 .runtimeFacts { display: grid; gap: 8px; margin: 0; }.runtimeFacts div { align-items: center; border-bottom: 1px solid #e7edf5; display: flex; justify-content: space-between; padding: 0 0 8px; }.runtimeFacts dt { color: #8794a7; font-size: 11px; }.runtimeFacts dd { color: #31425b; font-size: 11px; font-weight: 750; margin: 0; }.runtimeNote { color: #77869b; font-size: 11px; line-height: 1.55; margin: 12px 0 0; }
 .integrationHint { color: #8b98aa; font-size: 12px; line-height: 1.6; margin: 16px 0 0; }.integrationHint code { background: #f0f4fa; border-radius: 4px; color: #526177; font-size: 11px; padding: 2px 4px; }.integrationSave { background: #2868e8; border: 0; border-radius: 10px; color: #fff; cursor: pointer; font-size: 13px; font-weight: 750; margin-top: 15px; min-height: 42px; padding: 0 17px; }
-@media (max-width: 760px) { .page { padding: 28px 18px 60px; }.header { align-items: flex-start; flex-direction: column; gap: 16px; }.grid,.integrationGrid { grid-template-columns: 1fr; }.card:first-child { grid-row: auto; }.integrationHeader { flex-direction: column; } }
+@media (max-width: 760px) { .page { padding: 28px 18px 60px; }.header { align-items: flex-start; flex-direction: column; gap: 16px; }.grid,.integrationGrid,.brandFactsLayout { grid-template-columns: 1fr; }.card:first-child { grid-row: auto; }.integrationHeader { flex-direction: column; }.brandFactForm { border-bottom: 1px solid #e6ecf4; border-right: 0; padding-right: 0; padding-bottom: 20px; }.brandFactList { padding-left: 0; } }
+@media (prefers-reduced-motion: reduce) { .brandFactForm button,.brandFactList article>button { transition: none; } }

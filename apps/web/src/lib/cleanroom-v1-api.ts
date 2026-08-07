@@ -1643,6 +1643,20 @@ export function createCleanroomBrandFact(
 	);
 }
 
+export function updateCleanroomBrandFact(
+	workspaceId: string | number,
+	factId: number,
+	payload: Partial<Pick<CleanroomBrandFact, "title" | "statement" | "source_url" | "status">>,
+) {
+	return apiRequest<CleanroomBrandFact>(
+		`/workspaces/${workspaceId}/brand-facts/${factId}`,
+		{
+			method: "PATCH",
+			body: JSON.stringify(payload),
+		},
+	);
+}
+
 export function createCleanroomContentAudit(
 	workspaceId: string | number,
 	payload: {

@@ -72,6 +72,7 @@ from app.v1.schemas import (
     AgentRuntimeTestRead,
     BrandFactCreate,
     BrandFactRead,
+    BrandFactUpdate,
     ContentAuditCreate,
     BrowserAccountCreate,
     BrowserAccountLeaseRead,
@@ -4302,6 +4303,40 @@ def decide_content_review(
         raise HTTPException(status_code=422, detail=f"Platform variants not found: {', '.join(missing_platforms)}")
     if payload.verdict == "approved" and not platform_keys:
         raise HTTPException(status_code=422, detail="Select at least one platform variant to approve")
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    if (
+        payload.verdict == "approved"
+        and "official_site" in platform_keys
+        and opportunity is not None
+        and opportunity.opportunity_type == "website_citation_readiness"
+        and _website_requires_sourced_brand_facts(opportunity)
+    ):
+        asset_run = next(
+            (
+                candidate
+                for candidate in db.scalars(
+                    select(GeoAgentRun)
+                    .where(
+                        GeoAgentRun.workspace_id == workspace_id,
+                        GeoAgentRun.action_id == action.id,
+                    )
+                    .order_by(GeoAgentRun.id.desc())
+                )
+                if int((candidate.result_snapshot or {}).get("asset_id") or 0) == asset.id
+            ),
+            None,
+        )
+        sourced_fact_count = int(
+            (asset_run.result_snapshot or {}).get("sourced_brand_fact_count") or 0
+        ) if asset_run else 0
+        if sourced_fact_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "这版官网稿生成时没有使用带公开来源的品牌事实；"
+                    "请先补齐品牌事实并退回生成新版本，不能把通用整改框架批准为官网成稿"
+                ),
+            )
 
     unresolved = [
         claim
@@ -5131,6 +5166,24 @@ def _default_agent_platforms(db: Session, action: GeoOptimizationAction) -> list
     return (preferred or supported or ["zhihu", "wechat"])[:2]
 
 
+def _website_requires_sourced_brand_facts(opportunity: GeoActionOpportunity | None) -> bool:
+    if opportunity is None or opportunity.opportunity_type != "website_citation_readiness":
+        return False
+    finding_codes = {
+        str(code)
+        for code in (opportunity.scope_snapshot or {}).get("finding_codes", [])
+        if str(code)
+    }
+    return bool(
+        finding_codes
+        & {
+            "client_rendering_required",
+            "server_visible_content_missing",
+            "server_visible_content_too_short",
+        }
+    )
+
+
 @router.post(
     "/workspaces/{workspace_id}/actions/{action_id}/agent-runs",
     response_model=AgentRunRead,
@@ -5187,6 +5240,29 @@ def create_agent_run(
             status_code=422,
             detail="Website audit actions must generate the official-site draft before external distribution",
         )
+    if website_audit:
+        readable_brand_source_missing = _website_requires_sourced_brand_facts(opportunity)
+        sourced_brand_fact_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(GeoBrandFact)
+                .where(
+                    GeoBrandFact.workspace_id == workspace_id,
+                    GeoBrandFact.status == "active",
+                    GeoBrandFact.source_url.is_not(None),
+                    func.length(func.trim(GeoBrandFact.source_url)) > 0,
+                )
+            )
+            or 0
+        )
+        if readable_brand_source_missing and sourced_brand_fact_count == 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "官网没有可回读的产品正文，品牌事实库也没有带公开来源的可用事实；"
+                    "请先在设置中补齐品牌事实，避免只生成通用整改框架"
+                ),
+            )
     model = payload.model or diagnostic.get("default_model")
     if model and model not in diagnostic.get("available_models", []):
         raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
@@ -6124,6 +6200,25 @@ def create_brand_fact(
     workspace_or_404(db, user, workspace_id)
     fact = GeoBrandFact(workspace_id=workspace_id, **payload.model_dump())
     db.add(fact)
+    db.commit()
+    db.refresh(fact)
+    return fact
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/brand-facts/{fact_id}", response_model=BrandFactRead
+)
+def update_brand_fact(
+    workspace_id: int,
+    fact_id: int,
+    payload: BrandFactUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    fact = scoped_or_404(db, GeoBrandFact, workspace_id, fact_id)
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        setattr(fact, key, value)
     db.commit()
     db.refresh(fact)
     return fact

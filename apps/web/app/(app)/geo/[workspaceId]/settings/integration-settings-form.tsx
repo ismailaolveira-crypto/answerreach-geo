@@ -77,7 +77,7 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings, initialR
 	}
 
 	return <section className={styles.integrationCard}>
-		<header className={styles.integrationHeader}><div><span className={styles.integrationEyebrow}>04 · Agent 与草稿交付</span><h2>本机 Codex 与文章同步</h2><p>Codex 负责调研、写作和平台适配；人工审核后，再由文章同步助手写入草稿箱。</p></div><span className={runtime?.ready && mcpConfigured ? styles.integrationReady : styles.integrationPending}>{runtime?.ready && mcpConfigured ? "执行与交付均就绪" : "检查本机状态"}</span></header>
+		<header className={styles.integrationHeader}><div><span className={styles.integrationEyebrow}>05 · Agent 与草稿交付</span><h2>本机 Codex 与文章同步</h2><p>Codex 负责调研、写作和平台适配；人工审核后，再由文章同步助手写入草稿箱。</p></div><span className={runtime?.ready && mcpConfigured ? styles.integrationReady : styles.integrationPending}>{runtime?.ready && mcpConfigured ? "执行与交付均就绪" : "检查本机状态"}</span></header>
 		<div className={styles.integrationGrid}>
 			<div className={styles.integrationBlock}>
 				<div className={styles.integrationBlockTitle}><div><b>Local Codex Agent</b><small>{runtime?.ready ? "已复用本机 ChatGPT 登录" : "未就绪"}</small></div><i className={runtime?.ready ? styles.dotReady : styles.dotPending} /></div>

@@ -150,3 +150,8 @@ pnpm run verify
 - 机会通过 `scope_snapshot` 引用审计 ID、原始 HTML SHA-256、工件清单和发现项，不向 `geo_evidence_v1` 填造模型证据。
 - 选择后可进入本机 Codex，但目标锁定为 `official_site`；上下文包含受限长度的原始 HTML 片段与明确解释边界。
 - 官网稿通过人工审核后只进入内容库和网站负责人交付，不启用文章同步助手，也不自动显示为已上线。
+- 真实运行 `Action #6 / Run #2 / 内容资产 #2` 已完成：5 次公开搜索、9 条主张（7 条有来源、2 条待人工确认），耗时 4 分 16 秒。由于当时品牌事实库为 0，产出被识别为通用整改框架，未审核、未同步、未发布。
+- 设置页已增加“04 · Agent 事实底座”：品牌事实需要名称、可公开陈述和公开 `http/https` 来源，可停用/恢复但不删除历史；Token 与密钥仍不回显。
+- 若官网审计包含 `client_rendering_required`、`server_visible_content_missing` 或 `server_visible_content_too_short`，启动 Agent 前必须有启用且带来源的品牌事实；官网原始 HTML 已有完整产品正文时不额外阻塞。
+- Agent 结果快照保存使用过的品牌事实 ID、带来源事实 ID 和数量。历史整改框架在审核工作台显示明确警告，前端批准按钮与后端审核 API 双重拒绝批准；刷新行动页默认恢复最新 Action。
+- `tests/test_website_audit.py` 覆盖事实缺失门禁、无效来源 URL、停用/恢复、审批拒绝和有来源后允许通过。

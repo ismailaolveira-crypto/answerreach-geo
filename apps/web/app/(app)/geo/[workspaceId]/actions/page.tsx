@@ -10,6 +10,7 @@ import {
 	getCleanroomActionRetest,
 	getAgentRunProgress,
 	getAgentRuntime,
+	getCleanroomBrandFacts,
 	getCleanroomContentReviewPackage,
 	getCleanroomDistributionRuns,
 	getCleanroomActionOpportunityScope,
@@ -59,10 +60,11 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		model_key: modelKey,
 		question_plan_id: questionPlanId,
 	});
-	const [agentRuntime, runGroups, websiteAuditOverview] = await Promise.all([
+	const [agentRuntime, runGroups, websiteAuditOverview, brandFacts] = await Promise.all([
 		getAgentRuntime(workspaceId).catch(() => null),
 		Promise.all(actions.map((action) => getActionAgentRuns(workspaceId, action.id).catch(() => []))),
 		getLatestWebsiteAudit(workspaceId).catch(() => ({ website_url: null, latest: null })),
+		getCleanroomBrandFacts(workspaceId).catch(() => []),
 	]);
 	const agentRuns = runGroups.flat();
 	const assetIds = [...new Set(agentRuns.map((run) => Number(run.result_snapshot.asset_id)).filter((id) => Number.isInteger(id) && id > 0))];
@@ -198,5 +200,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return result;
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} actions={actions} agentRuntime={agentRuntime} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} initialRetests={retests.filter((item): item is NonNullable<typeof item> => item !== null)} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} initialRetests={retests.filter((item): item is NonNullable<typeof item> => item !== null)} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
 }

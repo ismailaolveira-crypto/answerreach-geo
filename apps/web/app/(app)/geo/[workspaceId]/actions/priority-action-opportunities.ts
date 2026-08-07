@@ -16,6 +16,7 @@ export type PriorityActionOpportunity = {
 	recommendedAsset: string;
 	recommendedPlatforms: string[];
 	generationReady: boolean;
+	requiresSourcedBrandFacts: boolean;
 	proof: string;
 	existingAction?: CleanroomAction;
 };
@@ -33,6 +34,9 @@ export function mapBackendPriorityActionOpportunities(
 		const sourceType = row.scope_snapshot.source_type === "website_audit" ? "website_audit" : "model_observation";
 		const websiteAuditId = Number(row.scope_snapshot.website_audit_id ?? 0) || undefined;
 		const websiteAuditHash = String(row.scope_snapshot.raw_html_sha256 ?? "");
+		const findingCodes = Array.isArray(row.scope_snapshot.finding_codes)
+			? row.scope_snapshot.finding_codes.map(String)
+			: [];
 		const type = row.opportunity_type === "website_citation_readiness"
 			? "website"
 			: row.opportunity_type === "competitor_gap"
@@ -57,6 +61,11 @@ export function mapBackendPriorityActionOpportunities(
 			recommendedPlatforms: row.recommended_platforms,
 			generationReady: sourceType !== "website_audit"
 				|| (row.scope_snapshot.website_audit_status !== "blocked" && Boolean(websiteAuditHash)),
+			requiresSourcedBrandFacts: sourceType === "website_audit" && findingCodes.some((code) => [
+				"client_rendering_required",
+				"server_visible_content_missing",
+				"server_visible_content_too_short",
+			].includes(code)),
 			proof: sourceType === "website_audit"
 				? websiteAuditHash
 					? `依据官网审计 #${websiteAuditId ?? "—"} · 原始证据 ${websiteAuditHash.slice(0, 12)}`
@@ -124,6 +133,7 @@ export function derivePriorityActionOpportunities({
 				evidenceIds, modelLabels, type: "visibility", priority: absentRows.length === rows.length ? "high" : "medium",
 				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
 				generationReady: true,
+				requiresSourcedBrandFacts: false,
 				title: "补齐采购决策入口", recommendedAsset: "采购选型 FAQ + 对比页",
 				summary: `在 ${absentRows.length}/${rows.length} 条真实回答中，春秋元泉未进入候选；同题已出现 ${competitors.slice(0, 2).join("、")} 等竞品。`,
 				proof: `依据 ${evidenceIds.length} 条已归档回答 · 覆盖 ${modelLabels.join("、")}`,
@@ -138,6 +148,7 @@ export function derivePriorityActionOpportunities({
 				evidenceIds, modelLabels, type: "citation", priority: citedSources.length >= rows.length ? "high" : "medium",
 				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
 				generationReady: true,
+				requiresSourcedBrandFacts: false,
 				title: "补齐可被引用的依据", recommendedAsset: "可引用的数据说明 / FAQ",
 				summary: `模型在该问题中引用了 ${uniqueSources.slice(0, 2).join("、")} 等来源，但尚未引用春秋元泉的可控内容。`,
 				proof: `依据 ${uniqueSources.length} 个真实引用来源 · ${rows.length} 条回答`,

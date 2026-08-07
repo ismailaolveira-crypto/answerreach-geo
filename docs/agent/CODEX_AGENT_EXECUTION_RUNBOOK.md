@@ -47,6 +47,8 @@
 
 官网修复行动是唯一例外：`source_type=website_audit` 时必须提供不可变的 `website_audit_id`、原始 HTML SHA-256、工件清单、检查项和问题清单，目标平台只能是 `official_site`。官网审计证据不得写入模型观测表，也不得被解释为模型已经引用、推荐或产生 GEO 效果。
 
+若官网审计确认 `client_rendering_required`、`server_visible_content_missing` 或 `server_visible_content_too_short`，原始 HTML 不能作为品牌能力事实。此时开始任务前必须至少存在一条当前启用、带公开 `http/https` 来源的品牌事实；否则返回 `waiting_human`，不得消耗 Agent 生成通用整改框架。若原始 HTML 已包含完整可读产品正文，则官网本身可以作为官方来源，不额外强制品牌事实库。
+
 ## 2. 固定执行顺序
 
 ### 阶段 A：验证任务
@@ -74,6 +76,8 @@
 4. 官网截图只作视觉素材或界面佐证，不从图像臆测功能。
 
 通过标准：草稿的关键事实都能对应到已确认事实或已归档来源。
+
+官网正文不可回读的任务必须把使用过的 `brand_fact_ids`、`sourced_brand_fact_ids` 和数量写入结果快照。数量为 0 的历史输出只能标记为“整改框架”，不能由人工勾选声明后升级为官网成稿。
 
 ### 阶段 D：生成母稿
 

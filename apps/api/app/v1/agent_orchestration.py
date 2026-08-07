@@ -310,7 +310,12 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
                 "aliases": workspace.brand_aliases,
                 "official_website": workspace.website_url,
                 "stored_facts": [
-                    {"title": fact.title, "statement": fact.statement, "source_url": fact.source_url}
+                    {
+                        "id": fact.id,
+                        "title": fact.title,
+                        "statement": fact.statement,
+                        "source_url": fact.source_url,
+                    }
                     for fact in facts
                 ],
             },
@@ -338,6 +343,11 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
             "observation_evidence": evidence,
     }
     if website_audit:
+        website_finding_codes = {
+            str(item.get("code") or "")
+            for item in (website_audit.findings or [])
+            if isinstance(item, dict) and str(item.get("code") or "")
+        }
         context["website_audit_evidence"] = {
             "id": website_audit.id,
             "status": website_audit.status,
@@ -349,6 +359,14 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
             "raw_html_size": website_audit.raw_html_size,
             "checks": website_audit.checks,
             "findings": website_audit.findings,
+            "requires_sourced_brand_facts": bool(
+                website_finding_codes
+                & {
+                    "client_rendering_required",
+                    "server_visible_content_missing",
+                    "server_visible_content_too_short",
+                }
+            ),
             "artifact_manifest": website_audit.artifact_manifest,
             "raw_homepage_html_excerpt": (website_audit.raw_html or "")[:12000],
             "interpretation_boundary": (
@@ -686,6 +704,25 @@ def execute_agent_run(
             "brief_id": brief.id,
             "variant_count": len(parsed.get("variants") or []),
             "claim_count": len(parsed.get("master", {}).get("claims") or []),
+            "brand_fact_ids": [
+                int(fact["id"])
+                for fact in context.get("brand", {}).get("stored_facts", [])
+                if fact.get("id")
+            ],
+            "brand_fact_count": len(context.get("brand", {}).get("stored_facts", [])),
+            "sourced_brand_fact_ids": [
+                int(fact["id"])
+                for fact in context.get("brand", {}).get("stored_facts", [])
+                if fact.get("id") and str(fact.get("source_url") or "").strip()
+            ],
+            "sourced_brand_fact_count": sum(
+                1
+                for fact in context.get("brand", {}).get("stored_facts", [])
+                if str(fact.get("source_url") or "").strip()
+            ),
+            "website_requires_sourced_brand_facts": bool(
+                context.get("website_audit_evidence", {}).get("requires_sourced_brand_facts")
+            ),
         }
         run.finished_at = datetime.now(timezone.utc)
         db.commit()
