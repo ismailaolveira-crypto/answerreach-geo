@@ -224,6 +224,16 @@ class EvidenceRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ActionEvidenceSummaryRead(BaseModel):
+    id: int
+    question_plan_id: int
+    model_label: str
+    is_real_provider_evidence: bool
+    brand_status: str
+    competitor_positions: list[dict] = Field(default_factory=list)
+    source_items: list[dict] = Field(default_factory=list)
+
+
 class QuestionAnalysisMetricRead(BaseModel):
     answer_count: int
     mention_count: int

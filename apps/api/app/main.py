@@ -8,6 +8,7 @@ from app.api.router import api_router
 from app import models  # noqa: F401
 from app.core.config import get_settings
 from app.db.session import Base, engine
+from app.services.article_sync_adapter import shutdown_article_sync_runtime
 
 
 @asynccontextmanager
@@ -19,7 +20,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "AUTO_CREATE_TABLES must be disabled in production. Run Alembic migrations instead."
             )
         Base.metadata.create_all(bind=engine)
-    yield
+    try:
+        yield
+    finally:
+        shutdown_article_sync_runtime()
 
 
 def create_app() -> FastAPI:

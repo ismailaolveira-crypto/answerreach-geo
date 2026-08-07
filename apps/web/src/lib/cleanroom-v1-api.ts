@@ -99,6 +99,17 @@ export type CleanroomEvidence = {
 	captured_at: string;
 };
 
+export type ActionEvidenceSummary = Pick<
+	CleanroomEvidence,
+	| "id"
+	| "question_plan_id"
+	| "model_label"
+	| "is_real_provider_evidence"
+	| "brand_status"
+	| "competitor_positions"
+	| "source_items"
+>;
+
 export type QuestionAnalysisMetric = {
 	answer_count: number;
 	mention_count: number;
@@ -719,11 +730,13 @@ export function testWorkspaceIntegration(
 	workspaceId: string | number,
 	integration: "deepseek" | "article_sync_mcp",
 ) {
-	return apiRequest<{ integration: string; ok: boolean; message: string; latency_ms?: number; platforms?: unknown }>(
+	return apiRequest<{ integration: string; ok: boolean; message: string; latency_ms?: number; platforms?: ArticleSyncPlatform[] }>(
 		`/workspaces/${workspaceId}/integrations/test`,
 		{ method: "POST", body: JSON.stringify({ integration }) },
 	);
 }
+
+export type ArticleSyncPlatform = { id: string; name: string; isAuthenticated: boolean; username?: string };
 
 export function getCleanroomDecisionMap(
 	workspaceId: string | number,
@@ -1013,6 +1026,12 @@ export function getOfficialProviderObservationBatches(
 
 export function getCleanroomEvidence(workspaceId: string | number) {
 	return apiRequest<CleanroomEvidence[]>(`/workspaces/${workspaceId}/evidence`);
+}
+
+export function getActionEvidenceSummary(workspaceId: string | number) {
+	return apiRequest<ActionEvidenceSummary[]>(
+		`/workspaces/${workspaceId}/evidence/action-summary`,
+	);
 }
 
 export function getBrowserAccounts(workspaceId: string | number) {

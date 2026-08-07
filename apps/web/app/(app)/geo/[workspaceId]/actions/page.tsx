@@ -3,9 +3,9 @@ import {
 	createCleanroomAction,
 	createCleanroomContentBrief,
 	discoverCleanroomActionOpportunities,
+	getActionEvidenceSummary,
 	getCleanroomActionOpportunities,
 	getCleanroomActions,
-	getCleanroomEvidence,
 	getQuestionLibrary,
 	updateCleanroomAction,
 } from "@/lib/cleanroom-v1-api";
@@ -14,15 +14,18 @@ import { derivePriorityActionOpportunities, mapBackendPriorityActionOpportunitie
 
 export default async function ActionsPage({ params }: { params: Promise<{ workspaceId: string }> }) {
 	const { workspaceId } = await params;
-	const [actions, evidence, library, persistedOpportunities] = await Promise.all([
+	const [actions, library, persistedOpportunities] = await Promise.all([
 		getCleanroomActions(workspaceId),
-		getCleanroomEvidence(workspaceId),
 		getQuestionLibrary(workspaceId),
 		getCleanroomActionOpportunities(workspaceId),
 	]);
 	const opportunities = persistedOpportunities.length > 0
 		? mapBackendPriorityActionOpportunities(persistedOpportunities, actions)
-		: derivePriorityActionOpportunities({ questions: library.questions, evidence, actions });
+		: derivePriorityActionOpportunities({
+			questions: library.questions,
+			evidence: await getActionEvidenceSummary(workspaceId),
+			actions,
+		});
 
 	async function discoverActions() {
 		"use server";

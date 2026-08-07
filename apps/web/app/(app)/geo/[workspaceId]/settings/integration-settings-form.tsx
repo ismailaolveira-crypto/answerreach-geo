@@ -73,7 +73,7 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings }: { work
 				<button type="button" className={styles.testButton} onClick={() => test("article_sync_mcp")} disabled={testing !== null || saving}>{testing === "article_sync_mcp" ? "正在发现能力…" : "测试 MCP Server"}</button>
 			</div>
 		</div>
-		<p className={styles.integrationHint}>后端通过官方 MCP Server 的 stdio 调用能力；MCP Server 会在本机监听 <code>ws://localhost:9527</code>，文章同步助手扩展连接这个地址。测试只调用只读的 <code>list_platforms</code>，不会写入草稿或发布。</p>
+		<p className={styles.integrationHint}>GEO 会持续托管官方 MCP Server，无需手动启动。文章同步助手扩展是客户端：开启 MCP 连接并填写 <code>ws://localhost:9527</code> 后，会自动重连。扩展重连最多等待 35 秒；首次只读发现会检查 20+ 平台登录态，可能需要约 2 分钟。真正写入由“优先行动”页的人工确认触发，只写入所选平台草稿箱，不执行发布。</p>
 		{feedback.message ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}
 		<button type="button" className={styles.integrationSave} onClick={save} disabled={saving || testing !== null}>{saving ? "正在保存…" : "保存外部能力配置"}</button>
 	</section>;

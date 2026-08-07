@@ -45,6 +45,7 @@ from app.models.user import User
 from app.schemas.search import QueueJobRead
 from app.v1.schemas import (
     ActionCreate,
+    ActionEvidenceSummaryRead,
     ActionEventRead,
     ActionOpportunityDiscoverRequest,
     ActionOpportunityRead,
@@ -1258,7 +1259,13 @@ def test_workspace_integration(
             if error_code == "sync_adapter_not_configured":
                 message = "文章同步助手 MCP 尚未配置，请先保存 MCP Server 路径和 Token。"
             elif error_code == "article_sync_extension_not_connected":
-                message = "MCP Server 已启动，但文章同步助手扩展未连接；请在扩展中开启 MCP 连接并确认 Token 一致。"
+                message = "MCP Server 正在持续运行，但扩展仍未连接；请确认扩展已开启 MCP 连接，地址为 ws://localhost:9527。"
+            elif error_code == "article_sync_mcp_auth_failed":
+                message = "扩展已连接，但 Token 校验失败；请让扩展 Token 与当前工作区配置完全一致。"
+            elif error_code == "article_sync_mcp_port_in_use":
+                message = "本机 9527 端口已被其他进程占用；请关闭手动启动的 MCP Server，由 GEO 统一托管。"
+            elif error_code == "article_sync_mcp_server_path_not_found":
+                message = "MCP Server 文件不存在，请重新构建并保存有效的 dist/index.js 路径。"
             else:
                 message = "MCP 能力发现失败，请检查 MCP Server 路径、Token、Node 和扩展连接状态。"
             return {"integration": payload.integration, "ok": False, "message": message, "latency_ms": int((perf_counter() - started_at) * 1000)}
@@ -2949,6 +2956,42 @@ def list_evidence(
             .order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc())
         )
     )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/evidence/action-summary",
+    response_model=list[ActionEvidenceSummaryRead],
+)
+def list_action_evidence_summary(
+    workspace_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+):
+    """Return only the evidence fields required by the priority-action fallback."""
+    workspace_or_404(db, user, workspace_id)
+    rows = db.execute(
+        select(
+            GeoEvidence.id,
+            GeoEvidence.question_plan_id,
+            GeoEvidence.model_label,
+            GeoEvidence.is_real_provider_evidence,
+            GeoEvidence.brand_status,
+            GeoEvidence.competitor_positions,
+            GeoEvidence.source_items,
+        )
+        .where(GeoEvidence.workspace_id == workspace_id)
+        .order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc())
+    ).all()
+    return [
+        {
+            "id": row.id,
+            "question_plan_id": row.question_plan_id,
+            "model_label": row.model_label,
+            "is_real_provider_evidence": row.is_real_provider_evidence,
+            "brand_status": row.brand_status,
+            "competitor_positions": row.competitor_positions or [],
+            "source_items": row.source_items or [],
+        }
+        for row in rows
+    ]
 
 
 @router.get(

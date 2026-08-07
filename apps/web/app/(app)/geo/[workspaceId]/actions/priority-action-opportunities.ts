@@ -1,4 +1,4 @@
-import type { CleanroomAction, CleanroomActionOpportunity, CleanroomEvidence, CleanroomQuestion } from "@/lib/cleanroom-v1-api";
+import type { ActionEvidenceSummary, CleanroomAction, CleanroomActionOpportunity, CleanroomQuestion } from "@/lib/cleanroom-v1-api";
 
 export type PriorityActionOpportunity = {
 	id: string;
@@ -71,12 +71,12 @@ export function derivePriorityActionOpportunities({
 	actions,
 }: {
 	questions: CleanroomQuestion[];
-	evidence: CleanroomEvidence[];
+	evidence: ActionEvidenceSummary[];
 	actions: CleanroomAction[];
 }): PriorityActionOpportunity[] {
 	const questionById = new Map(questions.map((question) => [question.id, question]));
 	const existingByQuestion = buildExistingMap(actions);
-	const byQuestion = new Map<number, CleanroomEvidence[]>();
+	const byQuestion = new Map<number, ActionEvidenceSummary[]>();
 
 	for (const row of evidence) {
 		if (!row.is_real_provider_evidence) continue;

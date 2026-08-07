@@ -423,8 +423,12 @@ class SyncAssistantPort(Protocol):
 
 当前官方 WechatSync MCP Server 的推荐传输是 MCP stdio；MCP Server 启动后监听
 `ws://localhost:9527`，由 Chrome 扩展主动连接该桥接。GEO 后端不直接连接扩展，
-而是启动已构建的 `packages/mcp-server/dist/index.js` 子进程，通过 stdio 发送
-`initialize` 和 `tools/call`。配置只保存 MCP Server 文件路径和
+而是由 API 进程持续托管已构建的 `packages/mcp-server/dist/index.js` 子进程，
+通过 stdio 发送 `initialize` 和 `tools/call`。不得为每次工具调用重新启动进程；
+扩展首次冷连接可能在 10 秒后重试，短命子进程会稳定制造“扩展未连接”假失败。
+宿主应将“扩展重连窗口”和“平台认证发现耗时”分开：前者等待 35 秒，后者因
+20+ 平台按批检查登录态，工具调用超时设为 180 秒。
+配置只保存 MCP Server 文件路径和
 `MCP_TOKEN`；扩展中的服务器地址仍填 `ws://localhost:9527`，Token 必须一致。
 官方工具名为 `list_platforms`、`check_auth`、`sync_article`，适配器依据官方
 schema 传参。`sync_article` 返回只记为 `mcp_request_accepted`，仍需通过真实浏览器
@@ -434,8 +438,17 @@ schema 传参。`sync_article` 返回只记为 `mcp_request_accepted`，仍需�
 
 ### 10.2 执行流程
 
+产品默认采用人工确认式浏览器接入：用户在 GEO “优先行动”页点击“打开同步助手”，
+页面通过官方注入的 `window.$syncer.getAccounts` 读取当前 EgoLite 已登录平台并展示
+确认层；只有用户再次点击“确认写入 N 个平台”后，才调用 `$syncer.addTask`。平台
+逐项返回 `done` 且带真实 `draftLink` 时，界面才允许显示“草稿已返回”；打开确认层、
+发现平台或发出请求都不等于草稿已保存。最终发布始终不由 GEO 点击。
+
+后台 MCP 路径保留给后续经过审核的队列自动化，不能替代上述人工确认，也不能在
+没有真实平台结果和浏览器回读时推进状态。
+
 1. Worker 读取已审核的单一平台适配稿；
-2. 调用 `list_platforms(forceRefresh=true)` 获取平台能力；
+2. 写入前调用 `list_platforms(forceRefresh=true)` 实时确认平台能力，避免把过期登录缓存当作可写状态；
 3. 登录态不明确时调用 `check_auth(platform)`；
 4. 未登录、验证码、滑块、实名或风控进入 `waiting_human`；
 5. 调用 `sync_article`，传入当前平台独立的标题、Markdown/内容、封面和图注；

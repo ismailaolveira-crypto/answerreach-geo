@@ -15,6 +15,44 @@ type Props = {
 	discoverActions: () => Promise<void>;
 };
 
+type SyncAccount = {
+	type: string;
+	title: string;
+	displayName?: string;
+	status?: "pending" | "uploading" | "done" | "failed";
+	msg?: string;
+	error?: string;
+	editResp?: { draftLink?: string } | null;
+};
+
+type ArticleSyncPageApi = {
+	getAccounts: (callback: (first: unknown, second?: unknown) => void) => void;
+	addTask: (
+		task: { post: { title: string; content: string; markdown: string }; accounts: SyncAccount[] },
+		statusHandler: (task: { accounts?: SyncAccount[] }) => void,
+		callback: (first?: unknown, second?: unknown) => void,
+	) => void;
+};
+
+function escapeHtml(value: string) {
+	return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
+}
+
+function getArticleSyncApi() {
+	return (window as Window & { $syncer?: ArticleSyncPageApi }).$syncer;
+}
+
+function discoverSyncAccounts(api: ArticleSyncPageApi) {
+	return new Promise<SyncAccount[]>((resolve, reject) => {
+		const timeout = window.setTimeout(() => reject(new Error("平台登录检查超时，请打开文章同步助手确认登录状态。")), 180_000);
+		api.getAccounts((first, second) => {
+			window.clearTimeout(timeout);
+			const value = Array.isArray(second) ? second : Array.isArray(first) ? first : [];
+			resolve(value as SyncAccount[]);
+		});
+	});
+}
+
 const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
 const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先" } as const;
 
@@ -83,6 +121,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const [selectedQuestion, setSelectedQuestion] = useState("all");
 	const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
 	const [previewMessage, setPreviewMessage] = useState("");
+	const [syncOpen, setSyncOpen] = useState(false);
+	const [syncPhase, setSyncPhase] = useState<"idle" | "discovering" | "confirm" | "syncing" | "complete" | "error">("idle");
+	const [syncAccounts, setSyncAccounts] = useState<SyncAccount[]>([]);
+	const [selectedSyncAccounts, setSelectedSyncAccounts] = useState<string[]>([]);
+	const [syncMessage, setSyncMessage] = useState("");
 	const [isSaving, startSaving] = useTransition();
 
 	const models = useMemo(() => [...new Set(opportunities.flatMap((item) => item.modelLabels))], [opportunities]);
@@ -95,6 +138,66 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const pendingActions = actions.filter((item) => ["proposed", "in_progress"].includes(item.status)).length;
 	const retestReady = actions.filter((item) => ["verified", "closed"].includes(item.status)).length;
 	const stage = actionStage(selected?.existingAction);
+	const syncAction = selected?.existingAction ?? actions[0];
+
+	async function openSyncAssistant() {
+		if (!syncAction) {
+			setPreviewMessage("请先选择一个真实行动，准备好内容后再打开同步助手。");
+			return;
+		}
+		setSyncOpen(true);
+		setSyncPhase("discovering");
+		setSyncMessage("正在通过文章同步助手检查已登录平台…");
+		setSyncAccounts([]);
+		setSelectedSyncAccounts([]);
+		const api = getArticleSyncApi();
+		if (!api) {
+			setSyncPhase("error");
+			setSyncMessage("当前网页没有检测到文章同步助手。请在 EgoLite 中启用扩展并刷新本页。");
+			return;
+		}
+		try {
+			const accounts = await discoverSyncAccounts(api);
+			const platformAccounts = accounts.filter((account) => account.type !== "zip-download");
+			setSyncAccounts(platformAccounts);
+			if (!platformAccounts.length) {
+				setSyncPhase("error");
+				setSyncMessage("没有检测到已登录平台。请先在 EgoLite 中登录目标平台，再重新打开同步助手。");
+				return;
+			}
+			setSyncPhase("confirm");
+			setSyncMessage(platformAccounts.length === 1
+				? "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
+				: `已检测到 ${platformAccounts.length} 个登录平台。选择目标后由你确认，系统不会自动发布。`);
+		} catch (error) {
+			setSyncPhase("error");
+			setSyncMessage(error instanceof Error ? error.message : "文章同步助手连接失败。");
+		}
+	}
+
+	function confirmSync() {
+		const api = getArticleSyncApi();
+		const accounts = syncAccounts.filter((account) => selectedSyncAccounts.includes(account.type));
+		if (!api || !syncAction || accounts.length === 0) return;
+		const content = `<h1>${escapeHtml(syncAction.title)}</h1><p>${escapeHtml(syncAction.rationale)}</p>${syncAction.hypothesis ? `<h2>验证目标</h2><p>${escapeHtml(syncAction.hypothesis)}</p>` : ""}<p><strong>说明：</strong>此内容由春秋元泉 GEO 工作台交给文章同步助手，仅写入平台草稿，不执行发布。</p>`;
+		const markdown = `# ${syncAction.title}\n\n${syncAction.rationale}${syncAction.hypothesis ? `\n\n## 验证目标\n\n${syncAction.hypothesis}` : ""}\n\n**说明：** 此内容由春秋元泉 GEO 工作台交给文章同步助手，仅写入平台草稿，不执行发布。`;
+		setSyncPhase("syncing");
+		setSyncMessage("同步请求已提交，正在等待各平台返回草稿结果…");
+		api.addTask(
+			{ post: { title: syncAction.title, content, markdown }, accounts },
+			(task) => {
+				if (!task.accounts?.length) return;
+				setSyncAccounts(task.accounts);
+				const finished = task.accounts.every((account) => account.status === "done" || account.status === "failed");
+				if (finished) {
+					setSyncPhase("complete");
+					const saved = task.accounts.filter((account) => account.status === "done" && account.editResp?.draftLink).length;
+					setSyncMessage(saved > 0 ? `${saved} 个平台返回了可回读的草稿链接；其余结果请逐项核对。` : "平台未返回可回读草稿；不会计为已保存。请查看下方失败原因。");
+				}
+			},
+			() => undefined,
+		);
+	}
 
 	return <main className="pa-page">
 		<section className="pa-topline">
@@ -145,9 +248,22 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只显示数据库已保存的行动；内容、草稿与发布将在对应接口接入后逐格推进。</p></div></header>
 				<div className="pa-progress-lanes"><div className="is-current"><b>内容草稿</b><span>{actions.filter((item) => item.status === "proposed").length}</span>{actions.filter((item) => item.status === "proposed").slice(0, 1).map((item) => <p key={item.id}>{item.title}</p>)}</div><div><b>事实校验</b><span>0</span><p>暂无待核验内容</p></div><div><b>平台适配</b><span>0</span><p>暂无待适配内容</p></div><div><b>写入草稿</b><span>{actions.filter((item) => item.status === "in_progress").length}</span>{actions.filter((item) => item.status === "in_progress").slice(0, 1).map((item) => <p key={item.id}>{item.title}</p>)}</div><div><b>人工发布</b><span>0</span><p>始终由人工确认</p></div><div><b>等待复测</b><span>{actions.filter((item) => ["verified", "closed"].includes(item.status)).length}</span><p>完成后回到同题复测</p></div></div>
-				<footer className="pa-progress-footer"><span><Icon name="eye" />系统只写入草稿，最终发布由人工确认</span><div><button type="button" onClick={() => setPreviewMessage("内容预览接口将在内容资产接入后启用")}>预览内容</button><button className="pa-sync-button" type="button" onClick={() => setPreviewMessage("同步助手接口将在发布插件接入后启用")}>打开同步助手 <Icon name="arrow" /></button></div></footer>
+				<footer className="pa-progress-footer"><span><Icon name="eye" />系统只写入草稿，最终发布由人工确认</span><div><button type="button" onClick={() => setPreviewMessage("当前同步内容来自已保存的行动记录；正式平台适配稿仍需在内容生成阶段补齐。")}>预览说明</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant}>打开同步助手 <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
+		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>
+			<section className="pa-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-assistant-title">
+				<header><div><small>文章同步助手</small><h2 id="sync-assistant-title">选择平台并确认写入</h2></div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"} aria-label="关闭同步助手">×</button></header>
+				<div className="pa-sync-summary"><b>{syncAction?.title}</b><p>当前使用已保存的行动内容进行接入；每个平台默认只保存草稿。</p></div>
+				<p className={`pa-sync-message is-${syncPhase}`} role="status">{syncMessage}</p>
+				{syncAccounts.length ? <div className="pa-sync-platforms">{syncAccounts.map((account) => {
+					const disabled = syncPhase !== "confirm";
+					const checked = selectedSyncAccounts.includes(account.type);
+					return <label key={account.type} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => setSelectedSyncAccounts((current) => current.includes(account.type) ? current.filter((value) => value !== account.type) : [...current, account.type])} /><span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿已返回" : account.status === "failed" ? (account.error || "写入失败") : account.msg || account.title}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
+				})}</div> : null}
+				<footer><span>确认只会触发草稿写入，不会点击平台发布。</span><div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"}>取消</button>{syncPhase === "confirm" ? <button className="is-primary" type="button" onClick={confirmSync} disabled={!selectedSyncAccounts.length}>确认写入 {selectedSyncAccounts.length} 个平台</button> : null}{syncPhase === "error" ? <button className="is-primary" type="button" onClick={openSyncAssistant}>重新检测</button> : null}</div></footer>
+			</section>
+		</div> : null}
 		</>}
 	</main>;
 }
