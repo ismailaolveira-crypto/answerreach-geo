@@ -284,6 +284,7 @@ export type CompetitorBrandStat = {
 	aliases: string[];
 	is_baseline: boolean;
 	hit_answer_count: number;
+	sample_answer_count: number;
 	mention_rate: number;
 	question_count: number;
 	model_count: number;

@@ -80,8 +80,9 @@ function BrandRanking({
   const competitors = brands
     .filter((brand) => !brand.is_baseline)
     .sort((left, right) =>
-      right.wins_over_baseline - left.wins_over_baseline
+      right.mention_rate - left.mention_rate
       || right.hit_answer_count - left.hit_answer_count
+      || right.wins_over_baseline - left.wins_over_baseline
       || left.canonical_name.localeCompare(right.canonical_name, "zh-CN")
     );
   const rows = baseline ? [baseline, ...competitors] : competitors;
@@ -90,7 +91,7 @@ function BrandRanking({
     <div className={styles.tableWrap}>
       <table className={styles.rankingTable}>
         <thead><tr>
-          <th>排名</th><th>竞品</th><th>胜过我们</th><th>出现率</th>
+          <th>排名</th><th>竞品</th><th>出现率</th><th>对比信号</th>
           <th>Top 3</th><th>平均位置</th><th>覆盖模型</th><th>证据</th>
         </tr></thead>
         <tbody>{rows.map((brand) => {
@@ -99,8 +100,8 @@ function BrandRanking({
           return <tr key={brand.key} data-baseline={brand.is_baseline || undefined}>
             <td><i className={styles.rankNumber}>{rank}</i></td>
             <th><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌" : `固定追踪 · ${brand.hit_answer_count} 条`}</small></th>
+            <td><strong>{brand.mention_rate}%</strong><small>{brand.hit_answer_count}/{brand.sample_answer_count} 条回答</small></td>
             <td><strong>{brand.is_baseline ? "—" : `${formatNumber(brand.wins_over_baseline)} 次`}</strong><small>{brand.is_baseline ? "作为比较基准" : `${brand.comparable_answers} 条可比较`}</small></td>
-            <td>{brand.mention_rate}%</td>
             <td>{brand.top3_rate}%</td>
             <td>{explicitPositionLabel(brand)}<small>{brand.explicit_rank_observation_count} 条有排名</small></td>
             <td>{brand.model_count}</td>
@@ -115,9 +116,9 @@ function BrandRanking({
         const brandEvidence = evidenceRows(brand);
         const rank = brand.is_baseline ? "我" : competitors.indexOf(brand) + 1;
         return <article key={brand.key} data-baseline={brand.is_baseline || undefined}>
-          <header><i className={styles.rankNumber}>{rank}</i><span><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌（我们）" : "固定追踪竞品"}</small></span><strong>{brand.mention_rate}%</strong></header>
+          <header><i className={styles.rankNumber}>{rank}</i><span><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌（我们）" : "固定追踪竞品"}</small></span><strong>{brand.mention_rate}%<small>{brand.hit_answer_count}/{brand.sample_answer_count} 条</small></strong></header>
           <dl>
-            <div><dt>胜过我们</dt><dd>{brand.is_baseline ? "—" : `${brand.wins_over_baseline} 次`}</dd></div>
+            <div><dt>对比信号</dt><dd>{brand.is_baseline ? "—" : `${brand.wins_over_baseline} 次`}</dd></div>
             <div><dt>Top 3</dt><dd>{brand.top3_rate}%</dd></div>
             <div><dt>平均位置</dt><dd>{explicitPositionLabel(brand)}</dd></div>
             <div><dt>覆盖</dt><dd>{brand.model_count} 模型</dd></div>
@@ -137,7 +138,7 @@ function DiagnosticPanel({
   items: ActionDiagnostic[];
 }) {
   return <section className={styles.diagnosticPanel} id="action-diagnostics">
-    <header><div><h2>为什么它们赢</h2><p>展开后直接查看模型、问题、差值和下一步。</p></div><b>{items.length}</b></header>
+    <header><div><h2>需要核验的对比信号</h2><p>这不等同于出现率；展开后可回看模型、问题和原回答。</p></div><b>{items.length}</b></header>
     {items.length ? <div className={styles.diagnosticList}>
       {items.slice(0, 3).map((item, index) => {
         const signedGap = item.mention_gap > 0 ? `+${item.mention_gap}` : String(item.mention_gap);
@@ -148,7 +149,7 @@ function DiagnosticPanel({
         >
           <summary>
             <span><b>{item.competitor_name}</b><small>{item.model_label} · 差值 {signedGap}</small></span>
-            <em>{item.wins_over_baseline} 次胜出</em><i aria-hidden="true">⌄</i>
+            <em>{item.wins_over_baseline} 条信号</em><i aria-hidden="true">⌄</i>
           </summary>
           <div>
             <dl>
@@ -208,17 +209,15 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
 
   const baseline = comparison.brands.find((brand) => brand.is_baseline)!;
   const competitors = comparison.brands.filter((brand) => !brand.is_baseline);
-  const topWinner = [...competitors].sort((left, right) =>
-    right.wins_over_baseline - left.wins_over_baseline
+  const topAppearingCompetitor = [...competitors].sort((left, right) =>
+    right.mention_rate - left.mention_rate
     || right.hit_answer_count - left.hit_answer_count
+    || right.wins_over_baseline - left.wins_over_baseline
     || left.canonical_name.localeCompare(right.canonical_name, "zh-CN")
   )[0];
-  const winningCompetitorCount = competitors.filter((brand) => brand.wins_over_baseline > 0).length;
   const headline = comparison.summary.answer_count === 0
     ? "当前范围没有已归档真实回答"
-    : comparison.summary.answers_where_competitor_wins > 0
-      ? `${winningCompetitorCount} 家竞品在 ${comparison.summary.answers_where_competitor_wins} 条回答中领先`
-      : "当前范围没有竞品被确定性判定为胜出";
+    : `${baseline.canonical_name} 在 ${baseline.hit_answer_count}/${baseline.sample_answer_count} 条回答中出现`;
   const scopeLabel = period === "3650" ? "全部归档" : `近 ${period} 天`;
   const selectedModel = model === "all"
     ? "全部已测模型"
@@ -247,7 +246,7 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
 
     <main className={styles.main}>
       <section className={styles.heading}>
-        <div><span>竞争情报</span><h1>竞品对比</h1><p>看清真实 AI 采购回答里，我们输给了谁，以及为什么。</p></div>
+        <div><span>竞争情报</span><h1>竞品对比</h1><p>看清真实 AI 采购回答里，各品牌被提到的频率与对比信号。</p></div>
         <form method="get" className={styles.filters} aria-label="筛选竞品对比">
           <input type="hidden" name="view" value={view} />
           <select name="period" defaultValue={period} aria-label="统计范围">
@@ -269,16 +268,16 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
       <section className={styles.summary} aria-labelledby="comparison-headline">
         <div className={styles.conclusion}><small>本轮结论</small><h2 id="comparison-headline">{headline}</h2><p>{comparison.summary.answer_count} 条真实回答 · {comparison.by_model.filter((item) => item.answer_count > 0).length} 个模型</p></div>
         <dl>
-          <div><dt>品牌出现率</dt><dd>{baseline.mention_rate}%</dd><small>{baseline.hit_answer_count}/{comparison.summary.answer_count} 条</small></div>
+          <div><dt>品牌出现率</dt><dd>{baseline.mention_rate}%</dd><small>{baseline.hit_answer_count}/{baseline.sample_answer_count} 条</small></div>
           <div><dt>平均位置</dt><dd>{explicitPositionLabel(baseline)}</dd><small>{baseline.explicit_rank_observation_count} 条有明确排序</small></div>
-          <div><dt>竞品领先回答</dt><dd>{comparison.summary.answers_where_competitor_wins}</dd><small>同一回答内比较</small></div>
+          <div><dt>对比信号</dt><dd>{comparison.summary.answers_where_competitor_wins}</dd><small>仅用于回看同一回答</small></div>
         </dl>
-        <div className={styles.gap}><span>最大差距</span><b>{topWinner && topWinner.wins_over_baseline > 0 ? `${topWinner.canonical_name} · 胜出 ${topWinner.wins_over_baseline} 次` : "当前无确认胜出"}</b><a href="#action-diagnostics">查看行动诊断 →</a></div>
+        <div className={styles.gap}><span>最高竞品出现率</span><b>{topAppearingCompetitor ? `${topAppearingCompetitor.canonical_name} · ${topAppearingCompetitor.hit_answer_count}/${topAppearingCompetitor.sample_answer_count} 条（${topAppearingCompetitor.mention_rate}%）` : "当前没有追踪竞品"}</b><a href="#action-diagnostics">查看对比信号 →</a></div>
       </section>
 
       <div className={styles.comparisonGrid}>
         <section className={styles.ranking} id="competitor-leaderboard">
-          <header><div><h2>竞品排行榜</h2><p>固定六品牌；真实 0 保留，每个数字都能回到回答原文。</p></div><span>{scopeLabel}</span></header>
+          <header><div><h2>品牌出现率排行榜</h2><p>出现率 = 品牌出现的回答数 ÷ 当前筛选的有效回答总数；真实 0 保留。</p></div><span>{scopeLabel}</span></header>
           <BrandRanking workspaceId={workspaceId} brands={comparison.brands} />
         </section>
 

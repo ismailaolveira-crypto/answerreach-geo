@@ -914,6 +914,16 @@
     color: #175dcc;
     font-size: 18px;
     letter-spacing: -.05em;
+    text-align: right;
+  }
+
+  .mobileRanking header strong small {
+    color: #536176;
+    display: block;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0;
+    margin-top: 3px;
   }
 
   .mobileRanking dl {

@@ -357,6 +357,7 @@ def _brand_stats(
             "aliases": list(config.aliases),
             "is_baseline": config.is_baseline,
             "hit_answer_count": len(matched),
+            "sample_answer_count": denominator,
             "mention_rate": round(len(matched) / denominator * 100, 1) if denominator else 0.0,
             "question_count": len(questions),
             "model_count": len(models),
@@ -384,8 +385,9 @@ def _brand_stats(
     rows.sort(
         key=lambda item: (
             0 if item["is_baseline"] else 1,
-            -item["wins_over_baseline"],
+            -item["mention_rate"],
             -item["hit_answer_count"],
+            -item["wins_over_baseline"],
             item["canonical_name"],
         )
     )
@@ -541,7 +543,7 @@ def build_competitor_comparison(
         "action_diagnostics": _action_diagnostics(analyses, configs),
         "matching_rule_version": MATCH_RULE_VERSION,
         "methodology": {
-            "mention": "同一品牌多个别名在一条回答中去重，命中回答数按回答计数。",
+            "mention": "品牌出现率 = 当前筛选范围内出现该品牌名的回答数 ÷ 当前范围有效回答总数；同一品牌多个别名在一条回答中去重，只计 1 条。",
             "candidate": "品牌出现在编号清单，或上下文含候选、入选、备选、推荐、首选、优先时计入。",
             "recommendation": "品牌附近上下文明确出现推荐、首选、优先、建议选择或值得考虑时计入。",
             "negative": "否定词优先于推荐词；不推荐、不建议、非首选等上下文计入负面。",

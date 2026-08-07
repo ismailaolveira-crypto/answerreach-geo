@@ -402,6 +402,7 @@ class CompetitorBrandStat(BaseModel):
     aliases: list[str]
     is_baseline: bool
     hit_answer_count: int
+    sample_answer_count: int
     mention_rate: float
     question_count: int
     model_count: int

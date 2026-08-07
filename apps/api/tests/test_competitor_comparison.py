@@ -94,6 +94,8 @@ def test_comparison_deduplicates_aliases_and_keeps_zero_brands() -> None:
     brands = {item["key"]: item for item in result["brands"]}
 
     assert brands["chunqiu-yuanquan"]["hit_answer_count"] == 1
+    assert brands["chunqiu-yuanquan"]["sample_answer_count"] == 2
+    assert brands["chunqiu-yuanquan"]["mention_rate"] == 50.0
     assert brands["chunqiu-yuanquan"]["evidence"][0]["match_count"] == 2
     assert brands["chunqiu-yuanquan"]["average_first_appearance_order"] == 1
     assert brands["aliyun-ai-gateway"]["average_first_appearance_order"] == 2
