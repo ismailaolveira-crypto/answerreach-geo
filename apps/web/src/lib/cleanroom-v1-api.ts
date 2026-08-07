@@ -700,6 +700,92 @@ export type CleanroomContentAsset = {
 	status: string;
 };
 
+export type CleanroomContentClaim = {
+	id: number;
+	content_asset_id: number;
+	claim_key: string;
+	claim_text: string;
+	support_type: string;
+	support_id?: number | null;
+	source_url?: string | null;
+	verification_status: string;
+	introduced_by_model: boolean;
+	review_note?: string | null;
+};
+
+export type CleanroomPlatformVariant = {
+	id: number;
+	workspace_id: number;
+	content_asset_id: number;
+	platform_key: string;
+	version: number;
+	policy_version: string;
+	title: string;
+	summary: string;
+	body_markdown: string;
+	tags: string[];
+	category?: string | null;
+	image_manifest: Array<Record<string, unknown>>;
+	adaptation_contract: Record<string, unknown>;
+	content_fingerprint: string;
+	prompt_template_id?: number | null;
+	prompt_hash?: string | null;
+	status: string;
+};
+
+export type CleanroomContentReview = {
+	id: number;
+	workspace_id: number;
+	subject_type: string;
+	subject_id: number;
+	review_type: string;
+	verdict: string;
+	checks: Record<string, unknown>;
+	issues: Array<Record<string, unknown>>;
+	reviewer_id?: number | null;
+	created_at: string;
+};
+
+export type CleanroomContentReviewPackage = {
+	asset: CleanroomContentAsset;
+	claims: CleanroomContentClaim[];
+	variants: CleanroomPlatformVariant[];
+	reviews: CleanroomContentReview[];
+	pending_claim_count: number;
+	approved_platform_keys: string[];
+};
+
+export type CleanroomDistributionTarget = {
+	id: number;
+	distribution_run_id: number;
+	platform_variant_id?: number | null;
+	platform_key: string;
+	adapter_version: string;
+	request_status: string;
+	draft_readback_status: string;
+	candidate_draft_url?: string | null;
+	draft_url?: string | null;
+	external_draft_id?: string | null;
+	response_artifact_uri?: string | null;
+	readback_artifact_uri?: string | null;
+	waiting_human_reason?: string | null;
+	blocked_reason?: string | null;
+	last_error_code?: string | null;
+	final_action_clicked: boolean;
+};
+
+export type CleanroomDistributionRun = {
+	id: number;
+	workspace_id: number;
+	action_id?: number | null;
+	content_asset_id?: number | null;
+	requested_platforms: string[];
+	stage: string;
+	idempotency_key: string;
+	status: string;
+	targets: CleanroomDistributionTarget[];
+};
+
 export type CleanroomContentGenerationJob = {
 	id: number;
 	job_type: string;
@@ -1231,6 +1317,58 @@ export function createCleanroomContentBrief(
 
 export function getCleanroomContentAssets(workspaceId: string | number, actionId: number, briefId: number) {
 	return apiRequest<CleanroomContentAsset[]>(`/workspaces/${workspaceId}/actions/${actionId}/briefs/${briefId}/assets`);
+}
+
+export function getCleanroomContentReviewPackage(workspaceId: string | number, assetId: number) {
+	return apiRequest<CleanroomContentReviewPackage>(`/workspaces/${workspaceId}/content-assets/${assetId}/review-package`);
+}
+
+export function decideCleanroomContentReview(
+	workspaceId: string | number,
+	assetId: number,
+	payload: {
+		verdict: "approved" | "changes_requested";
+		confirmed_claim_ids?: number[];
+		platform_keys?: string[];
+		note?: string | null;
+	},
+) {
+	return apiRequest<CleanroomContentReviewPackage>(`/workspaces/${workspaceId}/content-assets/${assetId}/reviews`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function getCleanroomDistributionRuns(workspaceId: string | number, actionId?: number) {
+	const suffix = actionId ? `?action_id=${actionId}` : "";
+	return apiRequest<CleanroomDistributionRun[]>(`/workspaces/${workspaceId}/distribution-runs${suffix}`);
+}
+
+export function createCleanroomDistributionRun(
+	workspaceId: string | number,
+	payload: { content_asset_id: number; platform_keys: string[]; idempotency_key: string },
+) {
+	return apiRequest<CleanroomDistributionRun>(`/workspaces/${workspaceId}/distribution-runs`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function recordCleanroomDistributionClientResults(
+	workspaceId: string | number,
+	runId: number,
+	targets: Array<{
+		platform_key: string;
+		request_status: "draft_saved" | "failed" | "cancelled";
+		draft_url?: string | null;
+		external_draft_id?: string | null;
+		message?: string | null;
+	}>,
+) {
+	return apiRequest<CleanroomDistributionRun>(`/workspaces/${workspaceId}/distribution-runs/${runId}/client-results`, {
+		method: "POST",
+		body: JSON.stringify({ targets }),
+	});
 }
 
 export function queueCleanroomContentGeneration(

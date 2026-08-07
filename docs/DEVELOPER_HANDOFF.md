@@ -115,3 +115,12 @@ pnpm run verify
 - 提交前至少运行 `pnpm run check:api` 和 `pnpm run check:web`。
 - 不生成 Mock 或演示数据来替代正式项目验收。
 - 所有“真实可用”结论必须由数据库、日志、API 或浏览器截图证明。
+
+## 2026-08-08 · Codex Agent 优先行动闭环
+
+- P0 已使用本机 Codex SDK 生成真实母稿、Claim 清单和知乎/公众号平台稿。
+- P1 已增加内容审核包、逐条事实确认、逐平台批准、浏览器文章同步助手触发与客户端结果归档。
+- 同步门禁：未审核的资产或平台稿无法建立同步任务；没有草稿 URL 或外部草稿 ID 不能记为 `draft_saved`。
+- 文章同步使用当前浏览器扩展的 `$syncer`，逐平台传入已审核的差异稿；不使用行动摘要代替正文。
+- 任何同步结果都保持 `final_action_clicked=false`；最终发布、发布 URL 归档和复测仍属于 P2。
+- 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读和禁止冒充发布。

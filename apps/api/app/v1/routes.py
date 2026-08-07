@@ -30,6 +30,8 @@ from app.models.cleanroom_v1 import (
     GeoContentAudit,
     GeoContentAsset,
     GeoContentBrief,
+    GeoContentClaim,
+    GeoContentReview,
     GeoDistributionRun,
     GeoDistributionTarget,
     GeoPlatformVariant,
@@ -79,8 +81,11 @@ from app.v1.schemas import (
     ContentBriefCreate,
     ContentBriefRead,
     ContentAssetRead,
+    ContentReviewDecision,
+    ContentReviewPackageRead,
     ContentGenerateRequest,
     DistributionRunCreate,
+    DistributionClientResults,
     DistributionRunRead,
     PlatformVariantCreate,
     PlatformVariantRead,
@@ -3838,6 +3843,192 @@ def list_content_assets(
     )
 
 
+def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
+    claims = list(
+        db.scalars(
+            select(GeoContentClaim)
+            .where(GeoContentClaim.content_asset_id == asset.id)
+            .order_by(GeoContentClaim.id)
+        )
+    )
+    variants = list(
+        db.scalars(
+            select(GeoPlatformVariant)
+            .where(GeoPlatformVariant.content_asset_id == asset.id)
+            .order_by(GeoPlatformVariant.platform_key, GeoPlatformVariant.version.desc())
+        )
+    )
+    reviews = list(
+        db.scalars(
+            select(GeoContentReview)
+            .where(
+                GeoContentReview.workspace_id == asset.workspace_id,
+                (
+                    (GeoContentReview.subject_type == "content_asset")
+                    & (GeoContentReview.subject_id == asset.id)
+                )
+                | (
+                    (GeoContentReview.subject_type == "platform_variant")
+                    & (GeoContentReview.subject_id.in_([variant.id for variant in variants] or [-1]))
+                ),
+            )
+            .order_by(GeoContentReview.id.desc())
+        )
+    )
+    approved_variant_ids = {
+        review.subject_id
+        for review in reviews
+        if review.subject_type == "platform_variant" and review.verdict == "approved"
+    }
+    approved_platform_keys = [
+        variant.platform_key for variant in variants if variant.id in approved_variant_ids
+    ]
+    return {
+        "asset": asset,
+        "claims": claims,
+        "variants": variants,
+        "reviews": reviews,
+        "pending_claim_count": sum(
+            claim.verification_status not in {"source_linked", "verified", "human_confirmed"}
+            for claim in claims
+        ),
+        "approved_platform_keys": list(dict.fromkeys(approved_platform_keys)),
+    }
+
+
+@router.get(
+    "/workspaces/{workspace_id}/content-assets/{asset_id}/review-package",
+    response_model=ContentReviewPackageRead,
+)
+def read_content_review_package(
+    workspace_id: int,
+    asset_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, asset_id)
+    return _content_review_package(db, asset)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/content-assets/{asset_id}/reviews",
+    response_model=ContentReviewPackageRead,
+    status_code=201,
+)
+def decide_content_review(
+    workspace_id: int,
+    asset_id: int,
+    payload: ContentReviewDecision,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, asset_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, asset.brief_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, brief.action_id)
+    claims = list(
+        db.scalars(
+            select(GeoContentClaim).where(GeoContentClaim.content_asset_id == asset.id)
+        )
+    )
+    variants = list(
+        db.scalars(
+            select(GeoPlatformVariant).where(GeoPlatformVariant.content_asset_id == asset.id)
+        )
+    )
+    variants_by_key = {variant.platform_key: variant for variant in variants}
+    platform_keys = list(dict.fromkeys(payload.platform_keys))
+    missing_platforms = [key for key in platform_keys if key not in variants_by_key]
+    if missing_platforms:
+        raise HTTPException(status_code=422, detail=f"Platform variants not found: {', '.join(missing_platforms)}")
+    if payload.verdict == "approved" and not platform_keys:
+        raise HTTPException(status_code=422, detail="Select at least one platform variant to approve")
+
+    unresolved = [
+        claim
+        for claim in claims
+        if claim.verification_status not in {"source_linked", "verified", "human_confirmed"}
+    ]
+    confirmed_ids = set(payload.confirmed_claim_ids)
+    unresolved_ids = {claim.id for claim in unresolved}
+    if payload.verdict == "approved" and not unresolved_ids.issubset(confirmed_ids):
+        remaining = len(unresolved_ids - confirmed_ids)
+        raise HTTPException(
+            status_code=422,
+            detail=f"{remaining} unsupported claims still require explicit human confirmation",
+        )
+
+    note = (payload.note or "").strip()
+    if payload.verdict == "changes_requested" and not note:
+        raise HTTPException(status_code=422, detail="Explain what must change before sending the draft back")
+
+    if payload.verdict == "approved":
+        for claim in unresolved:
+            if claim.id in confirmed_ids:
+                claim.verification_status = "human_confirmed"
+                claim.review_note = note or "人工审核时明确确认"
+        asset.status = "approved"
+    else:
+        asset.status = "changes_requested"
+
+    issue = {"code": "review_note", "message": note} if note else None
+    db.add(
+        GeoContentReview(
+            workspace_id=workspace_id,
+            subject_type="content_asset",
+            subject_id=asset.id,
+            review_type="human",
+            verdict=payload.verdict,
+            checks={
+                "claim_count": len(claims),
+                "confirmed_claim_ids": sorted(confirmed_ids & unresolved_ids),
+                "platform_keys": platform_keys,
+            },
+            issues=[issue] if issue else [],
+            reviewer_id=user.id,
+        )
+    )
+    for platform_key in platform_keys:
+        variant = variants_by_key[platform_key]
+        variant.status = payload.verdict
+        db.add(
+            GeoContentReview(
+                workspace_id=workspace_id,
+                subject_type="platform_variant",
+                subject_id=variant.id,
+                review_type="human",
+                verdict=payload.verdict,
+                checks={"platform_key": platform_key, "content_fingerprint": variant.content_fingerprint},
+                issues=[issue] if issue else [],
+                reviewer_id=user.id,
+            )
+        )
+    previous_stage = action.stage
+    action.stage = "reviewing"
+    action.blocked_reason = note if payload.verdict == "changes_requested" else None
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="content_review_decided",
+            from_stage=previous_stage,
+            to_stage="reviewing",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "asset_id": asset.id,
+                "verdict": payload.verdict,
+                "platform_keys": platform_keys,
+                "confirmed_claim_count": len(confirmed_ids & unresolved_ids),
+            },
+        )
+    )
+    db.commit()
+    db.refresh(asset)
+    return _content_review_package(db, asset)
+
+
 @router.post(
     "/workspaces/{workspace_id}/actions/{action_id}/briefs/{brief_id}/assets/{asset_id}/variants",
     response_model=list[PlatformVariantRead],
@@ -3903,6 +4094,24 @@ def _distribution_read(db: Session, run: GeoDistributionRun) -> dict:
     return {"id": run.id, "targets": targets, **run.__dict__}
 
 
+@router.get(
+    "/workspaces/{workspace_id}/distribution-runs",
+    response_model=list[DistributionRunRead],
+)
+def list_distribution_runs(
+    workspace_id: int,
+    action_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    statement = select(GeoDistributionRun).where(GeoDistributionRun.workspace_id == workspace_id)
+    if action_id is not None:
+        statement = statement.where(GeoDistributionRun.action_id == action_id)
+    runs = list(db.scalars(statement.order_by(GeoDistributionRun.id.desc())))
+    return [_distribution_read(db, run) for run in runs]
+
+
 @router.post(
     "/workspaces/{workspace_id}/distribution-runs",
     response_model=DistributionRunRead,
@@ -3916,6 +4125,8 @@ def create_distribution_run(
 ):
     workspace_or_404(db, user, workspace_id)
     asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
+    if asset.status != "approved":
+        raise HTTPException(status_code=409, detail="Content asset must pass human review before sync")
     action = db.scalar(
         select(GeoOptimizationAction)
         .join(GeoContentBrief, GeoContentBrief.action_id == GeoOptimizationAction.id)
@@ -3939,14 +4150,24 @@ def create_distribution_run(
             )
         )
     }
+    unavailable = [
+        platform_key
+        for platform_key in dict.fromkeys(payload.platform_keys)
+        if platform_key not in variants or variants[platform_key].status != "approved"
+    ]
+    if unavailable:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Platform variants require human approval: {', '.join(unavailable)}",
+        )
     run = GeoDistributionRun(
         workspace_id=workspace_id,
         action_id=action.id if action else None,
         content_asset_id=asset.id,
         requested_platforms=list(dict.fromkeys(payload.platform_keys)),
-        stage="awaiting_adapter",
+        stage="ready_for_client",
         idempotency_key=payload.idempotency_key,
-        status="blocked",
+        status="pending",
         requested_by_user_id=user.id,
     )
     db.add(run)
@@ -3958,28 +4179,128 @@ def create_distribution_run(
                 distribution_run_id=run.id,
                 platform_variant_id=variant.id if variant else None,
                 platform_key=platform_key,
+                adapter_version="browser-extension.v1",
                 request_status="not_started",
                 draft_readback_status="not_started",
-                waiting_human_reason="文章同步助手 MCP 适配器尚未配置；未发送外部请求。",
-                blocked_reason="sync_adapter_not_configured",
+                waiting_human_reason="等待用户在当前浏览器中打开文章同步助手并确认写入。",
             )
         )
     if action:
         previous_stage = action.stage
-        action.stage = "blocked"
-        action.blocked_reason = "sync_adapter_not_configured"
+        action.stage = "sync_requested"
+        action.blocked_reason = None
         db.add(
             GeoActionEvent(
                 workspace_id=workspace_id,
                 action_id=action.id,
-                event_type="distribution_blocked",
+                event_type="distribution_ready_for_client",
                 from_stage=previous_stage,
-                to_stage="blocked",
+                to_stage="sync_requested",
                 actor_type="user",
                 actor_user_id=user.id,
-                detail={"distribution_run_id": run.id, "reason": "sync_adapter_not_configured"},
+                detail={
+                    "distribution_run_id": run.id,
+                    "platform_keys": list(dict.fromkeys(payload.platform_keys)),
+                    "final_action_clicked": False,
+                },
             )
         )
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/client-results",
+    response_model=DistributionRunRead,
+)
+def record_distribution_client_results(
+    workspace_id: int,
+    run_id: int,
+    payload: DistributionClientResults,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id)
+        )
+    )
+    by_platform = {target.platform_key: target for target in targets}
+    seen: set[str] = set()
+    for result in payload.targets:
+        if result.platform_key in seen:
+            raise HTTPException(status_code=422, detail=f"Duplicate platform result: {result.platform_key}")
+        seen.add(result.platform_key)
+        target = by_platform.get(result.platform_key)
+        if target is None:
+            raise HTTPException(status_code=422, detail=f"Platform is not part of this sync run: {result.platform_key}")
+        if result.request_status == "draft_saved":
+            if not result.draft_url and not result.external_draft_id:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{result.platform_key} requires a draft URL or external draft ID",
+                )
+            target.request_status = "draft_saved"
+            target.draft_readback_status = "draft_saved"
+            target.candidate_draft_url = result.draft_url
+            target.draft_url = result.draft_url
+            target.external_draft_id = result.external_draft_id
+            target.waiting_human_reason = "平台草稿已回读；最终发布仍等待人工确认。"
+            target.blocked_reason = None
+            target.last_error_code = None
+        elif result.request_status == "failed":
+            target.request_status = "failed"
+            target.draft_readback_status = "failed"
+            target.blocked_reason = (result.message or "文章同步助手未能保存草稿")[:2000]
+            target.last_error_code = "client_sync_failed"
+            target.waiting_human_reason = None
+        else:
+            target.request_status = "cancelled"
+            target.draft_readback_status = "not_started"
+            target.waiting_human_reason = result.message or "用户取消了本次平台草稿写入。"
+        target.final_action_clicked = False
+
+    saved_count = sum(target.draft_readback_status == "draft_saved" for target in targets)
+    failed_count = sum(target.request_status == "failed" for target in targets)
+    pending_count = len(targets) - saved_count - failed_count
+    if saved_count == len(targets):
+        run.stage = "draft_saved"
+        run.status = "draft_saved"
+    elif failed_count and not saved_count and pending_count == 0:
+        run.stage = "needs_attention"
+        run.status = "failed"
+    else:
+        run.stage = "needs_attention" if failed_count else "awaiting_client_results"
+        run.status = "partial" if saved_count or failed_count else "pending"
+    action = db.get(GeoOptimizationAction, run.action_id) if run.action_id else None
+    if action:
+        # A saved draft is not a published result and never advances the action
+        # to verified. Verification requires a later real re-observation.
+        action.stage = "awaiting_readback"
+        action.blocked_reason = None if not failed_count else "部分平台草稿写入失败，请核对逐平台结果。"
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=run.action_id,
+            event_type="distribution_client_results_recorded",
+            from_stage="sync_requested",
+            to_stage=action.stage if action else run.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "distribution_run_id": run.id,
+                "saved_count": saved_count,
+                "failed_count": failed_count,
+                "pending_count": pending_count,
+                "final_action_clicked": False,
+            },
+        )
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)

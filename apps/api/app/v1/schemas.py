@@ -1144,6 +1144,52 @@ class PlatformVariantRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ContentClaimRead(BaseModel):
+    id: int
+    content_asset_id: int
+    claim_key: str
+    claim_text: str
+    support_type: str
+    support_id: int | None
+    source_url: str | None
+    verification_status: str
+    introduced_by_model: bool
+    review_note: str | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContentReviewRead(BaseModel):
+    id: int
+    workspace_id: int
+    subject_type: str
+    subject_id: int
+    review_type: str
+    verdict: str
+    checks: dict = Field(default_factory=dict)
+    issues: list[dict] = Field(default_factory=list)
+    reviewer_id: int | None
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContentReviewPackageRead(BaseModel):
+    asset: ContentAssetRead
+    claims: list[ContentClaimRead] = Field(default_factory=list)
+    variants: list[PlatformVariantRead] = Field(default_factory=list)
+    reviews: list[ContentReviewRead] = Field(default_factory=list)
+    pending_claim_count: int = 0
+    approved_platform_keys: list[str] = Field(default_factory=list)
+
+
+class ContentReviewDecision(BaseModel):
+    verdict: Literal["approved", "changes_requested"]
+    confirmed_claim_ids: list[int] = Field(default_factory=list, max_length=200)
+    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
+        default_factory=list, max_length=4
+    )
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class DistributionRunCreate(BaseModel):
     content_asset_id: int = Field(ge=1)
     platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(min_length=1)
@@ -1181,6 +1227,18 @@ class DistributionRunRead(BaseModel):
     status: str
     targets: list[DistributionTargetRead] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
+
+
+class DistributionClientTargetResult(BaseModel):
+    platform_key: str = Field(min_length=1, max_length=80)
+    request_status: Literal["draft_saved", "failed", "cancelled"]
+    draft_url: str | None = Field(default=None, max_length=1500)
+    external_draft_id: str | None = Field(default=None, max_length=255)
+    message: str | None = Field(default=None, max_length=2000)
+
+
+class DistributionClientResults(BaseModel):
+    targets: list[DistributionClientTargetResult] = Field(min_length=1, max_length=20)
 
 
 class PromptTemplateRead(BaseModel):
