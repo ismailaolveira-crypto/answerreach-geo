@@ -124,10 +124,9 @@ from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
-from app.services.article_sync_adapter import DEFAULT_ARTICLE_SYNC_MCP_URL
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
-    ARTICLE_SYNC_MCP_URL,
+    ARTICLE_SYNC_MCP_SERVER_PATH,
     DEEPSEEK_API_KEY,
     get_workspace_secret,
     resolve_article_sync_credentials,
@@ -1154,7 +1153,7 @@ def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     deepseek_row = secret_status(db, workspace_id, DEEPSEEK_API_KEY)
-    mcp_url_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_URL)
+    mcp_server_path_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH)
     mcp_token_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_TOKEN)
     settings = get_settings()
     deepseek_provider = db.scalar(
@@ -1166,10 +1165,10 @@ def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
     return {
         "workspace_id": workspace_id,
         "deepseek_api_key_configured": deepseek_configured,
-        "article_sync_mcp_url": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_URL) or settings.article_sync_mcp_url or DEFAULT_ARTICLE_SYNC_MCP_URL,
+        "article_sync_mcp_server_path": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH) or settings.article_sync_mcp_server_path,
         "article_sync_mcp_token_configured": bool(mcp_token_row["configured"] or settings.article_sync_mcp_token),
         "deepseek_updated_at": deepseek_row["updated_at"],
-        "article_sync_mcp_updated_at": mcp_token_row["updated_at"] or mcp_url_row["updated_at"],
+        "article_sync_mcp_updated_at": mcp_token_row["updated_at"] or mcp_server_path_row["updated_at"],
     }
 
 
@@ -1221,9 +1220,9 @@ def update_workspace_integrations(
         }
         provider.auth_config.pop("api_key", None)
         changed.append("deepseek_api_key")
-    if payload.article_sync_mcp_url and payload.article_sync_mcp_url.strip():
-        set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_URL, value=payload.article_sync_mcp_url.strip(), user_id=user.id)
-        changed.append("article_sync_mcp_url")
+    if payload.article_sync_mcp_server_path and payload.article_sync_mcp_server_path.strip():
+        set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_SERVER_PATH, value=payload.article_sync_mcp_server_path.strip(), user_id=user.id)
+        changed.append("article_sync_mcp_server_path")
     if payload.article_sync_mcp_token and payload.article_sync_mcp_token.strip():
         set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_TOKEN, value=payload.article_sync_mcp_token.strip(), user_id=user.id)
         changed.append("article_sync_mcp_token")
@@ -1250,12 +1249,18 @@ def test_workspace_integration(
     workspace = workspace_or_404(db, user, workspace_id)
     started_at = perf_counter()
     if payload.integration == "article_sync_mcp":
-        endpoint, token = resolve_article_sync_credentials(db, workspace_id)
-        adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
+        server_path, token = resolve_article_sync_credentials(db, workspace_id)
+        adapter = get_article_sync_adapter(server_path=server_path, token=token)
         try:
             result = adapter.probe()
         except RuntimeError as exc:
-            message = "文章同步助手 MCP 尚未配置，请先保存 Endpoint 和 Token。" if str(exc) == "sync_adapter_not_configured" else "MCP 能力发现失败，请检查 Endpoint、Token 和服务状态。"
+            error_code = str(exc)
+            if error_code == "sync_adapter_not_configured":
+                message = "文章同步助手 MCP 尚未配置，请先保存 MCP Server 路径和 Token。"
+            elif error_code == "article_sync_extension_not_connected":
+                message = "MCP Server 已启动，但文章同步助手扩展未连接；请在扩展中开启 MCP 连接并确认 Token 一致。"
+            else:
+                message = "MCP 能力发现失败，请检查 MCP Server 路径、Token、Node 和扩展连接状态。"
             return {"integration": payload.integration, "ok": False, "message": message, "latency_ms": int((perf_counter() - started_at) * 1000)}
         return {"integration": payload.integration, "ok": True, "message": "MCP 能力发现成功；未创建草稿。", "latency_ms": int((perf_counter() - started_at) * 1000), "platforms": result.get("platforms")}
 
@@ -3951,8 +3956,8 @@ def request_distribution_run(
 ):
     workspace_or_404(db, user, workspace_id)
     run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
-    endpoint, token = resolve_article_sync_credentials(db, workspace_id)
-    adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
+    server_path, token = resolve_article_sync_credentials(db, workspace_id)
+    adapter = get_article_sync_adapter(server_path=server_path, token=token)
     targets = list(
         db.scalars(
             select(GeoDistributionTarget)
@@ -4018,8 +4023,8 @@ def readback_distribution_target(
     target = db.get(GeoDistributionTarget, target_id)
     if target is None or target.distribution_run_id != run.id:
         raise HTTPException(status_code=404, detail="Distribution target not found")
-    endpoint, token = resolve_article_sync_credentials(db, workspace_id)
-    adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
+    server_path, token = resolve_article_sync_credentials(db, workspace_id)
+    adapter = get_article_sync_adapter(server_path=server_path, token=token)
     try:
         result = adapter.read_draft(platform_key=target.platform_key, candidate_url=target.candidate_draft_url)
     except RuntimeError as exc:

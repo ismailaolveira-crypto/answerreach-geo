@@ -11,10 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.cleanroom_v1 import GeoWorkspaceSecret
-from app.services.article_sync_adapter import DEFAULT_ARTICLE_SYNC_MCP_URL
-
 DEEPSEEK_API_KEY = "deepseek_api_key"
-ARTICLE_SYNC_MCP_URL = "article_sync_mcp_url"
+ARTICLE_SYNC_MCP_SERVER_PATH = "article_sync_mcp_server_path"
 ARTICLE_SYNC_MCP_TOKEN = "article_sync_mcp_token"
 
 
@@ -69,11 +67,11 @@ def set_workspace_secret(
 
 
 def resolve_article_sync_credentials(db: Session, workspace_id: int) -> tuple[str | None, str | None]:
-    """Workspace settings take precedence; env remains a deployment fallback."""
+    """Resolve the official MCP Server path and extension token."""
     settings = get_settings()
-    endpoint = get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_URL) or settings.article_sync_mcp_url or DEFAULT_ARTICLE_SYNC_MCP_URL
+    server_path = get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH) or settings.article_sync_mcp_server_path
     token = get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_TOKEN) or settings.article_sync_mcp_token
-    return endpoint, token
+    return server_path, token
 
 
 def secret_status(db: Session, workspace_id: int, key: str) -> dict[str, object]:

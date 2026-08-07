@@ -21,7 +21,7 @@ export async function readWorkspaceIntegrations(workspaceId: number): Promise<Wo
 
 export async function saveWorkspaceIntegrations(
 	workspaceId: number,
-	payload: { deepseek_api_key?: string; article_sync_mcp_url?: string; article_sync_mcp_token?: string },
+	payload: { deepseek_api_key?: string; article_sync_mcp_server_path?: string; article_sync_mcp_token?: string },
 ) {
 	return updateWorkspaceIntegrations(workspaceId, payload);
 }

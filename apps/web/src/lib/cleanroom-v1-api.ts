@@ -17,7 +17,7 @@ export type CleanroomWorkspace = {
 export type WorkspaceIntegrationSettings = {
 	workspace_id: number;
 	deepseek_api_key_configured: boolean;
-	article_sync_mcp_url?: string | null;
+	article_sync_mcp_server_path?: string | null;
 	article_sync_mcp_token_configured: boolean;
 	deepseek_updated_at?: string | null;
 	article_sync_mcp_updated_at?: string | null;
@@ -705,7 +705,7 @@ export function updateWorkspaceIntegrations(
 	workspaceId: string | number,
 	payload: {
 		deepseek_api_key?: string;
-		article_sync_mcp_url?: string;
+		article_sync_mcp_server_path?: string;
 		article_sync_mcp_token?: string;
 	},
 ) {

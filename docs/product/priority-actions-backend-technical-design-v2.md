@@ -381,8 +381,8 @@ POST /api/v1/workspaces/{id}/action-retests/{retest_id}/conclude
 ```text
 CONTENT_LLM_PROVIDER_ID=<provider id>
 DEEPSEEK_API_KEY=<secret>
-SYNC_ASSISTANT_BASE_URL=<local or controlled service url>
-SYNC_ASSISTANT_TOKEN=<secret>
+ARTICLE_SYNC_MCP_SERVER_PATH=/path/to/Wechatsync/packages/mcp-server/dist/index.js
+ARTICLE_SYNC_MCP_TOKEN=<secret>
 ```
 
 短期本地实施：
@@ -421,14 +421,14 @@ class SyncAssistantPort(Protocol):
 - 可选 `upload_image_file(filePath, platform?)`；
 - 可选 `extract_article()`。
 
-当前文章同步助手 2.0.9 的实际传输不是 HTTP `tools/call`，而是本地 WebSocket
-桥接，默认地址为 `ws://localhost:9527`。每次请求发送
-`{id, token, method, params}`，方法名使用扩展协议的驼峰形式：
-`listPlatforms`、`checkAuth`、`syncArticle`。`syncArticle` 的正文放在
-`params.article.markdown`/`content`，平台放在 `params.platforms`。适配器不得猜测
-REST 路径或 `Authorization` 头；若部署的是不同 MCP Server，必须先读取其实际 schema
-再增加 transport 实现。该 WebSocket 桥接没有草稿回读方法，`syncArticle` 返回只记为
-`mcp_request_accepted`，仍需通过真实浏览器草稿页完成 `draft_saved` 验收。
+当前官方 WechatSync MCP Server 的推荐传输是 MCP stdio；MCP Server 启动后监听
+`ws://localhost:9527`，由 Chrome 扩展主动连接该桥接。GEO 后端不直接连接扩展，
+而是启动已构建的 `packages/mcp-server/dist/index.js` 子进程，通过 stdio 发送
+`initialize` 和 `tools/call`。配置只保存 MCP Server 文件路径和
+`MCP_TOKEN`；扩展中的服务器地址仍填 `ws://localhost:9527`，Token 必须一致。
+官方工具名为 `list_platforms`、`check_auth`、`sync_article`，适配器依据官方
+schema 传参。`sync_article` 返回只记为 `mcp_request_accepted`，仍需通过真实浏览器
+草稿页完成 `draft_saved` 验收。
 
 实施前必须从当前实际 API/MCP schema 读取参数和响应定义，不在代码中猜测 REST 路径、Authorization 头或平台 ID。健康检查只证明服务/扩展可达，不证明某平台已登录或可保存草稿。
 

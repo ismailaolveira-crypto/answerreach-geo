@@ -33,7 +33,7 @@ class WorkspaceUpdate(BaseModel):
 class WorkspaceIntegrationRead(BaseModel):
     workspace_id: int
     deepseek_api_key_configured: bool = False
-    article_sync_mcp_url: str | None = None
+    article_sync_mcp_server_path: str | None = None
     article_sync_mcp_token_configured: bool = False
     deepseek_updated_at: datetime | None = None
     article_sync_mcp_updated_at: datetime | None = None
@@ -41,7 +41,7 @@ class WorkspaceIntegrationRead(BaseModel):
 
 class WorkspaceIntegrationUpdate(BaseModel):
     deepseek_api_key: str | None = Field(default=None, max_length=500)
-    article_sync_mcp_url: str | None = Field(default=None, max_length=1000)
+    article_sync_mcp_server_path: str | None = Field(default=None, max_length=1000)
     article_sync_mcp_token: str | None = Field(default=None, max_length=1000)
 
 
