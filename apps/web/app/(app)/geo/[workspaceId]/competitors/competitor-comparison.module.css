@@ -613,27 +613,31 @@
 }
 
 .overallDiagnosticList {
+  border-top: 1px solid #e6edf6;
   display: grid;
-  gap: 8px;
+  gap: 0;
   margin-top: 14px;
   padding-bottom: 4px;
 }
 
 .overallDiagnosticList > article {
   align-items: start;
-  background: #fbfcfe;
-  border: 1px solid #e1e8f2;
-  border-radius: 11px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid #e6edf6;
+  border-radius: 0;
   display: grid;
-  gap: 10px;
+  gap: 9px;
   grid-template-columns: 1fr;
-  padding: 11px;
+  padding: 16px 0;
 }
 
 .overallDiagnosticList > article > div {
+  border-left: 3px solid #4b82e1;
   display: grid;
   gap: 4px;
   min-width: 0;
+  padding-left: 11px;
 }
 
 .overallDiagnosticList > article b {
@@ -648,14 +652,60 @@
 }
 
 .overallDiagnosticList .evidenceDisclosure summary {
-  background: #edf4ff;
-  border-radius: 7px;
+  align-items: center;
+  background: transparent;
+  border-radius: 0;
   color: #2764ca;
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px 0 3px;
+  text-decoration: none;
+}
+
+.overallDiagnosticList .evidenceDisclosure summary::before {
+  background: #eaf2ff;
+  border-radius: 999px;
+  color: #3974d6;
+  content: "证据";
+  font-size: 8px;
+  font-weight: 800;
   padding: 6px 7px;
 }
 
 .overallDiagnosticList .evidenceDisclosure > div {
+  background: #f6f9fd;
+  border: 0;
+  border-left: 3px solid #8cb0ec;
+  border-radius: 0 12px 12px 0;
+  box-shadow: none;
+  margin: 9px 0 0;
+  max-height: 240px;
+  padding: 15px 16px;
   width: 100%;
+}
+
+.overallDiagnosticList .evidenceDisclosure > div > article {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.overallDiagnosticList .evidenceDisclosure > div > article > header {
+  justify-content: flex-start;
+}
+
+.overallDiagnosticList .evidenceDisclosure > div > article dl {
+  gap: 8px;
+  margin: 13px 0 10px;
+}
+
+.overallDiagnosticList .evidenceDisclosure > div > article dl div {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.overallDiagnosticList .evidenceDisclosure > div > article > a {
+  padding-bottom: 0;
 }
 
 .diagnosticItem {
