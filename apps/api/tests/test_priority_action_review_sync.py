@@ -15,6 +15,8 @@ from app.db.session import Base, get_db
 from app.main import create_app
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
+    GeoAgentArtifact,
+    GeoAgentEvent,
     GeoContentAsset,
     GeoAgentRun,
     GeoContentBrief,
@@ -186,6 +188,7 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert package.status_code == 200
     assert package.json()["pending_claim_count"] == 1
 
+
     blocked_review = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
         json={"verdict": "approved", "confirmed_claim_ids": [], "platform_keys": ["zhihu"]},
@@ -275,6 +278,48 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert library.json()[0]["saved_draft_count"] == 1
     assert library.json()[0]["draft_targets"][0]["draft_url"].startswith("https://www.zhihu.com/")
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
+
+
+def test_agent_progress_is_derived_from_persisted_events_without_local_paths(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add_all(
+            [
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=1, event_type="stage_started", stage="preparing_context", message="正在整理真实证据", detail={}),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=2, event_type="stage_started", stage="researching_platform", message="正在查阅平台规则", detail={}),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=3, event_type="stage_completed", stage="researching_brand", message="品牌事实已核对", detail={}),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=4, event_type="stage_completed", stage="adapting_platforms", message="平台稿已生成", detail={}),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=5, event_type="awaiting_human_review", stage="awaiting_review", message="等待人工审核", detail={}),
+                GeoAgentArtifact(
+                    workspace_id=1,
+                    agent_run_id=1,
+                    artifact_kind="structured_result",
+                    uri="/private/agent-runs/1/result.json",
+                    sha256="e" * 64,
+                    size_bytes=128,
+                    metadata_json={"private": "not-for-product-ui"},
+                ),
+            ]
+        )
+        db.commit()
+
+    response = review_client.get("/api/v1/workspaces/1/agent-runs/1/progress")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["progress_percent"] == 100
+    assert [stage["state"] for stage in payload["stages"]] == [
+        "done",
+        "done",
+        "done",
+        "done",
+        "waiting_human",
+    ]
+    assert payload["event_count"] == 5
+    assert payload["artifacts"][0]["artifact_kind"] == "structured_result"
+    assert "uri" not in payload["artifacts"][0]
+    assert "metadata_json" not in payload["artifacts"][0]
 
 
 def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(
@@ -507,6 +552,17 @@ def test_agent_timeout_is_persisted_as_a_recoverable_failure(review_client: Test
     with session_factory() as db:
         run = db.get(GeoAgentRun, 1)
         action = db.get(GeoOptimizationAction, 1)
+        db.add(
+            GeoAgentEvent(
+                workspace_id=1,
+                agent_run_id=1,
+                sequence=1,
+                event_type="awaiting_human_review",
+                stage="awaiting_review",
+                message="上一版已经进入人工审核",
+                detail={},
+            )
+        )
         run.status = "resuming"
         run.stage = "queued"
         action.stage = "generating"
@@ -523,3 +579,14 @@ def test_agent_timeout_is_persisted_as_a_recoverable_failure(review_client: Test
     events = review_client.get("/api/v1/workspaces/1/agent-runs/1/events")
     assert events.status_code == 200
     assert events.json()[-1]["event_type"] == "run_timed_out"
+
+    progress = review_client.get("/api/v1/workspaces/1/agent-runs/1/progress")
+    assert progress.status_code == 200
+    assert progress.json()["progress_percent"] == 10
+    assert [stage["state"] for stage in progress.json()["stages"]] == [
+        "done",
+        "failed",
+        "waiting",
+        "waiting",
+        "waiting",
+    ]

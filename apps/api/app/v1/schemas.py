@@ -1086,6 +1086,43 @@ class AgentArtifactRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AgentProgressStageRead(BaseModel):
+    key: Literal[
+        "preparing_context",
+        "researching_platform",
+        "researching_brand",
+        "adapting_platforms",
+        "awaiting_review",
+    ]
+    label: str
+    state: Literal["waiting", "running", "done", "waiting_human", "failed"]
+    message: str | None = None
+    event_sequence: int | None = None
+    updated_at: datetime | None = None
+
+
+class AgentProgressArtifactRead(BaseModel):
+    """Safe artifact metadata for the product UI; local file paths stay private."""
+
+    id: int
+    artifact_kind: str
+    sha256: str
+    size_bytes: int
+    created_at: datetime
+
+
+class AgentRunProgressRead(BaseModel):
+    run: AgentRunRead
+    stages: list[AgentProgressStageRead]
+    progress_percent: int = Field(ge=0, le=100)
+    elapsed_seconds: int = Field(ge=0)
+    timeout_seconds: int = Field(ge=60)
+    timeout_remaining_seconds: int | None = Field(default=None, ge=0)
+    event_count: int = Field(ge=0)
+    events: list[AgentEventRead] = Field(default_factory=list)
+    artifacts: list[AgentProgressArtifactRead] = Field(default_factory=list)
+
+
 class ContentBriefCreate(BaseModel):
     audience: str | None = Field(default=None, max_length=160)
     intent: str | None = Field(default=None, max_length=80)

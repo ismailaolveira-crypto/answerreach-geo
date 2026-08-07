@@ -8,7 +8,7 @@ import {
 	discoverCleanroomActionOpportunities,
 	getActionAgentRuns,
 	getCleanroomActionRetest,
-	getAgentRunEvents,
+	getAgentRunProgress,
 	getAgentRuntime,
 	getCleanroomContentReviewPackage,
 	getCleanroomDistributionRuns,
@@ -133,8 +133,8 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		"use server";
 		const runs = await getActionAgentRuns(workspaceId, actionId);
 		const latest = runs[0];
-		const events = latest ? await getAgentRunEvents(workspaceId, latest.id) : [];
-		return { runs, events };
+		const progress = latest ? await getAgentRunProgress(workspaceId, latest.id) : null;
+		return { runs, progress };
 	}
 
 	async function decideReview(

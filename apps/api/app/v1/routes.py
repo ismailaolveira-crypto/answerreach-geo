@@ -63,6 +63,7 @@ from app.v1.schemas import (
     ActionUpdate,
     AgentArtifactRead,
     AgentEventRead,
+    AgentRunProgressRead,
     AgentRevisionRequest,
     AgentRunCreate,
     AgentRunRead,
@@ -5159,6 +5160,120 @@ def _agent_run_or_404(db: Session, workspace_id: int, run_id: int) -> GeoAgentRu
     return run
 
 
+AGENT_PROGRESS_STAGES = (
+    ("preparing_context", "整理真实证据", 10),
+    ("researching_platform", "查阅平台规则", 20),
+    ("researching_brand", "核对品牌与素材", 20),
+    ("adapting_platforms", "生成母稿与平台稿", 35),
+    ("awaiting_review", "核对事实并等待审核", 15),
+)
+
+
+def _utc_datetime(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+
+
+def _build_agent_run_progress(db: Session, run: GeoAgentRun) -> dict:
+    events = list(
+        db.scalars(
+            select(GeoAgentEvent)
+            .where(GeoAgentEvent.agent_run_id == run.id)
+            .order_by(GeoAgentEvent.sequence)
+        )
+    )
+    attempt_boundary = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if event.event_type in {"run_queued", "resume_queued"}
+            or (event.event_type == "stage_started" and event.stage == "preparing_context")
+        ),
+        default=0,
+    )
+    attempt_events = events[attempt_boundary:]
+    artifacts = list(
+        db.scalars(
+            select(GeoAgentArtifact)
+            .where(GeoAgentArtifact.agent_run_id == run.id)
+            .order_by(GeoAgentArtifact.id)
+        )
+    )
+    stage_index = {key: index for index, (key, _label, _weight) in enumerate(AGENT_PROGRESS_STAGES)}
+    latest_by_stage = {
+        key: next((event for event in reversed(attempt_events) if event.stage == key), None)
+        for key in stage_index
+    }
+    observed_indices = [stage_index[event.stage] for event in attempt_events if event.stage in stage_index]
+    current_index = stage_index.get(run.stage)
+    if current_index is None and observed_indices:
+        current_index = max(observed_indices)
+
+    failure_status = run.status in {"cancelled", "failed", "blocked"}
+    active_status = run.status in ACTIVE_AGENT_RUN_STATUSES
+    stages = []
+    progress_percent = 0
+    for index, (key, label, weight) in enumerate(AGENT_PROGRESS_STAGES):
+        event = latest_by_stage[key]
+        state = "waiting"
+        if run.status == "awaiting_review":
+            state = "waiting_human" if key == "awaiting_review" else "done"
+            progress_percent += weight
+        elif failure_status and current_index is not None:
+            if index < current_index:
+                state = "done"
+                progress_percent += weight
+            elif index == current_index:
+                state = "failed"
+        elif active_status and current_index is not None:
+            if index < current_index:
+                state = "done"
+                progress_percent += weight
+            elif index == current_index:
+                if event is not None and event.event_type == "stage_completed":
+                    state = "done"
+                    progress_percent += weight
+                else:
+                    state = "running"
+        stages.append(
+            {
+                "key": key,
+                "label": label,
+                "state": state,
+                "message": event.message if event is not None else None,
+                "event_sequence": event.sequence if event is not None else None,
+                "updated_at": event.created_at if event is not None else None,
+            }
+        )
+
+    timeout_seconds = max(60, min(int(get_settings().agent_run_timeout_seconds), 3600))
+    started_at = run.started_at or run.created_at
+    finished_at = run.finished_at or datetime.now(timezone.utc)
+    elapsed_seconds = max(0, int((_utc_datetime(finished_at) - _utc_datetime(started_at)).total_seconds()))
+    timeout_remaining_seconds = None
+    if active_status and run.started_at is not None:
+        timeout_remaining_seconds = max(0, timeout_seconds - elapsed_seconds)
+    return {
+        "run": run,
+        "stages": stages,
+        "progress_percent": progress_percent,
+        "elapsed_seconds": elapsed_seconds,
+        "timeout_seconds": timeout_seconds,
+        "timeout_remaining_seconds": timeout_remaining_seconds,
+        "event_count": len(events),
+        "events": events,
+        "artifacts": [
+            {
+                "id": artifact.id,
+                "artifact_kind": artifact.artifact_kind,
+                "sha256": artifact.sha256,
+                "size_bytes": artifact.size_bytes,
+                "created_at": artifact.created_at,
+            }
+            for artifact in artifacts
+        ],
+    }
+
+
 @router.get(
     "/workspaces/{workspace_id}/agent-runs/{run_id}",
     response_model=AgentRunRead,
@@ -5171,6 +5286,21 @@ def read_agent_run(
 ):
     workspace_or_404(db, user, workspace_id)
     return _agent_run_or_404(db, workspace_id, run_id)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/progress",
+    response_model=AgentRunProgressRead,
+)
+def read_agent_run_progress(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = _agent_run_or_404(db, workspace_id, run_id)
+    return _build_agent_run_progress(db, run)
 
 
 @router.get(

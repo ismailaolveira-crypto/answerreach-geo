@@ -631,6 +631,35 @@ export type CleanroomAgentEvent = {
 	created_at: string;
 };
 
+export type CleanroomAgentProgressStage = {
+	key: "preparing_context" | "researching_platform" | "researching_brand" | "adapting_platforms" | "awaiting_review";
+	label: string;
+	state: "waiting" | "running" | "done" | "waiting_human" | "failed";
+	message?: string | null;
+	event_sequence?: number | null;
+	updated_at?: string | null;
+};
+
+export type CleanroomAgentProgressArtifact = {
+	id: number;
+	artifact_kind: string;
+	sha256: string;
+	size_bytes: number;
+	created_at: string;
+};
+
+export type CleanroomAgentRunProgress = {
+	run: CleanroomAgentRun;
+	stages: CleanroomAgentProgressStage[];
+	progress_percent: number;
+	elapsed_seconds: number;
+	timeout_seconds: number;
+	timeout_remaining_seconds?: number | null;
+	event_count: number;
+	events: CleanroomAgentEvent[];
+	artifacts: CleanroomAgentProgressArtifact[];
+};
+
 export type CleanroomActionOpportunityEvidence = {
 	id: number;
 	opportunity_id: number;
@@ -1335,6 +1364,10 @@ export function getActionAgentRuns(workspaceId: string | number, actionId: numbe
 
 export function getAgentRunEvents(workspaceId: string | number, runId: number, after = 0) {
 	return apiRequest<CleanroomAgentEvent[]>(`/workspaces/${workspaceId}/agent-runs/${runId}/events?after=${after}`);
+}
+
+export function getAgentRunProgress(workspaceId: string | number, runId: number) {
+	return apiRequest<CleanroomAgentRunProgress>(`/workspaces/${workspaceId}/agent-runs/${runId}/progress`);
 }
 
 export function interruptCleanroomAgentRun(workspaceId: string | number, runId: number) {
