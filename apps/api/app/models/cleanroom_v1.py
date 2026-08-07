@@ -685,6 +685,40 @@ class GeoContentAudit(CleanRoomTimestamp, Base):
     checks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class GeoWebsiteAudit(CleanRoomTimestamp, Base):
+    """Immutable capture of one workspace homepage citation-readiness check."""
+
+    __tablename__ = "geo_website_audits_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    requested_url: Mapped[str] = mapped_column(String(1500), nullable=False)
+    final_url: Mapped[str | None] = mapped_column(String(1500))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    status_code: Mapped[int | None] = mapped_column(Integer)
+    content_type: Mapped[str | None] = mapped_column(String(255))
+    title: Mapped[str | None] = mapped_column(String(1000))
+    meta_description: Mapped[str | None] = mapped_column(Text)
+    canonical_url: Mapped[str | None] = mapped_column(String(1500))
+    score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    audit_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    checks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    findings: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    response_headers: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    raw_html: Mapped[str | None] = mapped_column(Text)
+    raw_html_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    raw_html_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    discovery_documents: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    artifact_manifest: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    response_ms: Mapped[int | None] = mapped_column(Integer)
+    checked_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class GeoBrowserAccount(CleanRoomTimestamp, Base):
     """Credential-free pointer to one isolated browser profile.
 

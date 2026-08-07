@@ -15,6 +15,7 @@ import type {
 	CleanroomContentReviewPackage,
 	CleanroomDistributionRun,
 	CleanroomPlatformVariant,
+	WebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
 
@@ -25,6 +26,8 @@ type Props = {
 	initialScope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null };
 	actions: CleanroomAction[];
 	agentRuntime: AgentRuntime | null;
+	websiteUrl: string | null;
+	initialWebsiteAudit: WebsiteAudit | null;
 	initialAgentRuns: CleanroomAgentRun[];
 	initialReviewPackages: CleanroomContentReviewPackage[];
 	initialDistributionRuns: CleanroomDistributionRun[];
@@ -41,6 +44,7 @@ type Props = {
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
+	runWebsiteAudit: () => Promise<WebsiteAudit>;
 	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<void>;
 };
 
@@ -282,7 +286,18 @@ const agentProgressStateLabels = {
 	failed: "未完成",
 } as const;
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, discoverActions }: Props) {
+function formatWebsiteAuditTime(value: string) {
+	const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
+	return new Intl.DateTimeFormat("zh-CN", {
+		month: "numeric",
+		day: "numeric",
+		hour: "2-digit",
+		minute: "2-digit",
+		hour12: false,
+	}).format(new Date(normalized));
+}
+
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
 	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
@@ -316,8 +331,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [reviewNote, setReviewNote] = useState("");
 	const [reviewFeedback, setReviewFeedback] = useState("");
 	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "wechat"]);
+	const [websiteAudit, setWebsiteAudit] = useState(initialWebsiteAudit);
+	const [websiteAuditFeedback, setWebsiteAuditFeedback] = useState("");
 	const [isSaving, startSaving] = useTransition();
 	const [isScopePending, startScopeTransition] = useTransition();
+	const [isWebsiteAuditing, startWebsiteAuditTransition] = useTransition();
 
 	const selectedBatch = opportunityScope.batches.find((batch) => batch.id === selectedBatchId);
 	const models = opportunityScope.models.filter((model) => selectedBatch?.model_keys.includes(model.key));
@@ -337,6 +355,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		return run.status === "awaiting_review" && !reviewPackage?.approved_platform_keys.length;
 	}).length;
 	const retestReady = retests.filter((item) => item.status === "completed").length;
+	const websiteAuditBlocked = websiteAudit?.status === "blocked";
 	const stage = actionStage(selected?.existingAction);
 	const syncAction = selected?.existingAction ?? actions[0];
 	const currentRun = useMemo(() => agentRuns
@@ -426,6 +445,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
 	useEffect(() => setRetests(initialRetests), [initialRetests]);
+	useEffect(() => setWebsiteAudit(initialWebsiteAudit), [initialWebsiteAudit]);
 	useEffect(() => {
 		if (!reviewOpen && !syncOpen) return;
 		const previousOverflow = document.body.style.overflow;
@@ -554,6 +574,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				router.refresh();
 			} catch (error) {
 				setDiscoveryFeedback(error instanceof Error ? error.message : "无法刷新行动机会");
+			}
+		});
+	}
+
+	function refreshWebsiteAudit() {
+		setWebsiteAuditFeedback("");
+		startWebsiteAuditTransition(async () => {
+			try {
+				const result = await runWebsiteAudit();
+				setWebsiteAudit(result);
+				setWebsiteAuditFeedback(result.status === "ready"
+					? "检查完成：官网具备较完整的服务端可引用信息。"
+					: result.status === "blocked"
+						? "检查未完成，请根据阻塞原因处理后重试。"
+						: "检查完成：已找到需要优先补齐的官网可引用性问题。");
+			} catch (error) {
+				setWebsiteAuditFeedback(error instanceof Error ? error.message : "官网检查失败");
 			}
 		});
 	}
@@ -832,6 +869,29 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>草稿待确认</small><strong>{pendingActions}</strong></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
+		</section>
+
+		<section className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">
+			<header>
+				<div><small>真实问题发现 · 官网</small><h2 id="website-audit-title">官网可引用性</h2><p>{websiteUrl || "工作区尚未配置官网地址"}</p></div>
+				<div className="pa-site-audit-action">
+					{websiteAudit ? <span><b>{Math.round(websiteAudit.score)}</b><small>{isWebsiteAuditing ? "上次结果" : "/ 100"}</small></span> : <span className="is-empty"><b>—</b><small>尚未检查</small></span>}
+					<button type="button" onClick={refreshWebsiteAudit} disabled={isWebsiteAuditing || !websiteUrl}>{isWebsiteAuditing ? <><i />正在检查官网…</> : websiteAudit ? "重新检查" : "开始检查"}</button>
+				</div>
+			</header>
+			{isWebsiteAuditing ? <div className="pa-site-audit-wait" role="status" aria-live="polite"><i /><div><b>正在读取真实公开页面</b><span>依次检查首页原始 HTML、robots.txt 与 sitemap.xml；完成前不会显示绿色结果。</span></div></div> : websiteAudit ? <>
+				<div className="pa-site-audit-signals">
+					<div className={websiteAudit.checks.accessible?.passed ? "is-pass" : "is-fail"}><i>{websiteAudit.checks.accessible?.passed ? "✓" : "!"}</i><span><b>公网响应</b><small>{websiteAudit.status_code ? `HTTP ${websiteAudit.status_code}` : "未获得响应"}</small></span></div>
+					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.server_visible_content?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.server_visible_content?.passed ? "✓" : "!"}</i><span><b>服务端正文</b><small>{websiteAuditBlocked ? "首页未回读，正文未检查" : websiteAudit.checks.server_visible_content?.detail || "没有检查结果"}</small></span></div>
+					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.headings?.passed && websiteAudit.checks.structured_data?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.headings?.passed && websiteAudit.checks.structured_data?.passed ? "✓" : "!"}</i><span><b>页面结构</b><small>{websiteAuditBlocked ? "首页未回读，结构未检查" : [websiteAudit.checks.headings?.passed ? "标题层级" : null, websiteAudit.checks.structured_data?.passed ? "结构化数据" : null].filter(Boolean).join("、") || "缺少标题层级与结构化数据"}</small></span></div>
+					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.robots?.passed && websiteAudit.checks.sitemap?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.robots?.passed && websiteAudit.checks.sitemap?.passed ? "✓" : "!"}</i><span><b>发现文件</b><small>{websiteAuditBlocked ? "公网请求受阻，未完成检查" : <>{websiteAudit.checks.robots?.passed ? "robots 可读" : "robots 缺失"} · {websiteAudit.checks.sitemap?.passed ? "sitemap 可读" : "sitemap 缺失"}</>}</small></span></div>
+				</div>
+				<div className="pa-site-audit-result">
+					<div><span className={`is-${websiteAudit.status}`}>{websiteAudit.status === "ready" ? "可引用基础较完整" : websiteAudit.status === "blocked" ? "检查受阻" : "需要补齐"}</span><small>{formatWebsiteAuditTime(websiteAudit.checked_at)} · {websiteAudit.response_ms ?? 0} ms · 原始证据 {websiteAudit.raw_html_size} B</small></div>
+					{websiteAudit.findings.length ? <ul>{websiteAudit.findings.slice(0, 3).map((finding) => <li key={finding.code}><b>{finding.title}</b><span>{finding.recommendation}</span></li>)}</ul> : <p>本轮未发现高优先级官网可引用性问题。</p>}
+				</div>
+			</> : <div className="pa-site-audit-empty"><b>{websiteUrl ? "尚无官网检查记录" : "请先在设置中填写官网地址"}</b><span>{websiteUrl ? "检查会保存真实响应、内容哈希和明确的问题清单；结果不会计入模型出现率。" : "官网地址用于限定检查范围，系统不会接受任意目标地址。"}</span></div>}
+			<footer><span>{websiteAuditFeedback || "这里只评估公开页面是否便于抓取、理解与引用，不等于模型已经引用春秋元泉。"}</span>{websiteAudit?.raw_html_sha256 ? <code title={websiteAudit.raw_html_sha256}>证据 {websiteAudit.raw_html_sha256.slice(0, 12)}</code> : null}</footer>
 		</section>
 
 			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>当前范围没有达到门槛的机会</h2><p>{selectedBatch ? "这里只接受完整回答、真实搜索事件、来源 URL 和原始工件都齐全的证据。可以刷新当前范围，或返回决策地图发起新观测。" : "完成一次真实联网观测并归档完整证据后，系统才会识别行动机会。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || !selectedBatchId}>{isSaving ? "正在分析…" : "刷新当前范围"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>

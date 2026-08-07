@@ -878,6 +878,36 @@ class ContentAuditRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class WebsiteAuditRead(BaseModel):
+    id: int
+    workspace_id: int
+    requested_url: str
+    final_url: str | None = None
+    status: Literal["ready", "needs_work", "blocked"]
+    status_code: int | None = None
+    content_type: str | None = None
+    title: str | None = None
+    meta_description: str | None = None
+    canonical_url: str | None = None
+    score: float
+    audit_version: str
+    checks: dict = Field(default_factory=dict)
+    findings: list[dict] = Field(default_factory=list)
+    response_headers: dict = Field(default_factory=dict)
+    raw_html_sha256: str | None = None
+    raw_html_size: int = 0
+    artifact_manifest: list[dict] = Field(default_factory=list)
+    response_ms: int | None = None
+    checked_at: datetime
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WebsiteAuditOverviewRead(BaseModel):
+    website_url: str | None = None
+    latest: WebsiteAuditRead | None = None
+
+
 class ActionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     rationale: str = Field(min_length=1)

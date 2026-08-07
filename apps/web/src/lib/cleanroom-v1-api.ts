@@ -907,6 +907,59 @@ export type CleanroomContentAudit = {
 	checks: Record<string, boolean | number>;
 };
 
+export type WebsiteAuditCheck = {
+	label: string;
+	status: "passed" | "failed";
+	passed: boolean;
+	detail: string;
+	weight: number;
+};
+
+export type WebsiteAuditFinding = {
+	code: string;
+	severity: "high" | "medium" | "low";
+	title: string;
+	detail: string;
+	recommendation: string;
+};
+
+export type WebsiteAudit = {
+	id: number;
+	workspace_id: number;
+	requested_url: string;
+	final_url?: string | null;
+	status: "ready" | "needs_work" | "blocked";
+	status_code?: number | null;
+	content_type?: string | null;
+	title?: string | null;
+	meta_description?: string | null;
+	canonical_url?: string | null;
+	score: number;
+	audit_version: string;
+	checks: Record<string, WebsiteAuditCheck>;
+	findings: WebsiteAuditFinding[];
+	response_headers: Record<string, string>;
+	raw_html_sha256?: string | null;
+	raw_html_size: number;
+	artifact_manifest: Array<{
+		kind: "homepage" | "robots" | "sitemap";
+		url: string;
+		status_code?: number | null;
+		content_type?: string | null;
+		sha256?: string | null;
+		size_bytes: number;
+		truncated: boolean;
+	}>;
+	response_ms?: number | null;
+	checked_at: string;
+	created_at: string;
+};
+
+export type WebsiteAuditOverview = {
+	website_url?: string | null;
+	latest?: WebsiteAudit | null;
+};
+
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 	const token = (await cookies()).get(SESSION_COOKIE)?.value;
 	const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
@@ -1539,6 +1592,18 @@ export function getCleanroomContentAudits(workspaceId: string | number) {
 	return apiRequest<CleanroomContentAudit[]>(
 		`/workspaces/${workspaceId}/content-audits`,
 	);
+}
+
+export function getLatestWebsiteAudit(workspaceId: string | number) {
+	return apiRequest<WebsiteAuditOverview>(
+		`/workspaces/${workspaceId}/website-audits/latest`,
+	);
+}
+
+export function createWebsiteAudit(workspaceId: string | number) {
+	return apiRequest<WebsiteAudit>(`/workspaces/${workspaceId}/website-audits`, {
+		method: "POST",
+	});
 }
 
 export function createCleanroomAction(

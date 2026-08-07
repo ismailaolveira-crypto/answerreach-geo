@@ -138,3 +138,11 @@ pnpm run verify
 - 行动机会发现已移到后端持久化服务。页面通过真实完成批次、模型和问题筛选；只有完整回答、真实搜索事件、来源 URL 和原始工件同时存在的观测才具备行动资格。切换范围时旧机会不继续显示，已选行动不会被后续刷新误标为过期。
 - 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读、退回意见传入、v2 生成、工作区容量、排队取消竞态、超时落库、进度聚合、私有路径隔离和禁止冒充发布；`tests/test_codex_agent_runtime.py`覆盖 watchdog 真实中断与正常完成后解除超时。
 - 回归测试：`tests/test_priority_action_retest.py`覆盖公开 URL 归档、可比复测、结论和证据回链；`tests/test_action_opportunity_scope.py`覆盖真实证据门槛、模型范围与已选机会保留。
+
+## 2026-08-08 · 官网可引用性审计
+
+- 优先行动页已增加“官网可引用性”真实检查，明确区分 HTTP 可访问与原始 HTML 可直接读取，不会把 JavaScript 外壳当作已有产品正文。
+- `POST /api/v1/workspaces/{workspaceId}/website-audits` 只检查工作区已配置的官网；限制 `http/https` 与 80/443 端口，每次重定向都重新校验公网 IP，拒绝私有网络目标。
+- 每次检查持久化首页、`robots.txt` 与 `sitemap.xml` 的原始响应、SHA-256、大小和截断状态；对外 API 只返回工件清单和哈希，不返回原始文档。
+- 存储表为 `geo_website_audits_v1`，迁移版本 `20260808_0022`；最新结果通过 `GET /api/v1/workspaces/{workspaceId}/website-audits/latest` 回读。
+- 页面的等待态不显示虚假百分比，检查完成前不显示绿色结果；结果仅表示页面抓取与引用基础，不计入模型出现率。

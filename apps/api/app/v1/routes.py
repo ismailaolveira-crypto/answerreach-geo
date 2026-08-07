@@ -48,6 +48,7 @@ from app.models.cleanroom_v1 import (
     GeoSamplingSample,
     GeoScorecard,
     GeoWorkspace,
+    GeoWebsiteAudit,
 )
 from app.models.user import User
 from app.schemas.search import QueueJobRead
@@ -131,6 +132,8 @@ from app.v1.schemas import (
     WorkspaceIntegrationUpdate,
     WorkspaceRead,
     WorkspaceUpdate,
+    WebsiteAuditOverviewRead,
+    WebsiteAuditRead,
     YaoDatasetImport,
     YaoDeepSeekDatasetImport,
     YaoDoubaoDatasetImport,
@@ -148,6 +151,7 @@ from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities, valid_action_evidence
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
+from app.v1.website_audit import WebsiteAuditTargetError, audit_website
 from app.services.article_sync_adapter import get_article_sync_adapter
 from app.services.codex_agent_runtime import LocalCodexRuntime, diagnose_local_codex
 from app.db.session import SessionLocal
@@ -6063,6 +6067,84 @@ def create_content_audit(
         checks=result["checks"],
     )
     db.add(audit)
+    db.commit()
+    db.refresh(audit)
+    return audit
+
+
+@router.get(
+    "/workspaces/{workspace_id}/website-audits/latest",
+    response_model=WebsiteAuditOverviewRead,
+)
+def get_latest_website_audit(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    workspace = workspace_or_404(db, user, workspace_id)
+    latest = db.scalar(
+        select(GeoWebsiteAudit)
+        .where(GeoWebsiteAudit.workspace_id == workspace_id)
+        .order_by(GeoWebsiteAudit.checked_at.desc(), GeoWebsiteAudit.id.desc())
+    )
+    return {"website_url": workspace.website_url, "latest": latest}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/website-audits",
+    response_model=WebsiteAuditRead,
+    status_code=201,
+)
+def create_website_audit(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace = workspace_or_404(db, user, workspace_id)
+    if not workspace.website_url:
+        raise HTTPException(status_code=409, detail="Workspace website URL is not configured")
+    try:
+        result = audit_website(workspace.website_url, brand_name=workspace.brand_name)
+    except WebsiteAuditTargetError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    audit = GeoWebsiteAudit(
+        workspace_id=workspace_id,
+        requested_by_user_id=user.id,
+        **result,
+    )
+    db.add(audit)
+    db.flush()
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=None,
+            event_type="website_citation_audit_completed",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "website_audit_id": audit.id,
+                "status": audit.status,
+                "score": audit.score,
+                "requested_url": audit.requested_url,
+                "raw_html_sha256": audit.raw_html_sha256,
+                "finding_codes": [item.get("code") for item in audit.findings],
+            },
+        )
+    )
+    record_audit_log(
+        db,
+        user=user,
+        action="workspace.website_citation_audit.create",
+        resource_type="geo_website_audit",
+        resource_id=audit.id,
+        detail={
+            "workspace_id": workspace_id,
+            "status": audit.status,
+            "score": audit.score,
+            "raw_html_sha256": audit.raw_html_sha256,
+        },
+    )
     db.commit()
     db.refresh(audit)
     return audit
