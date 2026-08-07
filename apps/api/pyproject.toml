@@ -1,0 +1,26 @@
+[project]
+name = "geo-platform-api"
+version = "0.1.0"
+description = "FastAPI backend for the GEO optimization platform."
+requires-python = ">=3.11"
+dependencies = [
+  "alembic>=1.13.0",
+  "email-validator>=2.3.0",
+  "fastapi>=0.115.0",
+  "httpx[socks]>=0.27.0",
+  "psycopg[binary]>=3.2.0",
+  "pydantic-settings>=2.6.0",
+  "reportlab>=5.0.0",
+  "sqlalchemy>=2.0.0",
+  "uvicorn[standard]>=0.32.0",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.8.0"
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

@@ -1,0 +1,6 @@
+packages:
+  - "apps/web"
+onlyBuiltDependencies:
+  - sharp
+allowBuilds:
+  sharp: true

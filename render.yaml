@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: geo-platform-api
+    env: docker
+    plan: free
+    dockerfilePath: ./apps/api/Dockerfile
+    autoDeploy: true
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: AUTO_CREATE_TABLES
+        value: "true"
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: ARK_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: KIMI_API_KEY
+        sync: false
+      - key: QWEN_API_KEY
+        sync: false

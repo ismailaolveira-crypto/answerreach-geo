@@ -1,0 +1,852 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class WorkspaceCreate(BaseModel):
+    company_id: int
+    slug: str = Field(pattern=r"^[a-z0-9-]{3,100}$")
+    brand_name: str = Field(min_length=1, max_length=255)
+    brand_aliases: list[str] = Field(default_factory=list)
+    website_url: str | None = None
+
+
+class WorkspaceRead(WorkspaceCreate):
+    id: int
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkspaceUpdate(BaseModel):
+    """The small, product-facing subset of workspace identity settings.
+
+    These values are intentionally not account/profile settings: they are the
+    identifiers used when archived answers are classified for this workspace.
+    """
+
+    brand_name: str = Field(min_length=1, max_length=255)
+    brand_aliases: list[str] = Field(default_factory=list, max_length=20)
+    website_url: str | None = Field(default=None, max_length=500)
+
+
+class QuestionPlanCreate(BaseModel):
+    question_text: str = Field(min_length=4, max_length=500)
+    journey_stage: Literal["awareness", "consideration", "decision", "retention"] = "consideration"
+    role: Literal["ciso", "technical_lead", "procurement"] = "technical_lead"
+    topic_tags: list[str] = Field(default_factory=list, max_length=8)
+    importance: int = Field(default=3, ge=1, le=5)
+    is_brand_query: bool = False
+    source_type: str = Field(default="manual", min_length=1, max_length=50)
+    source_evidence: dict = Field(default_factory=dict)
+    source_reason: str | None = Field(default=None, max_length=2000)
+    source_at: datetime | None = None
+    template_variables: list[str] = Field(default_factory=list, max_length=8)
+
+
+class QuestionPlanUpdate(BaseModel):
+    question_text: str = Field(min_length=4, max_length=500)
+    journey_stage: Literal["awareness", "consideration", "decision", "retention"] | None = None
+    role: Literal["ciso", "technical_lead", "procurement"] | None = None
+    topic_tags: list[str] | None = Field(default=None, max_length=8)
+    importance: int | None = Field(default=None, ge=1, le=5)
+    template_variables: list[str] | None = Field(default=None, max_length=8)
+
+
+class QuestionPlanRead(QuestionPlanCreate):
+    id: int
+    workspace_id: int
+    active: bool
+    status: str = "active"
+    version: int = 1
+    cluster_id: str | None = None
+    similar_question_id: int | None = None
+    similarity: float | None = None
+    approved_by: int | None = None
+    approved_at: datetime | None = None
+    rejected_reason: str | None = None
+    source_at: datetime | None = None
+    prompt_version: str = "v1"
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def fill_legacy_defaults(cls, value):
+        if isinstance(value, dict):
+            data = dict(value)
+        else:
+            data = {name: getattr(value, name, None) for name in cls.model_fields}
+        defaults = {
+            "role": "technical_lead",
+            "topic_tags": [],
+            "source_type": "manual",
+            "source_evidence": {},
+            "template_variables": [],
+            "status": "active",
+            "version": 1,
+        }
+        for name, default in defaults.items():
+            if data.get(name) is None:
+                data[name] = default
+        return data
+
+
+class QuestionPlanAction(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class QuestionPlanMerge(BaseModel):
+    target_question_id: int = Field(ge=1)
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class QuestionReviewRead(BaseModel):
+    id: int
+    workspace_id: int
+    question_plan_id: int
+    actor_user_id: int | None
+    action: str
+    from_status: str | None
+    to_status: str | None
+    note: str | None
+    snapshot: dict
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionLibraryRead(BaseModel):
+    workspace: WorkspaceRead
+    questions: list[QuestionPlanRead]
+    counts: dict[str, int]
+    filters: dict[str, str | None]
+    stages: list[str]
+    roles: list[str]
+    topics: list[str]
+
+
+class YaoSourceItem(BaseModel):
+    number: int | None = None
+    source: str | None = None
+    domain: str | None = None
+    title: str | None = None
+    date: str | None = None
+    url: str | None = None
+    summary: str | None = None
+
+
+class YaoSampleImport(BaseModel):
+    sample_id: str
+    question: str
+    repeat_index: int = Field(ge=1)
+    ok: bool
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    raw_artifact_uri: str | None = None
+    screenshot_uri: str | None = None
+    sampling_environment: dict = Field(default_factory=dict)
+    answer_text: str = ""
+    references: list[YaoSourceItem] = Field(default_factory=list)
+    brand_status: Literal[
+        "absent", "mentioned", "shortlisted", "recommended", "cited", "negative"
+    ] = "absent"
+    brand_position: int | None = Field(default=None, ge=1)
+    competitor_positions: list[dict] = Field(default_factory=list)
+
+
+class YaoDatasetImport(BaseModel):
+    platform: Literal["deepseek", "doubao", "kimi", "qianwen", "yuanbao"]
+    sample_mode: Literal["browser_assisted", "authorized_api", "manual_import"]
+    evidence_level: Literal["auditable", "partial"]
+    prompt_version: str = "v1"
+    browser_account_id: int | None = Field(default=None, ge=1)
+    lease_token: str | None = Field(default=None, min_length=20, max_length=300)
+    samples: list[YaoSampleImport] = Field(min_length=1)
+
+
+class YaoDeepSeekDatasetImport(BaseModel):
+    """Native stage-1 `deepseek-crawl.json` envelope from yao-deepseek-crawler."""
+
+    dataset: dict
+    artifact_base_uri: str | None = None
+    prompt_version: str = "v1"
+    target_run_id: int | None = Field(
+        default=None,
+        description="Attach samples to a previously created standard observation run instead of creating a standalone import run.",
+    )
+    browser_account_id: int | None = Field(default=None, ge=1)
+    lease_token: str | None = Field(default=None, min_length=20, max_length=300)
+
+
+class YaoDoubaoDatasetImport(YaoDeepSeekDatasetImport):
+    """Native stage-1 `doubao-crawl.json` envelope from yao-doubao-crawler."""
+
+
+class EvidenceRead(BaseModel):
+    id: int
+    workspace_id: int
+    run_id: int
+    question_plan_id: int
+    model_key: str
+    model_label: str
+    prompt_version: str
+    sample_mode: str
+    evidence_level: str
+    collection_method: str
+    is_real_provider_evidence: bool
+    brand_status: str
+    brand_position: int | None
+    competitor_positions: list[dict] = Field(default_factory=list)
+    answer_text: str
+    source_items: list[dict]
+    sampling_environment: dict
+    raw_artifact_uri: str | None
+    screenshot_uri: str | None
+    captured_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class QuestionAnalysisMetricRead(BaseModel):
+    answer_count: int
+    mention_count: int
+    mention_rate: float
+    candidate_count: int
+    recommendation_count: int
+    recommendation_rate: float
+    cited_count: int
+    brand_citation_rate: float
+    answers_with_sources: int
+    source_rate: float
+    average_position: float | None
+    position_observation_count: int
+
+
+class QuestionAnalysisModelRead(QuestionAnalysisMetricRead):
+    key: str
+    label: str
+    latest_captured_at: datetime | None = None
+    evidence_ids: list[int] = Field(default_factory=list)
+
+
+class QuestionAnalysisCompetitorRead(BaseModel):
+    key: str
+    name: str
+    aliases: list[str] = Field(default_factory=list)
+    appearances: int
+    appearance_rate: float
+    candidate_count: int
+    recommendation_count: int
+    average_position: float | None
+    top3_count: int
+    top3_rate: float
+    wins_over_brand: int
+    comparable_answers: int
+    evidence_ids: list[int] = Field(default_factory=list)
+    is_baseline: bool = False
+
+
+class QuestionAnalysisSourceRead(BaseModel):
+    key: str
+    domain: str
+    url: str
+    title: str
+    appearance_count: int
+    model_count: int
+    favored_models: list[dict] = Field(default_factory=list)
+    evidence_ids: list[int] = Field(default_factory=list)
+
+
+class QuestionAnalysisEvidencePreviewRead(BaseModel):
+    id: int
+    run_id: int
+    model_key: str
+    model_label: str
+    brand_status: str
+    brand_position: int | None
+    answer_preview: str
+    source_count: int
+    captured_at: datetime
+
+
+class QuestionAnalysisPeriodRead(QuestionAnalysisMetricRead):
+    label: str
+
+
+class QuestionAnalysisRead(BaseModel):
+    question: QuestionPlanRead
+    scope: dict
+    summary: QuestionAnalysisMetricRead
+    comparison: dict
+    models: list[QuestionAnalysisModelRead] = Field(default_factory=list)
+    competitors: list[QuestionAnalysisCompetitorRead] = Field(default_factory=list)
+    sources: list[QuestionAnalysisSourceRead] = Field(default_factory=list)
+    trend: list[QuestionAnalysisPeriodRead] = Field(default_factory=list)
+    evidence: list[QuestionAnalysisEvidencePreviewRead] = Field(default_factory=list)
+    methodology: dict[str, str] = Field(default_factory=dict)
+
+
+class ScorecardRead(BaseModel):
+    id: int
+    workspace_id: int
+    run_id: int
+    scoring_version: str
+    input_fingerprint: str
+    metrics: dict
+    explanation: dict
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DecisionMapCell(BaseModel):
+    question_plan_id: int
+    model_key: str
+    model_label: str
+    evidence: EvidenceRead | None = None
+
+
+class DecisionMapRead(BaseModel):
+    workspace: WorkspaceRead
+    questions: list[QuestionPlanRead]
+    scorecard: ScorecardRead | None = None
+    models: list[dict]
+    cells: list[DecisionMapCell]
+    # These are calculated from the currently selected period/model/scope,
+    # rather than copied from the last single-sample scorecard.
+    metrics: dict = Field(default_factory=dict)
+    metric_scope: dict = Field(default_factory=dict)
+    sample_count: int = 0
+
+
+class SourceMapBreakdown(BaseModel):
+    key: str | None = None
+    id: int | None = None
+    label: str | None = None
+    text: str | None = None
+    citation_count: int
+    answer_count: int
+
+
+class SourceMapItem(BaseModel):
+    key: str
+    label: str
+    canonical_url: str | None = None
+    title: str | None = None
+    citation_count: int
+    answer_count: int
+    model_count: int
+    brand_absent_answer_count: int
+    brand_absent_answer_ratio: float
+    evidence_ids: list[int]
+    evidence_total: int
+    evidence_truncated: bool
+    models: list[SourceMapBreakdown]
+    questions: list[SourceMapBreakdown]
+    reason: str | None = None
+
+
+class SourceMapSummary(BaseModel):
+    answer_count: int
+    answers_with_sources: int
+    citation_count: int
+    unique_domain_count: int
+    unique_page_count: int
+    brand_absent_answer_count: int
+    brand_absent_answer_ratio: float
+    ignored_source_count: int
+    duplicate_source_count: int
+    excluded_non_real_answer_count: int
+
+
+class SourceMapRead(BaseModel):
+    workspace: WorkspaceRead
+    scope: dict
+    summary: SourceMapSummary
+    available_models: list[dict]
+    available_questions: list[QuestionPlanRead]
+    domains: list[SourceMapItem]
+    pages: list[SourceMapItem]
+    opportunities: list[SourceMapItem]
+    interpretation_notice: str
+
+
+class CompetitorEvidenceSnippet(BaseModel):
+    evidence_id: int
+    question_plan_id: int
+    question: str
+    model_key: str
+    model_label: str
+    brand_key: str
+    brand_name: str
+    matched_brand_keys: list[str]
+    matched_aliases: list[str]
+    match_count: int
+    status: Literal["mentioned", "shortlisted", "recommended", "negative"]
+    appearance_order: int
+    explicit_list_position: int | None = None
+    explicit_rank: int | None = None
+    baseline_explicit_rank: int | None = None
+    comparison_result: Literal["win", "comparable", "not_comparable"]
+    win_reason_type: Literal["explicit_rank_ahead", "selected_baseline_absent"] | None = None
+    context_snippet: str
+    captured_at: datetime
+
+
+class CompetitorBrandStat(BaseModel):
+    key: str
+    canonical_name: str
+    aliases: list[str]
+    is_baseline: bool
+    hit_answer_count: int
+    mention_rate: float
+    question_count: int
+    model_count: int
+    candidate_count: int
+    recommendation_count: int
+    negative_count: int
+    average_first_appearance_order: float | None = None
+    order_observation_count: int
+    wins_over_baseline: int
+    comparable_answers: int
+    top3_count: int
+    top3_rate: float
+    explicit_average_position: float | None = None
+    explicit_rank_observation_count: int
+    win_reason_counts: dict[str, int]
+    win_evidence: list[CompetitorEvidenceSnippet]
+    evidence_total: int
+    evidence: list[CompetitorEvidenceSnippet]
+
+
+class CompetitorBreakdown(BaseModel):
+    key: str | None = None
+    id: int | None = None
+    label: str
+    answer_count: int
+    brands: list[CompetitorBrandStat]
+
+
+class CompetitorComparisonSummary(BaseModel):
+    answer_count: int
+    tracked_brand_count: int
+    answers_with_tracked_brand: int
+    excluded_non_real_answer_count: int
+    comparable_answer_count: int
+    answers_where_competitor_wins: int
+
+
+class CompetitorActionDiagnostic(BaseModel):
+    competitor_key: str
+    competitor_name: str
+    model_key: str
+    model_label: str
+    question_plan_id: int
+    question: str
+    competitor_hit_count: int
+    baseline_hit_count: int
+    mention_gap: int
+    wins_over_baseline: int
+    comparable_answers: int
+    reason_type: Literal["explicit_rank_ahead", "selected_baseline_absent"]
+    reason_label: str
+    evidence_count: int
+    evidence_ids: list[int]
+    evidence: list[CompetitorEvidenceSnippet]
+    suggestion: str
+    suggestion_type: Literal[
+        "fill_citable_content_then_retest",
+        "strengthen_comparison_evidence_then_retest",
+    ]
+
+
+class CompetitorComparisonRead(BaseModel):
+    workspace: WorkspaceRead
+    scope: dict
+    summary: CompetitorComparisonSummary
+    brands: list[CompetitorBrandStat]
+    by_model: list[CompetitorBreakdown]
+    by_question: list[CompetitorBreakdown]
+    action_diagnostics: list[CompetitorActionDiagnostic]
+    available_models: list[dict]
+    available_questions: list[QuestionPlanRead]
+    matching_rule_version: str
+    methodology: dict[str, str]
+
+
+class ObservationRunRead(BaseModel):
+    id: int
+    workspace_id: int
+    adapter_key: str
+    status: str
+    request_context: dict
+    started_at: datetime | None
+    completed_at: datetime | None
+    failure_reason: str | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StandardObservationRequest(BaseModel):
+    """The intentionally small public input for the normal decision-map CTA."""
+
+    repeat_count: int = Field(default=3, ge=1, le=5)
+
+
+class StandardObservationResponse(BaseModel):
+    run: ObservationRunRead
+    message: str
+    providers: list[dict]
+    question_count: int
+
+
+class OfficialApiObservationRequest(BaseModel):
+    """Run one real provider question and archive its search evidence."""
+
+    question_plan_id: int = Field(ge=1)
+    provider_id: int | None = Field(default=None, ge=1)
+    repeat_index: int = Field(default=1, ge=1, le=5)
+    repeat_count: int = Field(default=1, ge=1, le=5)
+    observation_group_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,80}$")
+
+    @model_validator(mode="after")
+    def validate_repeat_window(self):
+        if self.repeat_index > self.repeat_count:
+            raise ValueError("repeat_index cannot exceed repeat_count")
+        return self
+
+
+class OfficialApiObservationResponse(BaseModel):
+    run: ObservationRunRead
+    evidence: EvidenceRead
+    scorecard: ScorecardRead
+    message: str
+
+
+class QueuedOfficialApiObservationResponse(BaseModel):
+    job_id: int
+    status: Literal["pending", "running"]
+    message: str
+
+
+class OfficialApiObservationJobStatus(BaseModel):
+    job_id: int
+    status: Literal["pending", "running", "success", "failed"]
+    run_id: int | None = None
+    evidence_id: int | None = None
+    error_message: str | None = None
+
+
+class OfficialApiObservationBatchCreate(BaseModel):
+    provider_ids: list[int] = Field(min_length=1, max_length=5)
+    question_plan_ids: list[int] = Field(min_length=1, max_length=5)
+    repeat_count: int = Field(default=1, ge=1, le=5)
+
+    @model_validator(mode="after")
+    def validate_unique_matrix(self):
+        if len(set(self.provider_ids)) != len(self.provider_ids):
+            raise ValueError("provider_ids must be unique")
+        if len(set(self.question_plan_ids)) != len(self.question_plan_ids):
+            raise ValueError("question_plan_ids must be unique")
+        return self
+
+
+class OfficialApiObservationBatchGroup(BaseModel):
+    id: int
+    key: str
+    label: str
+    total: int
+    pending: int
+    running: int
+    succeeded: int
+    failed: int
+
+
+class OfficialApiObservationBatchSummary(BaseModel):
+    batch_id: int
+    status: Literal["pending", "running", "success", "partial", "failed"]
+    provider_count: int
+    question_count: int
+    repeat_count: int
+    total: int
+    pending: int
+    running: int
+    succeeded: int
+    failed: int
+    progress_percent: int
+    status_percentages: dict[str, int] = Field(default_factory=dict)
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class OfficialApiObservationTaskRead(BaseModel):
+    job_id: int
+    provider_id: int
+    provider_key: str
+    provider_label: str
+    question_plan_id: int
+    question_label: str
+    repeat_index: int
+    status: Literal["pending", "running", "success", "failed"]
+    evidence_id: int | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_seconds: int | None = None
+
+
+class PaginationRead(BaseModel):
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+
+
+class OfficialApiObservationBatchRead(OfficialApiObservationBatchSummary):
+    provider_groups: list[OfficialApiObservationBatchGroup]
+    question_groups: list[OfficialApiObservationBatchGroup]
+    evidence_ids: list[int] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+    tasks: list[OfficialApiObservationTaskRead] = Field(default_factory=list)
+    task_pagination: PaginationRead
+
+
+class OfficialApiObservationBatchListRead(BaseModel):
+    items: list[OfficialApiObservationBatchSummary]
+    pagination: PaginationRead
+
+
+class ObservationLedgerTaskRead(BaseModel):
+    task_id: int
+    batch_id: int
+    source_type: str
+    batch_status: str
+    task_status: str
+    provider_id: int | None = None
+    provider_key: str
+    provider_label: str
+    model_key: str
+    model_label: str
+    question_plan_id: int
+    question_text: str
+    repeat_index: int
+    repeat_count: int
+    run_id: int | None = None
+    evidence_id: int | None = None
+    queue_job_id: int | None = None
+    attempt_count: int
+    error_code: str | None = None
+    error_detail: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+
+
+class ObservationLedgerListRead(BaseModel):
+    items: list[ObservationLedgerTaskRead]
+    pagination: PaginationRead
+
+
+class BrowserAccountCreate(BaseModel):
+    alias: str = Field(min_length=2, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    ego_task_space_id: int | None = Field(default=None, ge=1)
+    browser_profile_alias: str | None = Field(
+        default=None, min_length=2, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    cohort: Literal["clean_baseline", "real_user"] = "clean_baseline"
+
+
+class BrowserAccountUpdate(BaseModel):
+    status: Literal["onboarding", "ready", "reauth_required", "disabled"]
+    health_note: str | None = Field(default=None, max_length=500)
+    cohort: Literal["clean_baseline", "real_user"] | None = None
+    browser_profile_alias: str | None = Field(
+        default=None, min_length=2, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$"
+    )
+    session_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$"
+    )
+
+
+class BrowserAccountRead(BaseModel):
+    id: int
+    workspace_id: int
+    provider_key: Literal["deepseek"]
+    alias: str
+    ego_task_space_id: int | None
+    browser_profile_alias: str | None
+    cohort: str
+    status: str
+    isolation_verified: bool = False
+    isolation_verified_at: datetime | None
+    health_note: str | None
+    last_checked_at: datetime | None
+    last_used_at: datetime | None
+    cooldown_until: datetime | None
+    consecutive_failures: int
+    lease_worker_id: str | None
+    lease_run_id: int | None
+    lease_expires_at: datetime | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BrowserAccountLeaseRequest(BaseModel):
+    worker_id: str = Field(min_length=2, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    run_id: int | None = Field(default=None, ge=1)
+    lease_seconds: int = Field(default=600, ge=60, le=1800)
+
+
+class BrowserAccountLeaseRead(BaseModel):
+    account: BrowserAccountRead
+    lease_token: str
+
+
+class BrowserAccountReleaseRequest(BaseModel):
+    lease_token: str = Field(min_length=20, max_length=300)
+    outcome: Literal["success", "rate_limited", "auth_expired", "error"]
+    health_note: str | None = Field(default=None, max_length=500)
+    cooldown_seconds: int | None = Field(default=None, ge=60, le=86400)
+
+
+class SamplingBatchCreate(BaseModel):
+    account_count: Literal[2] = 2
+    question_count: Literal[3] = 3
+    repeat_count: Literal[3] = 3
+
+
+class SamplingSampleRead(BaseModel):
+    id: int
+    batch_id: int
+    browser_account_id: int
+    question_plan_id: int
+    repeat_index: int
+    status: str
+    attempt_count: int
+    evidence_id: int | None
+    conversation_url: str | None
+    error_code: str | None
+    error_detail: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    conversation_deleted_at: datetime | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SamplingBatchRead(BaseModel):
+    id: int
+    workspace_id: int
+    run_id: int
+    provider_key: str
+    status: str
+    account_count: int
+    question_count: int
+    repeat_count: int
+    total_samples: int
+    completed_samples: int
+    failed_samples: int
+    configuration: dict
+    current_message: str | None
+    failure_reason: str | None
+    started_at: datetime | None
+    completed_at: datetime | None
+    samples: list[SamplingSampleRead] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SamplingWorkerClaimRequest(BaseModel):
+    worker_id: str = Field(min_length=2, max_length=120, pattern=r"^[A-Za-z0-9_.:-]+$")
+    lease_seconds: int = Field(default=900, ge=60, le=1800)
+
+
+class SamplingWorkerClaimRead(BaseModel):
+    sample_id: int
+    batch_id: int
+    run_id: int
+    account_id: int
+    account_alias: str
+    browser_profile_alias: str
+    cohort: str
+    brand_name: str
+    brand_aliases: list[str]
+    question_plan_id: int
+    question: str
+    repeat_index: int
+    lease_token: str
+
+
+class SamplingWorkerComplete(BaseModel):
+    lease_token: str = Field(min_length=20, max_length=300)
+    answer_text: str = Field(min_length=1)
+    references: list[YaoSourceItem] = Field(default_factory=list)
+    brand_status: Literal[
+        "absent", "mentioned", "shortlisted", "recommended", "cited", "negative"
+    ] = "absent"
+    brand_position: int | None = Field(default=None, ge=1)
+    competitor_positions: list[dict] = Field(default_factory=list)
+    conversation_url: str = Field(min_length=10, max_length=1500)
+    raw_artifact_uri: str = Field(min_length=5, max_length=1500)
+    screenshot_uri: str = Field(min_length=5, max_length=1500)
+    captured_at: datetime
+    conversation_deleted_at: datetime
+    sampling_environment: dict = Field(default_factory=dict)
+
+
+class SamplingWorkerFail(BaseModel):
+    lease_token: str = Field(min_length=20, max_length=300)
+    error_code: str = Field(min_length=2, max_length=80)
+    error_detail: str = Field(min_length=2, max_length=2000)
+    outcome: Literal["retryable", "rate_limited", "auth_expired", "fatal"] = "retryable"
+
+
+class ContentAuditCreate(BaseModel):
+    title: str = ""
+    body: str = Field(min_length=1)
+    source_urls: list[str] = Field(default_factory=list)
+    target_url: str | None = None
+
+
+class ContentAuditRead(BaseModel):
+    id: int
+    workspace_id: int
+    target_url: str | None
+    content_fingerprint: str
+    audit_version: str
+    score: float
+    checks: dict
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ActionCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    rationale: str = Field(min_length=1)
+    hypothesis: str | None = None
+    priority: Literal["high", "medium", "low"] = "medium"
+    question_plan_id: int | None = None
+    source_evidence_id: int | None = None
+
+
+class ActionUpdate(BaseModel):
+    status: Literal["proposed", "in_progress", "verified", "closed"] | None = None
+
+
+class ActionRead(ActionCreate):
+    id: int
+    workspace_id: int
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReobservationCreate(BaseModel):
+    run_id: int
+    evidence_id: int
+    conclusion: str = Field(min_length=1)
+    measured_delta: dict = Field(default_factory=dict)
+
+
+class BrandFactCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    statement: str = Field(min_length=1)
+    source_url: str | None = None
+
+
+class BrandFactRead(BrandFactCreate):
+    id: int
+    workspace_id: int
+    status: str
+    model_config = ConfigDict(from_attributes=True)
