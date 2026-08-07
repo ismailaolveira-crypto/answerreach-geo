@@ -581,6 +581,10 @@ export type AgentRuntime = {
 	login_status: string;
 	default_model?: string | null;
 	available_models: string[];
+	active_run_count: number;
+	max_concurrent_runs: number;
+	capacity_available: boolean;
+	run_timeout_seconds: number;
 	error?: string | null;
 };
 

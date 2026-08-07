@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import json
 from pathlib import Path
+import threading
 from typing import Callable
 
 
@@ -13,6 +14,10 @@ class CodexRuntimeUnavailable(RuntimeError):
 
 
 class CodexRunInterrupted(RuntimeError):
+    pass
+
+
+class CodexRunTimedOut(RuntimeError):
     pass
 
 
@@ -95,6 +100,7 @@ class LocalCodexRuntime:
         on_started: Callable[[str, str], None] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
         cancellation_requested: Callable[[], bool] | None = None,
+        timeout_seconds: float | None = 900.0,
     ) -> CodexTurnResult:
         from openai_codex import ApprovalMode, Codex, Sandbox
 
@@ -135,36 +141,69 @@ class LocalCodexRuntime:
                 on_started(thread.id, handle.id)
 
             completed_status = ""
-            for notification in handle.stream():
-                detail = _payload_dict(notification.payload)
-                if notification.method in {
-                    "turn/started",
-                    "item/started",
-                    "item/completed",
-                    "thread/tokenUsage/updated",
-                    "turn/completed",
-                }:
-                    compact_events.append({"method": notification.method, "detail": detail})
-                if on_event:
-                    on_event(notification.method, detail)
-                if notification.method == "item/completed":
-                    item = detail.get("item") or {}
-                    if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
-                        final_response = str(item.get("text") or "")
-                elif notification.method == "thread/tokenUsage/updated":
-                    usage = detail.get("tokenUsage") or {}
-                elif notification.method == "turn/completed":
-                    completed_status = str((detail.get("turn") or {}).get("status") or "")
+            turn_finished = threading.Event()
+            timeout_reached = threading.Event()
+            timeout_thread: threading.Thread | None = None
+            stream_error: Exception | None = None
+            if timeout_seconds is not None and timeout_seconds > 0:
+                def interrupt_after_timeout() -> None:
+                    if turn_finished.wait(float(timeout_seconds)):
+                        return
+                    timeout_reached.set()
+                    try:
+                        handle.interrupt()
+                    except Exception:
+                        return
 
-                if (
-                    cancellation_requested
-                    and cancellation_requested()
-                    and not interrupted
-                    and notification.method != "turn/completed"
-                ):
-                    handle.interrupt()
-                    interrupted = True
+                timeout_thread = threading.Thread(
+                    target=interrupt_after_timeout,
+                    name=f"codex-turn-timeout-{handle.id}",
+                    daemon=True,
+                )
+                timeout_thread.start()
+            try:
+                for notification in handle.stream():
+                    detail = _payload_dict(notification.payload)
+                    if notification.method in {
+                        "turn/started",
+                        "item/started",
+                        "item/completed",
+                        "thread/tokenUsage/updated",
+                        "turn/completed",
+                    }:
+                        compact_events.append({"method": notification.method, "detail": detail})
+                    if on_event:
+                        on_event(notification.method, detail)
+                    if notification.method == "item/completed":
+                        item = detail.get("item") or {}
+                        if item.get("type") == "agentMessage" and item.get("phase") == "final_answer":
+                            final_response = str(item.get("text") or "")
+                    elif notification.method == "thread/tokenUsage/updated":
+                        usage = detail.get("tokenUsage") or {}
+                    elif notification.method == "turn/completed":
+                        completed_status = str((detail.get("turn") or {}).get("status") or "")
 
+                    if (
+                        cancellation_requested
+                        and cancellation_requested()
+                        and not interrupted
+                        and notification.method != "turn/completed"
+                    ):
+                        handle.interrupt()
+                        interrupted = True
+            except Exception as exc:
+                stream_error = exc
+            finally:
+                turn_finished.set()
+                if timeout_thread is not None:
+                    timeout_thread.join(timeout=1)
+
+        if timeout_reached.is_set():
+            raise CodexRunTimedOut(
+                f"Codex turn exceeded {float(timeout_seconds or 0):g} seconds"
+            ) from stream_error
+        if stream_error is not None:
+            raise stream_error
         if interrupted or completed_status in {"interrupted", "cancelled", "canceled"}:
             raise CodexRunInterrupted("Codex turn was interrupted by the user")
         if completed_status != "completed":

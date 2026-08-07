@@ -179,8 +179,10 @@ Agent 交付后，必须按以下顺序继续：
 | 品牌事实不足 | `waiting_human` | 列出需补充事实，不生成相关声明 |
 | 网页需登录/验证码 | `waiting_human` | 不绕过，只提示所需操作 |
 | 用户中止 | `cancelled` | 调用 runtime interrupt，保留日志和已生成工件 |
+| 工作区容量已满 | 不创建新 run | 显示当前容量，等待结束或由用户中止现有任务 |
+| 排队中取消 | `cancelled` | 立即取消待执行 job 并释放容量，不等待 worker 轮询 |
 | 事件流断开 | 不改业务状态 | 从最后 sequence 恢复，再读权威 run 状态 |
-| 超时/限额 | `failed` 或 `blocked` | 记录可读原因和重试建议，不自动无限重试 |
+| 单次超时 | `failed / timed_out` | 调用底层 turn `interrupt`，记录 `agent_timeout`，保留原 thread 供人工恢复，不自动无限重试 |
 
 ## 7. 任务结束时的回报模板
 

@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     xiaoma_api_key: str | None = None
     article_sync_mcp_server_path: str | None = None
     article_sync_mcp_token: str | None = None
+    agent_max_concurrent_runs: int = 1
+    agent_run_timeout_seconds: int = 900
     auth_secret: str = "dev-secret-change-me"
     auto_create_tables: bool = True
 

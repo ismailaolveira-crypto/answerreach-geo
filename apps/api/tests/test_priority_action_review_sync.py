@@ -23,8 +23,10 @@ from app.models.cleanroom_v1 import (
     GeoPlatformVariant,
     GeoWorkspace,
 )
+from app.models.job import QueueJob
 from app.models.user import User
-from app.v1 import agent_orchestration
+from app.services.codex_agent_runtime import CodexRunTimedOut
+from app.v1 import agent_orchestration, routes
 
 
 @pytest.fixture
@@ -381,3 +383,143 @@ def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(
         json={"content_asset_id": 1},
     )
     assert duplicate.status_code == 409
+
+
+def test_agent_capacity_and_pending_job_cancellation_are_truthful(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add_all(
+            [
+                GeoOptimizationAction(
+                    id=2,
+                    workspace_id=1,
+                    title="第二个行动",
+                    rationale="验证容量限制",
+                    priority="high",
+                    status="in_progress",
+                    stage="selected",
+                ),
+                GeoOptimizationAction(
+                    id=3,
+                    workspace_id=1,
+                    title="第三个行动",
+                    rationale="验证容量释放",
+                    priority="medium",
+                    status="in_progress",
+                    stage="selected",
+                ),
+            ]
+        )
+        db.commit()
+
+    monkeypatch.setattr(
+        routes,
+        "diagnose_local_codex",
+        lambda: {
+            "runtime_key": "local_codex",
+            "sdk_installed": True,
+            "sdk_version": "test",
+            "runtime_version": "Codex Desktop/test",
+            "ready": True,
+            "login_status": "chatgpt_authenticated",
+            "default_model": "gpt-5-codex",
+            "available_models": ["gpt-5-codex"],
+            "error": None,
+        },
+    )
+
+    queued = review_client.post(
+        "/api/v1/workspaces/1/actions/2/agent-runs",
+        json={"selected_platforms": ["zhihu", "wechat"]},
+    )
+    assert queued.status_code == 202
+    run_id = queued.json()["id"]
+    job_id = queued.json()["job_id"]
+
+    runtime = review_client.get("/api/v1/workspaces/1/agent-runtime")
+    assert runtime.status_code == 200
+    assert runtime.json()["active_run_count"] == 1
+    assert runtime.json()["max_concurrent_runs"] == 1
+    assert runtime.json()["capacity_available"] is False
+    assert runtime.json()["run_timeout_seconds"] == 900
+
+    blocked = review_client.post(
+        "/api/v1/workspaces/1/actions/3/agent-runs",
+        json={"selected_platforms": ["zhihu"]},
+    )
+    assert blocked.status_code == 409
+    assert "capacity is busy" in blocked.json()["detail"]
+
+    cancelled = review_client.post(f"/api/v1/workspaces/1/agent-runs/{run_id}/interrupt")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["stage"] == "cancelled"
+
+    with session_factory() as db:
+        job = db.get(QueueJob, job_id)
+        action = db.get(GeoOptimizationAction, 2)
+        assert job.status == "success"
+        assert job.payload_json["cancelled_before_start"] is True
+        assert action.stage == "selected"
+
+    released = review_client.get("/api/v1/workspaces/1/agent-runtime")
+    assert released.json()["active_run_count"] == 0
+    assert released.json()["capacity_available"] is True
+
+    next_run = review_client.post(
+        "/api/v1/workspaces/1/actions/3/agent-runs",
+        json={"selected_platforms": ["wechat"]},
+    )
+    assert next_run.status_code == 202
+    cleanup = review_client.post(
+        f"/api/v1/workspaces/1/agent-runs/{next_run.json()['id']}/interrupt"
+    )
+    assert cleanup.status_code == 200
+    assert cleanup.json()["status"] == "cancelled"
+
+
+def test_worker_honors_cancellation_won_during_queue_handoff(review_client: TestClient) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        action = db.get(GeoOptimizationAction, 1)
+        run.status = "cancelling"
+        run.stage = "queued"
+        action.stage = "generating"
+        db.commit()
+
+        result = agent_orchestration.execute_agent_run(db, run)
+        assert result.status == "cancelled"
+        assert result.stage == "cancelled"
+        assert action.stage == "reviewing"
+
+
+def test_agent_timeout_is_persisted_as_a_recoverable_failure(review_client: TestClient) -> None:
+    class TimeoutRuntime:
+        def run_structured(self, **kwargs):
+            assert kwargs["timeout_seconds"] == 900
+            raise CodexRunTimedOut("Codex turn exceeded 900 seconds")
+
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        action = db.get(GeoOptimizationAction, 1)
+        run.status = "resuming"
+        run.stage = "queued"
+        action.stage = "generating"
+        db.commit()
+
+        result = agent_orchestration.execute_agent_run(db, run, runtime=TimeoutRuntime())
+        assert result.status == "failed"
+        assert result.stage == "timed_out"
+        assert result.error_code == "agent_timeout"
+        assert result.codex_thread_id == "thread-review-1"
+        assert action.stage == "blocked"
+        assert "900 seconds" in action.blocked_reason
+
+    events = review_client.get("/api/v1/workspaces/1/agent-runs/1/events")
+    assert events.status_code == 200
+    assert events.json()[-1]["event_type"] == "run_timed_out"

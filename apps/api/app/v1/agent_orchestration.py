@@ -10,6 +10,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.models.cleanroom_v1 import (
     GeoActionOpportunity,
@@ -30,6 +31,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.services.codex_agent_runtime import (
     CodexRunInterrupted,
+    CodexRunTimedOut,
     LocalCodexRuntime,
 )
 from app.v1.content_generation import PLATFORM_CONTRACTS
@@ -472,9 +474,29 @@ def execute_agent_run(
     *,
     runtime: LocalCodexRuntime | None = None,
 ) -> GeoAgentRun:
+    if run.status == "cancelling":
+        run.status = "cancelled"
+        run.stage = "cancelled"
+        run.error_code = "user_interrupted"
+        run.error_message = "Agent run was cancelled before execution began"
+        run.finished_at = datetime.now(timezone.utc)
+        action = db.get(GeoOptimizationAction, run.action_id)
+        if action:
+            action.stage = "reviewing" if (run.result_snapshot or {}).get("asset_id") else "selected"
+            action.blocked_reason = None
+        db.commit()
+        append_agent_event(
+            db,
+            run,
+            event_type="run_cancelled",
+            stage="cancelled",
+            message="Agent 在 worker 接受后、实际执行前已取消",
+        )
+        return run
     if run.status not in {"queued", "resuming"}:
         raise ValueError(f"Agent run {run.id} cannot execute from {run.status}")
     runtime = runtime or LocalCodexRuntime()
+    timeout_seconds = max(60, min(int(get_settings().agent_run_timeout_seconds), 3600))
     is_resume = run.status == "resuming"
     resume_asset_id = int(run.result_snapshot.get("asset_id") or 0)
     resume_asset = db.get(GeoContentAsset, resume_asset_id) if resume_asset_id else None
@@ -491,6 +513,7 @@ def execute_agent_run(
             event_type="stage_started",
             stage="preparing_context",
             message="正在根据人工意见整理修订上下文" if is_revision else "正在整理真实观测证据和品牌边界",
+            detail={"timeout_seconds": timeout_seconds},
         )
         context, brief = _build_context(db, run)
         run.request_snapshot = context
@@ -537,6 +560,7 @@ def execute_agent_run(
             on_started=on_started,
             on_event=on_event,
             cancellation_requested=lambda: _cancellation_requested(run.id),
+            timeout_seconds=timeout_seconds,
         )
         parsed = json.loads(turn_result.final_response)
         task_directory.mkdir(parents=True, exist_ok=True)
@@ -615,6 +639,25 @@ def execute_agent_run(
             event_type="run_cancelled",
             stage="cancelled",
             message="用户已中止 Agent 运行",
+        )
+    except CodexRunTimedOut as exc:
+        run.status = "failed"
+        run.stage = "timed_out"
+        run.error_code = "agent_timeout"
+        run.error_message = str(exc)
+        run.finished_at = datetime.now(timezone.utc)
+        action = db.get(GeoOptimizationAction, run.action_id)
+        if action:
+            action.stage = "blocked"
+            action.blocked_reason = run.error_message
+        db.commit()
+        append_agent_event(
+            db,
+            run,
+            event_type="run_timed_out",
+            stage="timed_out",
+            message="Agent 超过单次运行时限，已真实中止并保留恢复入口",
+            detail={"timeout_seconds": timeout_seconds},
         )
     except Exception as exc:
         run.status = "failed"

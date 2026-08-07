@@ -1014,6 +1014,10 @@ class AgentRuntimeRead(BaseModel):
     login_status: str
     default_model: str | None = None
     available_models: list[str] = Field(default_factory=list)
+    active_run_count: int = 0
+    max_concurrent_runs: int = 1
+    capacity_available: bool = True
+    run_timeout_seconds: int = 900
     error: str | None = None
 
 

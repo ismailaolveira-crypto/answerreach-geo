@@ -4912,6 +4912,60 @@ def enqueue_content_generation(
     return job
 
 
+ACTIVE_AGENT_RUN_STATUSES = ("queued", "resuming", "running", "cancelling")
+
+
+def _agent_capacity(
+    db: Session,
+    workspace_id: int,
+    *,
+    exclude_run_id: int | None = None,
+) -> tuple[int, list[GeoAgentRun]]:
+    limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 4))
+    query = select(GeoAgentRun).where(
+        GeoAgentRun.workspace_id == workspace_id,
+        GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),
+    )
+    if exclude_run_id is not None:
+        query = query.where(GeoAgentRun.id != exclude_run_id)
+    active_runs = list(db.scalars(query.order_by(GeoAgentRun.id.desc())))
+    return limit, active_runs
+
+
+def _agent_runtime_diagnostic(db: Session, workspace_id: int) -> dict:
+    diagnostic = diagnose_local_codex()
+    limit, active_runs = _agent_capacity(db, workspace_id)
+    return {
+        **diagnostic,
+        "active_run_count": len(active_runs),
+        "max_concurrent_runs": limit,
+        "capacity_available": len(active_runs) < limit,
+        "run_timeout_seconds": max(
+            60,
+            min(int(get_settings().agent_run_timeout_seconds), 3600),
+        ),
+    }
+
+
+def _assert_agent_capacity(
+    db: Session,
+    workspace_id: int,
+    *,
+    exclude_run_id: int | None = None,
+) -> None:
+    limit, active_runs = _agent_capacity(db, workspace_id, exclude_run_id=exclude_run_id)
+    if len(active_runs) < limit:
+        return
+    busy = active_runs[0]
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"Workspace Agent capacity is busy ({len(active_runs)}/{limit}) with run {busy.id}; "
+            "wait for it to finish or interrupt it before starting another run"
+        ),
+    )
+
+
 @router.get(
     "/workspaces/{workspace_id}/agent-runtime",
     response_model=AgentRuntimeRead,
@@ -4922,7 +4976,7 @@ def read_agent_runtime(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    return diagnose_local_codex()
+    return _agent_runtime_diagnostic(db, workspace_id)
 
 
 @router.post(
@@ -4935,7 +4989,7 @@ def test_agent_runtime(
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
     workspace_or_404(db, user, workspace_id)
-    diagnostic = diagnose_local_codex()
+    diagnostic = _agent_runtime_diagnostic(db, workspace_id)
     started = perf_counter()
     if not diagnostic.get("ready"):
         return {
@@ -4943,6 +4997,13 @@ def test_agent_runtime(
             "runtime": diagnostic,
             "latency_ms": int((perf_counter() - started) * 1000),
             "error": diagnostic.get("error") or "Codex login is required",
+        }
+    if not diagnostic.get("capacity_available"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": "Codex Agent 当前容量已满，请等待正在运行的任务结束",
         }
     import tempfile
 
@@ -5010,12 +5071,13 @@ def create_agent_run(
         .where(
             GeoAgentRun.workspace_id == workspace_id,
             GeoAgentRun.action_id == action_id,
-            GeoAgentRun.status.in_(["queued", "resuming", "running", "cancelling"]),
+            GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),
         )
         .order_by(GeoAgentRun.id.desc())
     )
     if active:
         raise HTTPException(status_code=409, detail=f"Agent run {active.id} is already active")
+    _assert_agent_capacity(db, workspace_id)
     platforms = list(dict.fromkeys(payload.selected_platforms or _default_agent_platforms(db, action)))
     if not platforms:
         raise HTTPException(status_code=422, detail="Select at least one target platform")
@@ -5220,8 +5282,40 @@ def interrupt_agent_run(
     run = _agent_run_or_404(db, workspace_id, run_id)
     if run.status not in {"queued", "resuming", "running", "cancelling"}:
         raise HTTPException(status_code=409, detail=f"Cannot interrupt Agent run in {run.status}")
+    now = datetime.now(timezone.utc)
+    job = db.get(QueueJob, run.job_id) if run.job_id else None
+    if run.status in {"queued", "resuming"} and job is not None and job.status == "pending":
+        run.status = "cancelled"
+        run.stage = "cancelled"
+        run.cancel_requested_at = now
+        run.error_code = "user_interrupted"
+        run.error_message = "Agent run was cancelled before the worker started"
+        run.finished_at = now
+        job.status = "success"
+        job.finished_at = now
+        job.error_message = None
+        job.payload_json = {
+            **dict(job.payload_json or {}),
+            "stage": "cancelled",
+            "agent_status": "cancelled",
+            "cancelled_before_start": True,
+        }
+        action = db.get(GeoOptimizationAction, run.action_id)
+        if action is not None:
+            action.stage = "reviewing" if (run.result_snapshot or {}).get("asset_id") else "selected"
+            action.blocked_reason = None
+        db.commit()
+        append_agent_event(
+            db,
+            run,
+            event_type="run_cancelled",
+            stage="cancelled",
+            message="Agent 尚未开始执行，排队任务已立即取消",
+            detail={"requested_by_user_id": user.id, "job_id": job.id},
+        )
+        return run
     if run.cancel_requested_at is None:
-        run.cancel_requested_at = datetime.now(timezone.utc)
+        run.cancel_requested_at = now
     run.status = "cancelling"
     db.commit()
     append_agent_event(
@@ -5250,6 +5344,7 @@ def resume_agent_run(
     run = _agent_run_or_404(db, workspace_id, run_id)
     if run.status not in {"cancelled", "failed"} or not run.codex_thread_id:
         raise HTTPException(status_code=409, detail="Only an interrupted/failed run with a Codex thread can resume")
+    _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     job = QueueJob(
         job_type="geo_agent.run",
         status="pending",
@@ -5308,6 +5403,7 @@ def revise_agent_run(
             status_code=409,
             detail="Only the current rejected draft with an existing Codex thread can be revised",
         )
+    _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     review = db.scalar(
         select(GeoContentReview)
         .where(
