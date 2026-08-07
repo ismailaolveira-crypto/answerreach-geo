@@ -856,6 +856,7 @@ class ActionCreate(BaseModel):
     priority: Literal["high", "medium", "low"] = "medium"
     question_plan_id: int | None = None
     source_evidence_id: int | None = None
+    opportunity_id: int | None = None
 
 
 class ActionUpdate(BaseModel):
@@ -866,6 +867,12 @@ class ActionRead(ActionCreate):
     id: int
     workspace_id: int
     status: str
+    stage: str = "selected"
+    baseline_snapshot: dict = Field(default_factory=dict)
+    selected_scope: dict = Field(default_factory=dict)
+    blocked_reason: str | None = None
+    selected_at: datetime | None = None
+    completed_at: datetime | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -874,6 +881,211 @@ class ReobservationCreate(BaseModel):
     evidence_id: int
     conclusion: str = Field(min_length=1)
     measured_delta: dict = Field(default_factory=dict)
+
+
+class ActionOpportunityEvidenceRead(BaseModel):
+    id: int
+    opportunity_id: int
+    evidence_id: int
+    question_plan_id: int
+    batch_id: int | None
+    observation_task_id: int | None
+    model_key: str
+    signal_type: str
+    signal_value: dict = Field(default_factory=dict)
+    evidence_hash: str
+    source_url: str | None
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ActionOpportunityRead(BaseModel):
+    id: int
+    workspace_id: int
+    fingerprint: str
+    opportunity_type: str
+    title: str
+    summary: str
+    priority_score: float
+    priority_label: str
+    evidence_strength: float
+    source_gap_type: str | None
+    recommended_asset_type: str
+    recommended_platforms: list[str] = Field(default_factory=list)
+    scope_snapshot: dict = Field(default_factory=dict)
+    rule_version: str
+    status: str
+    first_seen_batch_id: int | None
+    latest_seen_batch_id: int | None
+    evidence: list[ActionOpportunityEvidenceRead] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ActionOpportunityDiscoverRequest(BaseModel):
+    batch_id: int | None = Field(default=None, ge=1)
+    question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
+    max_items: int = Field(default=50, ge=1, le=100)
+
+
+class ActionStageUpdate(BaseModel):
+    stage: Literal[
+        "selected",
+        "brief_ready",
+        "generating",
+        "draft_ready",
+        "reviewing",
+        "sync_requested",
+        "awaiting_readback",
+        "verified",
+        "blocked",
+        "closed",
+    ]
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class ActionEventRead(BaseModel):
+    id: int
+    workspace_id: int
+    action_id: int | None
+    event_type: str
+    from_stage: str | None
+    to_stage: str | None
+    actor_type: str
+    actor_user_id: int | None
+    job_id: int | None
+    detail: dict = Field(default_factory=dict)
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContentBriefCreate(BaseModel):
+    audience: str | None = Field(default=None, max_length=160)
+    intent: str | None = Field(default=None, max_length=80)
+    asset_type: Literal["article", "faq", "case_study", "comparison"] = "article"
+    required_sections: list[str] = Field(default_factory=list, max_length=20)
+    brand_fact_ids: list[int] = Field(default_factory=list, max_length=50)
+    forbidden_claims: list[str] = Field(default_factory=list, max_length=30)
+    open_questions: list[str] = Field(default_factory=list, max_length=30)
+
+
+class ContentBriefRead(ContentBriefCreate):
+    id: int
+    workspace_id: int
+    action_id: int
+    question_plan_id: int | None
+    audience: str
+    intent: str
+    required_sections: list[str]
+    brand_fact_ids: list[int]
+    evidence_ids: list[int]
+    source_urls: list[str]
+    required_claims: list[str]
+    forbidden_claims: list[str]
+    open_questions: list[str]
+    prompt_template_id: int | None
+    input_fingerprint: str
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ContentGenerateRequest(BaseModel):
+    provider_id: int = Field(ge=1)
+    platform_key: Literal["official_site", "zhihu", "wechat", "xiaohongshu"] = "official_site"
+
+
+class ContentAssetRead(BaseModel):
+    id: int
+    workspace_id: int
+    brief_id: int
+    version: int
+    title: str
+    summary: str
+    body_markdown: str
+    content_fingerprint: str
+    model_provider_id: int | None
+    model_name: str | None
+    prompt_template_id: int | None
+    prompt_hash: str | None
+    raw_artifact_uri: str | None
+    generation_usage: dict = Field(default_factory=dict)
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PlatformVariantCreate(BaseModel):
+    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
+        default_factory=lambda: ["official_site", "zhihu", "wechat"]
+    )
+
+
+class PlatformVariantRead(BaseModel):
+    id: int
+    workspace_id: int
+    content_asset_id: int
+    platform_key: str
+    version: int
+    policy_version: str
+    title: str
+    summary: str
+    body_markdown: str
+    tags: list[str] = Field(default_factory=list)
+    category: str | None
+    image_manifest: list[dict] = Field(default_factory=list)
+    adaptation_contract: dict = Field(default_factory=dict)
+    content_fingerprint: str
+    prompt_template_id: int | None
+    prompt_hash: str | None
+    status: str
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DistributionRunCreate(BaseModel):
+    content_asset_id: int = Field(ge=1)
+    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(min_length=1)
+    idempotency_key: str = Field(min_length=8, max_length=160)
+
+
+class DistributionTargetRead(BaseModel):
+    id: int
+    distribution_run_id: int
+    platform_variant_id: int | None
+    platform_key: str
+    adapter_version: str
+    request_status: str
+    draft_readback_status: str
+    candidate_draft_url: str | None
+    draft_url: str | None
+    external_draft_id: str | None
+    response_artifact_uri: str | None
+    readback_artifact_uri: str | None
+    waiting_human_reason: str | None
+    blocked_reason: str | None
+    last_error_code: str | None
+    final_action_clicked: bool
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DistributionRunRead(BaseModel):
+    id: int
+    workspace_id: int
+    action_id: int | None
+    content_asset_id: int | None
+    requested_platforms: list[str]
+    stage: str
+    idempotency_key: str
+    status: str
+    targets: list[DistributionTargetRead] = Field(default_factory=list)
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PromptTemplateRead(BaseModel):
+    id: int
+    prompt_key: str
+    version: str
+    purpose: str
+    platform_key: str | None
+    checksum: str
+    status: str
+    model_config = ConfigDict(from_attributes=True)
 
 
 class BrandFactCreate(BaseModel):

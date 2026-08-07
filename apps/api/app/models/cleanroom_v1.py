@@ -248,6 +248,288 @@ class GeoOptimizationAction(CleanRoomTimestamp, Base):
     hypothesis: Mapped[str | None] = mapped_column(Text)
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="proposed", index=True)
+    opportunity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_action_opportunities_v1.id"), index=True
+    )
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="selected", index=True)
+    baseline_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    selected_scope: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeoActionOpportunity(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_opportunities_v1"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "fingerprint", name="uq_geo_action_opportunity_fingerprint_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    opportunity_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    priority_score: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    priority_label: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    evidence_strength: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    source_gap_type: Mapped[str | None] = mapped_column(String(40))
+    recommended_asset_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="article"
+    )
+    recommended_platforms: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    rule_version: Mapped[str] = mapped_column(String(40), nullable=False, default="opportunity.v1")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    first_seen_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    latest_seen_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+
+
+class GeoActionOpportunityEvidence(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_opportunity_evidence_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "opportunity_id", "evidence_id", name="uq_geo_action_opportunity_evidence_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    opportunity_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_action_opportunities_v1.id"), nullable=False, index=True
+    )
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    observation_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_tasks_v1.id"), index=True
+    )
+    evidence_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_evidence_v1.id"), nullable=False, index=True
+    )
+    question_plan_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_question_plans_v1.id"), nullable=False, index=True
+    )
+    provider_id: Mapped[int | None] = mapped_column(ForeignKey("llm_providers.id"), index=True)
+    model_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    signal_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    signal_value: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    source_url: Mapped[str | None] = mapped_column(String(1500))
+    competitor_entity_id: Mapped[int | None] = mapped_column(Integer)
+
+
+class GeoActionEvent(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_events_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), index=True
+    )
+    event_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    from_stage: Mapped[str | None] = mapped_column(String(32))
+    to_stage: Mapped[str | None] = mapped_column(String(32))
+    actor_type: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("queue_jobs.id"), index=True)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class GeoPromptTemplate(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_prompt_templates_v1"
+    __table_args__ = (
+        UniqueConstraint("prompt_key", "version", name="uq_geo_prompt_template_key_version_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_key: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(40), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(80), nullable=False)
+    platform_key: Mapped[str | None] = mapped_column(String(80), index=True)
+    system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    user_template: Mapped[str] = mapped_column(Text, nullable=False)
+    input_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    output_schema: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    temperature: Mapped[float] = mapped_column(Float, nullable=False, default=0.2)
+    max_output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=2400)
+    checksum: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeoContentBrief(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_content_briefs_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
+    )
+    question_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_question_plans_v1.id"), index=True
+    )
+    audience: Mapped[str] = mapped_column(String(160), nullable=False)
+    intent: Mapped[str] = mapped_column(String(80), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(40), nullable=False, default="article")
+    required_sections: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    brand_fact_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    evidence_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    source_urls: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    required_claims: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    forbidden_claims: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    open_questions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("geo_prompt_templates_v1.id"))
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready", index=True)
+
+
+class GeoContentAsset(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_content_assets_v1"
+    __table_args__ = (
+        UniqueConstraint("brief_id", "version", name="uq_geo_content_asset_brief_version_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    brief_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_content_briefs_v1.id"), nullable=False, index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    model_provider_id: Mapped[int | None] = mapped_column(ForeignKey("llm_providers.id"))
+    model_name: Mapped[str | None] = mapped_column(String(120))
+    prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("geo_prompt_templates_v1.id"))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    raw_artifact_uri: Mapped[str | None] = mapped_column(String(1500))
+    generation_usage: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft", index=True)
+
+
+class GeoContentClaim(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_content_claims_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_asset_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_content_assets_v1.id"), nullable=False, index=True
+    )
+    claim_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    claim_text: Mapped[str] = mapped_column(Text, nullable=False)
+    support_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    support_id: Mapped[int | None] = mapped_column(Integer)
+    source_url: Mapped[str | None] = mapped_column(String(1500))
+    verification_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    introduced_by_model: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+
+class GeoPlatformVariant(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_platform_variants_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "content_asset_id", "platform_key", "version", name="uq_geo_platform_variant_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    content_asset_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_content_assets_v1.id"), nullable=False, index=True
+    )
+    platform_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    policy_version: Mapped[str] = mapped_column(String(40), nullable=False, default="platform.v1")
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    category: Mapped[str | None] = mapped_column(String(80))
+    image_manifest: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    adaptation_contract: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("geo_prompt_templates_v1.id"))
+    prompt_hash: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready", index=True)
+
+
+class GeoContentReview(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_content_reviews_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    subject_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    subject_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    review_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    verdict: Mapped[str] = mapped_column(String(32), nullable=False)
+    checks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    issues: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    reviewer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+
+
+class GeoDistributionRun(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_distribution_runs_v1"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "idempotency_key", name="uq_geo_distribution_idempotency_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int | None] = mapped_column(ForeignKey("geo_optimization_actions_v1.id"))
+    content_asset_id: Mapped[int | None] = mapped_column(ForeignKey("geo_content_assets_v1.id"))
+    requested_platforms: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False, default="requested", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+
+
+class GeoDistributionTarget(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_distribution_targets_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    distribution_run_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_distribution_runs_v1.id"), nullable=False, index=True
+    )
+    platform_variant_id: Mapped[int | None] = mapped_column(ForeignKey("geo_platform_variants_v1.id"))
+    platform_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    adapter_version: Mapped[str] = mapped_column(String(40), nullable=False, default="mcp-adapter.v1")
+    request_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    draft_readback_status: Mapped[str] = mapped_column(String(32), nullable=False, default="not_started")
+    candidate_draft_url: Mapped[str | None] = mapped_column(String(1500))
+    draft_url: Mapped[str | None] = mapped_column(String(1500))
+    external_draft_id: Mapped[str | None] = mapped_column(String(255))
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    response_artifact_uri: Mapped[str | None] = mapped_column(String(1500))
+    readback_artifact_uri: Mapped[str | None] = mapped_column(String(1500))
+    waiting_human_reason: Mapped[str | None] = mapped_column(Text)
+    blocked_reason: Mapped[str | None] = mapped_column(Text)
+    last_error_code: Mapped[str | None] = mapped_column(String(80))
+    final_action_clicked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class GeoReobservation(CleanRoomTimestamp, Base):

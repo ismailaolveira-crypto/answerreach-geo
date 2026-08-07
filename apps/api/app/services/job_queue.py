@@ -282,6 +282,45 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             }
             job.status = "success"
             job.error_message = None
+        elif job.job_type == "geo_content.generate":
+            from app.models import LLMProvider
+            from app.models.cleanroom_v1 import GeoActionEvent, GeoContentBrief, GeoOptimizationAction, GeoWorkspace
+            from app.v1.content_generation import generate_content_asset
+
+            payload_json = dict(job.payload_json or {})
+            workspace = db.get(GeoWorkspace, int(payload_json["workspace_id"]))
+            brief = db.get(GeoContentBrief, int(payload_json["brief_id"]))
+            provider = db.get(LLMProvider, int(payload_json["provider_id"]))
+            if workspace is None or brief is None or provider is None:
+                raise ValueError("Content generation workspace, brief or provider not found")
+            asset = generate_content_asset(
+                db,
+                workspace,
+                brief,
+                provider,
+                platform_key=str(payload_json.get("platform_key") or "official_site"),
+            )
+            action = db.get(GeoOptimizationAction, brief.action_id)
+            if action is not None:
+                previous_stage = action.stage
+                action.stage = "draft_ready"
+                action.status = "in_progress"
+                action.blocked_reason = None
+                db.add(
+                    GeoActionEvent(
+                        workspace_id=workspace.id,
+                        action_id=action.id,
+                        job_id=job.id,
+                        event_type="content_generated",
+                        from_stage=previous_stage,
+                        to_stage="draft_ready",
+                        actor_type="worker",
+                        detail={"asset_id": asset.id, "provider_id": provider.id},
+                    )
+                )
+            job.payload_json = {**payload_json, "stage": "complete", "asset_id": asset.id}
+            job.status = "success"
+            job.error_message = None
         else:
             raise ValueError(f"Unsupported job type: {job.job_type}")
     except Exception as exc:

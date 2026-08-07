@@ -543,6 +543,94 @@ export type CleanroomAction = {
 	question_plan_id?: number | null;
 	source_evidence_id?: number | null;
 	status: string;
+	opportunity_id?: number | null;
+	stage?: string;
+	baseline_snapshot?: Record<string, unknown>;
+	selected_scope?: Record<string, unknown>;
+	blocked_reason?: string | null;
+	selected_at?: string | null;
+	completed_at?: string | null;
+};
+
+export type CleanroomActionOpportunityEvidence = {
+	id: number;
+	opportunity_id: number;
+	evidence_id: number;
+	question_plan_id: number;
+	batch_id?: number | null;
+	observation_task_id?: number | null;
+	model_key: string;
+	signal_type: string;
+	signal_value: Record<string, unknown>;
+	evidence_hash: string;
+	source_url?: string | null;
+};
+
+export type CleanroomActionOpportunity = {
+	id: number;
+	workspace_id: number;
+	fingerprint: string;
+	opportunity_type: string;
+	title: string;
+	summary: string;
+	priority_score: number;
+	priority_label: "high" | "medium" | "low";
+	evidence_strength: number;
+	source_gap_type?: string | null;
+	recommended_asset_type: string;
+	recommended_platforms: string[];
+	scope_snapshot: Record<string, unknown>;
+	rule_version: string;
+	status: string;
+	first_seen_batch_id?: number | null;
+	latest_seen_batch_id?: number | null;
+	evidence: CleanroomActionOpportunityEvidence[];
+};
+
+export type CleanroomContentBrief = {
+	id: number;
+	workspace_id: number;
+	action_id: number;
+	question_plan_id?: number | null;
+	audience: string;
+	intent: string;
+	asset_type: string;
+	required_sections: string[];
+	brand_fact_ids: number[];
+	evidence_ids: number[];
+	source_urls: string[];
+	required_claims: string[];
+	forbidden_claims: string[];
+	open_questions: string[];
+	prompt_template_id?: number | null;
+	input_fingerprint: string;
+	status: string;
+};
+
+export type CleanroomContentAsset = {
+	id: number;
+	workspace_id: number;
+	brief_id: number;
+	version: number;
+	title: string;
+	summary: string;
+	body_markdown: string;
+	content_fingerprint: string;
+	model_provider_id?: number | null;
+	model_name?: string | null;
+	prompt_template_id?: number | null;
+	prompt_hash?: string | null;
+	raw_artifact_uri?: string | null;
+	generation_usage: Record<string, unknown>;
+	status: string;
+};
+
+export type CleanroomContentGenerationJob = {
+	id: number;
+	job_type: string;
+	status: string;
+	payload_json: Record<string, unknown>;
+	error_message?: string | null;
 };
 
 export type CleanroomBrandFact = {
@@ -956,6 +1044,53 @@ export function createSamplingBatch(workspaceId: string | number) {
 
 export function getCleanroomActions(workspaceId: string | number) {
 	return apiRequest<CleanroomAction[]>(`/workspaces/${workspaceId}/actions`);
+}
+
+export function getCleanroomActionOpportunities(workspaceId: string | number) {
+	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities`);
+}
+
+export function discoverCleanroomActionOpportunities(
+	workspaceId: string | number,
+	payload: { batch_id?: number | null; question_plan_ids?: number[]; max_items?: number } = {},
+) {
+	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities/discover`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function selectCleanroomActionOpportunity(workspaceId: string | number, opportunityId: number) {
+	return apiRequest<CleanroomAction>(`/workspaces/${workspaceId}/action-opportunities/${opportunityId}/select`, {
+		method: "POST",
+	});
+}
+
+export function createCleanroomContentBrief(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { audience?: string; intent?: string; asset_type?: string } = {},
+) {
+	return apiRequest<CleanroomContentBrief>(`/workspaces/${workspaceId}/actions/${actionId}/briefs`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function getCleanroomContentAssets(workspaceId: string | number, actionId: number, briefId: number) {
+	return apiRequest<CleanroomContentAsset[]>(`/workspaces/${workspaceId}/actions/${actionId}/briefs/${briefId}/assets`);
+}
+
+export function queueCleanroomContentGeneration(
+	workspaceId: string | number,
+	actionId: number,
+	briefId: number,
+	payload: { provider_id: number; platform_key: "official_site" | "zhihu" | "wechat" | "xiaohongshu" },
+) {
+	return apiRequest<CleanroomContentGenerationJob>(`/workspaces/${workspaceId}/actions/${actionId}/briefs/${briefId}/generate`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
 }
 
 export function getCleanroomBrandFacts(workspaceId: string | number) {

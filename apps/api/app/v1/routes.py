@@ -16,9 +16,17 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import Company, LLMProvider, LLMProviderTestRun, Project, QueueJob
 from app.models.cleanroom_v1 import (
+    GeoActionEvent,
+    GeoActionOpportunity,
+    GeoActionOpportunityEvidence,
     GeoBrandFact,
     GeoBrowserAccount,
     GeoContentAudit,
+    GeoContentAsset,
+    GeoContentBrief,
+    GeoDistributionRun,
+    GeoDistributionTarget,
+    GeoPlatformVariant,
     GeoEvidence,
     GeoObservationBatch,
     GeoObservationRun,
@@ -33,9 +41,14 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.schemas.search import QueueJobRead
 from app.v1.schemas import (
     ActionCreate,
+    ActionEventRead,
+    ActionOpportunityDiscoverRequest,
+    ActionOpportunityRead,
     ActionRead,
+    ActionStageUpdate,
     ActionUpdate,
     BrandFactCreate,
     BrandFactRead,
@@ -50,6 +63,14 @@ from app.v1.schemas import (
     CompetitorInsightRead,
     CompetitorInsightRequest,
     ContentAuditRead,
+    ContentBriefCreate,
+    ContentBriefRead,
+    ContentAssetRead,
+    ContentGenerateRequest,
+    DistributionRunCreate,
+    DistributionRunRead,
+    PlatformVariantCreate,
+    PlatformVariantRead,
     DecisionMapRead,
     EvidenceRead,
     QuestionLibraryRead,
@@ -95,6 +116,9 @@ from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_eviden
 from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
+from app.v1.action_opportunities import discover_opportunities
+from app.v1.platform_adaptation import adapt_asset
+from app.services.article_sync_adapter import get_article_sync_adapter
 
 
 router = APIRouter(prefix="/v1", tags=["clean-room-geo-v1"])
@@ -3229,6 +3253,158 @@ def get_decision_map(
     }
 
 
+def _opportunity_read(db: Session, opportunity: GeoActionOpportunity) -> dict:
+    evidence = list(
+        db.scalars(
+            select(GeoActionOpportunityEvidence)
+            .where(GeoActionOpportunityEvidence.opportunity_id == opportunity.id)
+            .order_by(GeoActionOpportunityEvidence.id.asc())
+        )
+    )
+    return {"id": opportunity.id, "evidence": evidence, **opportunity.__dict__}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/action-opportunities/discover",
+    response_model=list[ActionOpportunityRead],
+)
+def discover_action_opportunities(
+    workspace_id: int,
+    payload: ActionOpportunityDiscoverRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace = workspace_or_404(db, user, workspace_id)
+    effective_batch_id = payload.batch_id or db.scalar(
+        select(GeoObservationBatch.id)
+        .where(
+            GeoObservationBatch.workspace_id == workspace_id,
+            GeoObservationBatch.status.in_(["completed", "succeeded"]),
+        )
+        .order_by(GeoObservationBatch.id.desc())
+        .limit(1)
+    )
+    if effective_batch_id:
+        batch = scoped_or_404(db, GeoObservationBatch, workspace_id, effective_batch_id)
+        if batch.status not in {"completed", "succeeded"}:
+            raise HTTPException(
+                status_code=422,
+                detail="Only a completed observation batch can produce priority opportunities",
+            )
+    if payload.question_plan_ids:
+        for question_id in payload.question_plan_ids:
+            scoped_or_404(db, GeoQuestionPlan, workspace_id, question_id)
+    opportunities = discover_opportunities(
+        db,
+        workspace,
+        batch_id=effective_batch_id,
+        question_plan_ids=payload.question_plan_ids or None,
+        max_items=payload.max_items,
+    )
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            event_type="opportunities_discovered",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "batch_id": effective_batch_id,
+                "opportunity_count": len(opportunities),
+                "evidence_gate": "real_answer+source_url+raw_artifact+completed_task",
+            },
+        )
+    )
+    db.commit()
+    return [_opportunity_read(db, opportunity) for opportunity in opportunities]
+
+
+@router.get(
+    "/workspaces/{workspace_id}/action-opportunities",
+    response_model=list[ActionOpportunityRead],
+)
+def list_action_opportunities(
+    workspace_id: int,
+    status: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    query = select(GeoActionOpportunity).where(GeoActionOpportunity.workspace_id == workspace_id)
+    if status:
+        query = query.where(GeoActionOpportunity.status == status)
+    else:
+        query = query.where(GeoActionOpportunity.status.in_(["open", "selected"]))
+    rows = list(db.scalars(query.order_by(GeoActionOpportunity.priority_score.desc(), GeoActionOpportunity.id.desc())))
+    return [_opportunity_read(db, opportunity) for opportunity in rows]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/action-opportunities/{opportunity_id}/select",
+    response_model=ActionRead,
+    status_code=201,
+)
+def select_action_opportunity(
+    workspace_id: int,
+    opportunity_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    opportunity = scoped_or_404(db, GeoActionOpportunity, workspace_id, opportunity_id)
+    if opportunity.status in {"selected", "completed", "dismissed"}:
+        raise HTTPException(status_code=409, detail="Opportunity is no longer selectable")
+    existing = db.scalar(
+        select(GeoOptimizationAction).where(GeoOptimizationAction.opportunity_id == opportunity.id)
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Opportunity already has an action")
+    links = list(
+        db.scalars(
+            select(GeoActionOpportunityEvidence)
+            .where(GeoActionOpportunityEvidence.opportunity_id == opportunity.id)
+            .order_by(GeoActionOpportunityEvidence.id.asc())
+        )
+    )
+    question_plan_id = opportunity.scope_snapshot.get("question_plan_id")
+    action = GeoOptimizationAction(
+        workspace_id=workspace_id,
+        opportunity_id=opportunity.id,
+        question_plan_id=question_plan_id,
+        source_evidence_id=links[0].evidence_id if links else None,
+        title=opportunity.title,
+        rationale=opportunity.summary,
+        hypothesis="补齐可引用、可复测的品牌答案后，目标问题中的品牌出现率应提升。",
+        priority=opportunity.priority_label,
+        status="proposed",
+        stage="selected",
+        baseline_snapshot=opportunity.scope_snapshot,
+        selected_scope={
+            "opportunity_id": opportunity.id,
+            "evidence_ids": [link.evidence_id for link in links],
+            "question_plan_id": question_plan_id,
+        },
+        selected_at=datetime.now(timezone.utc),
+    )
+    opportunity.status = "selected"
+    db.add(action)
+    db.flush()
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="opportunity_selected",
+            from_stage=None,
+            to_stage="selected",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"opportunity_id": opportunity.id, "evidence_ids": action.selected_scope["evidence_ids"]},
+        )
+    )
+    db.commit()
+    db.refresh(action)
+    return action
+
+
 @router.post("/workspaces/{workspace_id}/actions", response_model=ActionRead, status_code=201)
 def create_action(
     workspace_id: int,
@@ -3246,6 +3422,572 @@ def create_action(
     db.commit()
     db.refresh(action)
     return action
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/stage",
+    response_model=ActionRead,
+)
+def update_action_stage(
+    workspace_id: int,
+    action_id: int,
+    payload: ActionStageUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    if payload.stage == "closed" and not db.scalar(
+        select(GeoReobservation).where(GeoReobservation.action_id == action.id)
+    ):
+        raise HTTPException(status_code=422, detail="A re-observation is required before closing an action")
+    previous = action.stage
+    action.stage = payload.stage
+    if payload.stage in {"brief_ready", "generating", "draft_ready", "reviewing", "sync_requested", "awaiting_readback", "blocked"}:
+        action.status = "in_progress"
+    elif payload.stage == "verified":
+        action.status = "verified"
+    elif payload.stage == "closed":
+        action.status = "closed"
+        action.completed_at = datetime.now(timezone.utc)
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="stage_changed",
+            from_stage=previous,
+            to_stage=payload.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"note": payload.note} if payload.note else {},
+        )
+    )
+    db.commit()
+    db.refresh(action)
+    return action
+
+
+@router.get(
+    "/workspaces/{workspace_id}/actions/{action_id}/events",
+    response_model=list[ActionEventRead],
+)
+def list_action_events(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    return list(
+        db.scalars(
+            select(GeoActionEvent)
+            .where(GeoActionEvent.workspace_id == workspace_id, GeoActionEvent.action_id == action_id)
+            .order_by(GeoActionEvent.id.asc())
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/briefs",
+    response_model=ContentBriefRead,
+    status_code=201,
+)
+def create_content_brief(
+    workspace_id: int,
+    action_id: int,
+    payload: ContentBriefCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    question = db.get(GeoQuestionPlan, action.question_plan_id) if action.question_plan_id else None
+    links = []
+    if action.opportunity_id:
+        links = list(
+            db.scalars(
+                select(GeoActionOpportunityEvidence)
+                .where(GeoActionOpportunityEvidence.opportunity_id == action.opportunity_id)
+                .order_by(GeoActionOpportunityEvidence.id.asc())
+            )
+        )
+    if action.source_evidence_id and not any(link.evidence_id == action.source_evidence_id for link in links):
+        evidence = scoped_or_404(db, GeoEvidence, workspace_id, action.source_evidence_id)
+        links.append(
+            GeoActionOpportunityEvidence(
+                evidence_id=evidence.id,
+                question_plan_id=evidence.question_plan_id,
+                model_key=evidence.model_key,
+                signal_type="action_source",
+                signal_value={},
+                evidence_hash=evidence.answer_hash,
+                source_url=next((_source.get("url") for _source in (evidence.source_items or []) if isinstance(_source, dict) and str(_source.get("url", "")).startswith(("http://", "https://"))), None),
+            )
+        )
+    evidence_ids = [link.evidence_id for link in links if getattr(link, "evidence_id", None)]
+    source_urls = list(dict.fromkeys(link.source_url for link in links if getattr(link, "source_url", None)))
+    audience = payload.audience or ({"ciso": "安全与技术决策者", "procurement": "采购与业务负责人"}.get(question.role, "技术负责人") if question else "技术负责人")
+    intent = payload.intent or (question.journey_stage if question else "consideration")
+    required_sections = payload.required_sections or ["问题背景", "可验证的解决方案", "证据与引用", "下一步行动"]
+    required_claims = [f"直接回答问题：{question.question_text}"] if question else [action.title]
+    required_claims.append(f"所有关键事实均需引用已采集来源（{len(source_urls)} 个）")
+    input_fingerprint = sha256(
+        json.dumps(
+            {"action_id": action.id, "audience": audience, "intent": intent, "sections": required_sections, "evidence_ids": evidence_ids, "source_urls": source_urls},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    existing = db.scalar(
+        select(GeoContentBrief).where(
+            GeoContentBrief.workspace_id == workspace_id,
+            GeoContentBrief.input_fingerprint == input_fingerprint,
+        )
+    )
+    if existing:
+        return existing
+    brief = GeoContentBrief(
+        workspace_id=workspace_id,
+        action_id=action.id,
+        question_plan_id=question.id if question else None,
+        audience=audience,
+        intent=intent,
+        asset_type=payload.asset_type,
+        required_sections=required_sections,
+        brand_fact_ids=payload.brand_fact_ids,
+        evidence_ids=evidence_ids,
+        source_urls=source_urls,
+        required_claims=required_claims,
+        forbidden_claims=payload.forbidden_claims,
+        open_questions=payload.open_questions,
+        input_fingerprint=input_fingerprint,
+        status="ready" if evidence_ids and source_urls else "blocked",
+    )
+    action.stage = "brief_ready" if brief.status == "ready" else "blocked"
+    action.status = "in_progress"
+    action.blocked_reason = None if brief.status == "ready" else "No real source-backed evidence is attached"
+    db.add(brief)
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="brief_created",
+            from_stage="selected",
+            to_stage=action.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"brief_status": brief.status, "evidence_ids": evidence_ids, "source_count": len(source_urls)},
+        )
+    )
+    db.commit()
+    db.refresh(brief)
+    return brief
+
+
+@router.get(
+    "/workspaces/{workspace_id}/actions/{action_id}/briefs",
+    response_model=list[ContentBriefRead],
+)
+def list_content_briefs(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    return list(
+        db.scalars(
+            select(GeoContentBrief)
+            .where(GeoContentBrief.workspace_id == workspace_id, GeoContentBrief.action_id == action_id)
+            .order_by(GeoContentBrief.id.desc())
+        )
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/actions/{action_id}/briefs/{brief_id}/assets",
+    response_model=list[ContentAssetRead],
+)
+def list_content_assets(
+    workspace_id: int,
+    action_id: int,
+    brief_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, brief_id)
+    if brief.action_id != action_id:
+        raise HTTPException(status_code=404, detail="Content brief not found")
+    return list(
+        db.scalars(
+            select(GeoContentAsset)
+            .where(GeoContentAsset.workspace_id == workspace_id, GeoContentAsset.brief_id == brief_id)
+            .order_by(GeoContentAsset.version.desc(), GeoContentAsset.id.desc())
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/briefs/{brief_id}/assets/{asset_id}/variants",
+    response_model=list[PlatformVariantRead],
+    status_code=201,
+)
+def create_platform_variants(
+    workspace_id: int,
+    action_id: int,
+    brief_id: int,
+    asset_id: int,
+    payload: PlatformVariantCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, brief_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, asset_id)
+    if brief.action_id != action.id or asset.brief_id != brief.id:
+        raise HTTPException(status_code=404, detail="Content asset not found")
+    variants: list[GeoPlatformVariant] = []
+    for platform_key in dict.fromkeys(payload.platform_keys):
+        existing = db.scalar(
+            select(GeoPlatformVariant).where(
+                GeoPlatformVariant.content_asset_id == asset.id,
+                GeoPlatformVariant.platform_key == platform_key,
+                GeoPlatformVariant.version == 1,
+            )
+        )
+        if existing:
+            variants.append(existing)
+            continue
+        variant = adapt_asset(asset, workspace_id=workspace_id, platform_key=platform_key)
+        db.add(variant)
+        db.flush()
+        variants.append(variant)
+    previous_stage = action.stage
+    action.stage = "reviewing"
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="platform_variants_created",
+            from_stage=previous_stage,
+            to_stage="reviewing",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"asset_id": asset.id, "platform_keys": list(dict.fromkeys(payload.platform_keys))},
+        )
+    )
+    db.commit()
+    return variants
+
+
+def _distribution_read(db: Session, run: GeoDistributionRun) -> dict:
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id.asc())
+        )
+    )
+    return {"id": run.id, "targets": targets, **run.__dict__}
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs",
+    response_model=DistributionRunRead,
+    status_code=201,
+)
+def create_distribution_run(
+    workspace_id: int,
+    payload: DistributionRunCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
+    action = db.scalar(
+        select(GeoOptimizationAction)
+        .join(GeoContentBrief, GeoContentBrief.action_id == GeoOptimizationAction.id)
+        .where(GeoContentBrief.id == asset.brief_id, GeoOptimizationAction.workspace_id == workspace_id)
+    )
+    existing = db.scalar(
+        select(GeoDistributionRun).where(
+            GeoDistributionRun.workspace_id == workspace_id,
+            GeoDistributionRun.idempotency_key == payload.idempotency_key,
+        )
+    )
+    if existing:
+        return _distribution_read(db, existing)
+    variants = {
+        variant.platform_key: variant
+        for variant in db.scalars(
+            select(GeoPlatformVariant).where(
+                GeoPlatformVariant.content_asset_id == asset.id,
+                GeoPlatformVariant.platform_key.in_(payload.platform_keys),
+                GeoPlatformVariant.version == 1,
+            )
+        )
+    }
+    run = GeoDistributionRun(
+        workspace_id=workspace_id,
+        action_id=action.id if action else None,
+        content_asset_id=asset.id,
+        requested_platforms=list(dict.fromkeys(payload.platform_keys)),
+        stage="awaiting_adapter",
+        idempotency_key=payload.idempotency_key,
+        status="blocked",
+        requested_by_user_id=user.id,
+    )
+    db.add(run)
+    db.flush()
+    for platform_key in dict.fromkeys(payload.platform_keys):
+        variant = variants.get(platform_key)
+        db.add(
+            GeoDistributionTarget(
+                distribution_run_id=run.id,
+                platform_variant_id=variant.id if variant else None,
+                platform_key=platform_key,
+                request_status="not_started",
+                draft_readback_status="not_started",
+                waiting_human_reason="文章同步助手 MCP 适配器尚未配置；未发送外部请求。",
+                blocked_reason="sync_adapter_not_configured",
+            )
+        )
+    if action:
+        previous_stage = action.stage
+        action.stage = "blocked"
+        action.blocked_reason = "sync_adapter_not_configured"
+        db.add(
+            GeoActionEvent(
+                workspace_id=workspace_id,
+                action_id=action.id,
+                event_type="distribution_blocked",
+                from_stage=previous_stage,
+                to_stage="blocked",
+                actor_type="user",
+                actor_user_id=user.id,
+                detail={"distribution_run_id": run.id, "reason": "sync_adapter_not_configured"},
+            )
+        )
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+def _nested_value(payload: object, keys: set[str]) -> str | None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in keys and isinstance(value, str) and value.strip():
+                return value.strip()
+            found = _nested_value(value, keys)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _nested_value(value, keys)
+            if found:
+                return found
+    return None
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/request",
+    response_model=DistributionRunRead,
+)
+def request_distribution_run(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    settings = get_settings()
+    adapter = get_article_sync_adapter(
+        endpoint=settings.article_sync_mcp_url,
+        token=settings.article_sync_mcp_token,
+    )
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id.asc())
+        )
+    )
+    accepted = 0
+    for target in targets:
+        variant = db.get(GeoPlatformVariant, target.platform_variant_id) if target.platform_variant_id else None
+        if variant is None:
+            target.request_status = "blocked"
+            target.blocked_reason = "platform_variant_missing"
+            continue
+        try:
+            _result = adapter.request_draft(
+                platform_key=target.platform_key,
+                title=variant.title,
+                body_markdown=variant.body_markdown,
+            )
+        except RuntimeError as exc:
+            target.request_status = "blocked"
+            target.blocked_reason = str(exc)[:200]
+            target.last_error_code = "mcp_request_failed"
+            continue
+        target.request_status = "mcp_request_accepted"
+        target.draft_readback_status = "pending"
+        target.waiting_human_reason = "MCP 已接受请求；必须读回真实草稿对象后才算保存。"
+        accepted += 1
+        target.response_artifact_uri = f"mcp://article-sync/request/{run.id}/{target.id}"
+    run.stage = "awaiting_readback" if accepted else "blocked"
+    run.status = "pending" if accepted else "blocked"
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=run.action_id,
+            event_type="distribution_mcp_requested",
+            from_stage="blocked",
+            to_stage="awaiting_readback" if accepted else "blocked",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"distribution_run_id": run.id, "accepted_target_count": accepted},
+        )
+    )
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/targets/{target_id}/readback",
+    response_model=DistributionRunRead,
+)
+def readback_distribution_target(
+    workspace_id: int,
+    run_id: int,
+    target_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    target = db.get(GeoDistributionTarget, target_id)
+    if target is None or target.distribution_run_id != run.id:
+        raise HTTPException(status_code=404, detail="Distribution target not found")
+    settings = get_settings()
+    adapter = get_article_sync_adapter(
+        endpoint=settings.article_sync_mcp_url,
+        token=settings.article_sync_mcp_token,
+    )
+    try:
+        result = adapter.read_draft(platform_key=target.platform_key, candidate_url=target.candidate_draft_url)
+    except RuntimeError as exc:
+        target.draft_readback_status = "blocked"
+        target.blocked_reason = str(exc)[:200]
+        target.last_error_code = "mcp_readback_failed"
+    else:
+        target.draft_readback_status = "readback_received"
+        target.readback_artifact_uri = f"mcp://article-sync/readback/{run.id}/{target.id}"
+        target.draft_url = _nested_value(result, {"draft_url", "url", "draftUrl"})
+        target.external_draft_id = _nested_value(result, {"external_draft_id", "draft_id", "id"})
+        if target.draft_url or target.external_draft_id:
+            target.draft_readback_status = "draft_saved"
+            target.request_status = "draft_saved"
+            target.waiting_human_reason = None
+    all_saved = bool(
+        targets := list(
+            db.scalars(
+                select(GeoDistributionTarget).where(GeoDistributionTarget.distribution_run_id == run.id)
+            )
+        )
+    ) and all(item.draft_readback_status == "draft_saved" for item in targets)
+    run.stage = "draft_saved" if all_saved else "awaiting_readback"
+    run.status = "draft_saved" if all_saved else "pending"
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/briefs/{brief_id}/generate",
+    response_model=QueueJobRead,
+    status_code=202,
+)
+def enqueue_content_generation(
+    workspace_id: int,
+    action_id: int,
+    brief_id: int,
+    payload: ContentGenerateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, brief_id)
+    if brief.action_id != action_id:
+        raise HTTPException(status_code=404, detail="Content brief not found")
+    provider = db.get(LLMProvider, payload.provider_id)
+    if provider is None:
+        raise HTTPException(status_code=404, detail="LLM provider not found")
+    diagnostic = diagnose_provider(provider)
+    if not diagnostic.get("auth_ready"):
+        raise HTTPException(status_code=400, detail="请先配置并验证内容生成 Provider 的 API Key")
+    existing = next(
+        (
+            job
+            for job in db.scalars(
+                select(QueueJob)
+                .where(QueueJob.job_type == "geo_content.generate", QueueJob.status.in_(["pending", "running"]))
+                .order_by(QueueJob.id.desc())
+            )
+            if int((job.payload_json or {}).get("brief_id") or 0) == brief_id
+            and str((job.payload_json or {}).get("platform_key") or "official_site") == payload.platform_key
+        ),
+        None,
+    )
+    if existing:
+        return existing
+    previous_stage = action.stage
+    action.stage = "generating"
+    action.status = "in_progress"
+    action.blocked_reason = None
+    job = QueueJob(
+        job_type="geo_content.generate",
+        status="pending",
+        priority=15,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "action_id": action_id,
+            "brief_id": brief_id,
+            "provider_id": provider.id,
+            "platform_key": payload.platform_key,
+            "actor_user_id": user.id,
+        },
+    )
+    db.add(job)
+    db.flush()
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            job_id=job.id,
+            event_type="content_generation_queued",
+            from_stage=previous_stage,
+            to_stage="generating",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={"brief_id": brief_id, "provider_id": provider.id, "platform_key": payload.platform_key},
+        )
+    )
+    db.commit()
+    db.refresh(job)
+    return job
 
 
 @router.get("/workspaces/{workspace_id}/actions", response_model=list[ActionRead])

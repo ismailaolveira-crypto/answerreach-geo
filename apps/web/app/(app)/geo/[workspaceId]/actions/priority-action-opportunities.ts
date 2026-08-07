@@ -1,7 +1,8 @@
-import type { CleanroomAction, CleanroomEvidence, CleanroomQuestion } from "@/lib/cleanroom-v1-api";
+import type { CleanroomAction, CleanroomActionOpportunity, CleanroomEvidence, CleanroomQuestion } from "@/lib/cleanroom-v1-api";
 
 export type PriorityActionOpportunity = {
 	id: string;
+	backendId?: number;
 	questionId: number;
 	questionText: string;
 	evidenceIds: number[];
@@ -14,6 +15,35 @@ export type PriorityActionOpportunity = {
 	proof: string;
 	existingAction?: CleanroomAction;
 };
+
+/** Convert persisted backend opportunities to the existing workbench view model. */
+export function mapBackendPriorityActionOpportunities(
+	rows: CleanroomActionOpportunity[],
+	actions: CleanroomAction[],
+): PriorityActionOpportunity[] {
+	const actionByOpportunity = new Map(actions.filter((action) => action.opportunity_id).map((action) => [action.opportunity_id, action]));
+	return rows.map((row) => {
+		const questionId = Number(row.scope_snapshot.question_plan_id ?? 0);
+		const questionText = String(row.scope_snapshot.question ?? row.title);
+		const evidenceIds = row.evidence.map((item) => item.evidence_id);
+		const type = row.opportunity_type === "competitor_gap" ? "competitor" : row.opportunity_type === "citation_gap" ? "citation" : "visibility";
+		return {
+			id: String(row.id),
+			backendId: row.id,
+			questionId,
+			questionText,
+			evidenceIds,
+			modelLabels: [...new Set(row.evidence.map((item) => item.model_key))],
+			type,
+			priority: row.priority_label,
+			title: row.title,
+			summary: row.summary,
+			recommendedAsset: row.recommended_asset_type,
+			proof: `依据 ${evidenceIds.length} 条真实证据 · 规则 ${row.rule_version}`,
+			existingAction: actionByOpportunity.get(row.id),
+		};
+	});
+}
 
 const brandWins = new Set(["shortlisted", "recommended", "cited"]);
 

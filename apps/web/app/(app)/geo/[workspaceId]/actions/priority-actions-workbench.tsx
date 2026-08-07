@@ -12,6 +12,7 @@ type Props = {
 	actions: CleanroomAction[];
 	createAction: (formData: FormData) => Promise<void>;
 	updateActionStatus: (formData: FormData) => Promise<void>;
+	discoverActions: () => Promise<void>;
 };
 
 const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
@@ -76,7 +77,7 @@ function ActionStage({ index, label, state, children }: { index: number; label: 
 	</li>;
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, createAction, updateActionStatus }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, createAction, updateActionStatus, discoverActions }: Props) {
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
 	const [selectedModel, setSelectedModel] = useState("all");
 	const [selectedQuestion, setSelectedQuestion] = useState("all");
@@ -99,6 +100,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		<section className="pa-topline">
 			<header className="pa-hero">
 				<div><h1>优先行动</h1><span>从真实观测缺口出发，补齐信源、生成内容、写入草稿，并在下一轮验证变化。</span>
+					<form action={discoverActions} className="pa-discover-form"><button type="submit">从真实观测刷新机会</button></form>
 					<div className="pa-filters" aria-label="筛选行动机会">
 						<label><Icon name="calendar" /><select defaultValue="current" disabled><option value="current">当前批次证据</option></select><Icon name="chevron" /></label>
 						<label><Icon name="filter" /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}><option value="all">全部模型</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</select><Icon name="chevron" /></label>
@@ -131,7 +133,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 				<aside className={`pa-current-action ${isTimelineCollapsed ? "is-collapsed" : ""}`}>
 					<header><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)}>{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
 					{!isTimelineCollapsed && selected ? <ol>
-						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={`下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} /><input type="hidden" name="question_plan_id" value={selected.questionId} /><input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} /><button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">已关联当前问题的真实证据与行动记录。</p>}</ActionStage>
+						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={`下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} /><input type="hidden" name="question_plan_id" value={selected.questionId} /><input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} />{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">已关联当前问题的真实证据与行动记录。</p>}</ActionStage>
 						<ActionStage index={2} label="生成内容" state={stage === 2 ? "active" : stage > 2 ? "done" : "idle"}>{stage === 1 && selected.existingAction ? <form className="pa-stage-card" action={(formData) => startSaving(() => updateActionStatus(formData))}><b>关联证据</b><p>批次：当前归档　问题：{selected.questionText}<br />模型：{selected.modelLabels.slice(0, 3).join("、")}</p><input type="hidden" name="action_id" value={selected.existingAction.id} /><button disabled={isSaving} type="submit"><Icon name="spark" />{isSaving ? "正在准备…" : "生成真实内容"}</button></form> : stage >= 2 ? <p className="pa-stage-note">行动已开始；内容资产接入后会在这里显示草稿。</p> : null}</ActionStage>
 						<ActionStage index={3} label="人工审核" state="idle"><p className="pa-stage-note">内容审核将在已接入内容资产台账后开放。</p></ActionStage>
 						<ActionStage index={4} label="写入平台草稿" state="idle"><p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p></ActionStage>

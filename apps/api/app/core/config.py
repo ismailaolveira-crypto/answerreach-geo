@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     qwen_api_key: str | None = None
     dashscope_api_key: str | None = None
     xiaoma_api_key: str | None = None
+    article_sync_mcp_url: str | None = None
+    article_sync_mcp_token: str | None = None
     auth_secret: str = "dev-secret-change-me"
     auto_create_tables: bool = True
 
