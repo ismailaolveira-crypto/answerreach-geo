@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>春秋元泉 GEO · Codex Agent 优先行动原型</title>
+  <style>
+    :root {
+      --bg:#f4f7fb; --surface:#fff; --text:#162033; --muted:#718096; --line:#dde6f2;
+      --blue:#246bfe; --blue-soft:#edf4ff; --green:#1d9e69; --green-soft:#eaf8f1;
+      --amber:#d97706; --amber-soft:#fff7e8; --red:#d74a4a; --red-soft:#fff0f0;
+      --shadow:0 18px 46px rgba(38,69,112,.10);
+    }
+    * { box-sizing:border-box; }
+    html { background:var(--bg); }
+    body { margin:0; color:var(--text); background:var(--bg); font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","PingFang SC","Helvetica Neue",sans-serif; font-size:14px; }
+    button,select { font:inherit; }
+    button { cursor:pointer; }
+    button:focus-visible,select:focus-visible,[tabindex]:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
+    .shell { min-height:100vh; display:grid; grid-template-columns:214px minmax(0,1fr); }
+    .sidebar { position:sticky; top:0; height:100vh; padding:20px 16px; background:rgba(255,255,255,.92); border-right:1px solid var(--line); display:flex; flex-direction:column; }
+    .brand { display:flex; align-items:center; gap:11px; padding:4px 8px 22px; }
+    .brand-mark { width:36px; height:36px; border-radius:12px; display:grid; place-items:center; background:var(--blue); box-shadow:0 8px 20px rgba(36,107,254,.28); }
+    .brand-mark::before { content:""; width:13px; height:13px; border:2px solid #fff; transform:rotate(45deg); }
+    .brand strong { font-size:16px; letter-spacing:-.2px; }
+    .brand span { display:block; color:var(--muted); font-size:11px; margin-top:2px; }
+    nav { display:grid; gap:5px; }
+    .nav-item { min-height:44px; display:flex; align-items:center; gap:12px; color:#64748b; text-decoration:none; border-radius:12px; padding:0 12px; font-weight:600; }
+    .nav-item svg { width:18px; height:18px; stroke:currentColor; fill:none; stroke-width:1.8; }
+    .nav-item.active { color:var(--blue); background:var(--blue-soft); }
+    .sidebar-foot { margin-top:auto; border-top:1px solid var(--line); padding-top:14px; }
+    .runtime-mini { display:flex; align-items:center; gap:9px; color:#5f6f85; padding:10px 8px; }
+    .dot { width:8px; height:8px; border-radius:50%; background:var(--green); box-shadow:0 0 0 4px var(--green-soft); }
+    main { padding:30px 34px 42px; min-width:0; }
+    .prototype-note { display:flex; justify-content:space-between; gap:16px; align-items:center; color:#5e6e84; background:#eef3f9; border:1px solid #dbe5f1; border-radius:12px; padding:9px 13px; margin-bottom:20px; font-size:12px; }
+    .page-head { display:flex; justify-content:space-between; align-items:flex-start; gap:22px; }
+    .eyebrow { margin:0 0 7px; color:var(--blue); font-size:12px; font-weight:800; letter-spacing:.08em; }
+    h1 { margin:0; font-size:31px; line-height:1.18; letter-spacing:-1.2px; }
+    .subhead { margin:8px 0 0; color:var(--muted); line-height:1.6; }
+    .runtime { display:flex; align-items:center; gap:10px; min-height:44px; padding:7px 12px 7px 8px; border:1px solid var(--line); border-radius:14px; background:var(--surface); color:var(--text); }
+    .runtime .logo { width:30px; height:30px; display:grid; place-items:center; background:#111827; border-radius:9px; }
+    .runtime img { width:17px; height:17px; display:block; }
+    .runtime b { display:block; font-size:13px; }
+    .runtime small { color:var(--muted); font-size:11px; }
+    .filters { margin-top:22px; display:flex; gap:10px; flex-wrap:wrap; }
+    .select-wrap { position:relative; }
+    .select-wrap select { appearance:none; min-width:176px; height:44px; padding:0 40px 0 14px; border:1px solid #d5e0ee; border-radius:12px; background:#fff; color:#41516a; font-weight:600; }
+    .select-wrap::after { content:"\2304"; position:absolute; right:14px; top:9px; color:#8493a8; pointer-events:none; }
+    .metrics { margin-top:18px; display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); border:1px solid var(--line); border-radius:18px; background:var(--surface); overflow:hidden; }
+    .metric { min-height:82px; padding:16px 18px; border-right:1px solid var(--line); display:flex; gap:13px; align-items:center; }
+    .metric:last-child { border-right:0; }
+    .metric-icon { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; font-weight:800; }
+    .metric-icon.orange { color:var(--amber); background:var(--amber-soft); }
+    .metric-icon.red { color:var(--red); background:var(--red-soft); }
+    .metric-icon.blue { color:var(--blue); background:var(--blue-soft); }
+    .metric-icon.green { color:var(--green); background:var(--green-soft); }
+    .metric small { color:var(--muted); }
+    .metric strong { display:block; font-size:24px; margin-top:2px; letter-spacing:-.5px; }
+    .work-grid { display:grid; grid-template-columns:minmax(0,1.36fr) minmax(360px,.92fr); gap:16px; margin-top:16px; align-items:start; }
+    .panel { background:var(--surface); border:1px solid var(--line); border-radius:20px; overflow:hidden; }
+    .panel-head { min-height:62px; padding:0 20px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); }
+    .panel-head h2 { font-size:17px; margin:0; letter-spacing:-.2px; }
+    .panel-head span { color:var(--muted); font-size:12px; }
+    .opportunities { padding:10px; display:grid; gap:8px; }
+    .opportunity { width:100%; text-align:left; display:grid; grid-template-columns:minmax(0,1fr) 184px 122px; gap:16px; align-items:center; padding:16px; min-height:132px; border:1px solid transparent; border-radius:15px; background:#fff; color:var(--text); }
+    .opportunity:hover { background:#fafcff; }
+    .opportunity.active { border-color:#8eb6ff; background:#f9fbff; box-shadow:0 0 0 2px #edf4ff inset; }
+    .opportunity + .opportunity { border-top-color:#edf1f6; border-top-left-radius:0; border-top-right-radius:0; }
+    .priority { display:inline-flex; align-items:center; min-height:24px; padding:0 9px; border-radius:8px; color:#c45d19; background:#fff1e8; font-size:11px; font-weight:800; }
+    .opportunity h3 { margin:9px 0 6px; font-size:16px; line-height:1.35; }
+    .opportunity p { margin:0; color:var(--muted); font-size:12px; line-height:1.55; }
+    .models { display:flex; gap:7px; margin-top:11px; flex-wrap:wrap; }
+    .model-badge,.platform-badge { display:inline-flex; align-items:center; gap:6px; min-height:28px; padding:0 8px; border:1px solid #dce5f0; border-radius:9px; background:#fff; color:#52627a; font-size:11px; font-weight:700; }
+    .model-badge img,.platform-badge img { width:15px; height:15px; object-fit:contain; }
+    .gap-block small { display:block; color:#8a99ad; margin-bottom:8px; }
+    .gap-tags { display:flex; flex-wrap:wrap; gap:6px; }
+    .gap-tags span { background:#f1f5f9; border:1px solid #e0e8f1; border-radius:7px; padding:5px 7px; color:#65758c; font-size:11px; }
+    .evidence { text-align:right; }
+    .evidence-state { display:inline-flex; align-items:center; gap:6px; color:var(--green); background:var(--green-soft); border-radius:999px; padding:6px 9px; font-size:11px; font-weight:800; }
+    .evidence-link { display:block; margin-top:13px; color:var(--blue); font-size:12px; font-weight:800; }
+    .action-body { padding:18px 20px 20px; }
+    .action-summary { padding-bottom:17px; border-bottom:1px solid var(--line); }
+    .action-summary small { color:var(--blue); font-weight:800; }
+    .action-summary h3 { margin:7px 0 7px; font-size:17px; line-height:1.35; }
+    .action-summary p { margin:0; color:var(--muted); line-height:1.55; font-size:12px; }
+    .target-platforms { margin-top:11px; display:flex; gap:7px; flex-wrap:wrap; }
+    .run-card { margin-top:16px; border:1px solid #cfe0fb; border-radius:16px; overflow:hidden; }
+    .run-head { display:flex; justify-content:space-between; gap:12px; padding:14px; background:#f8fbff; border-bottom:1px solid #dfeafb; }
+    .run-title { display:flex; align-items:center; gap:10px; }
+    .agent-logo { width:34px; height:34px; background:#111827; border-radius:10px; display:grid; place-items:center; }
+    .agent-logo img { width:19px; height:19px; }
+    .run-title b { display:block; font-size:13px; }
+    .run-title small { color:var(--muted); font-size:11px; }
+    .run-percent { text-align:right; }
+    .run-percent b { color:var(--blue); font-size:18px; }
+    .run-percent small { display:block; color:var(--muted); font-size:10px; }
+    .progress { height:4px; background:#e5edf8; }
+    .progress i { display:block; width:50%; height:100%; background:var(--blue); }
+    .steps { list-style:none; padding:8px 14px 10px; margin:0; }
+    .step { position:relative; display:grid; grid-template-columns:22px minmax(0,1fr) auto; gap:9px; min-height:47px; padding:8px 0; align-items:start; }
+    .step:not(:last-child)::after { content:""; position:absolute; left:10px; top:31px; bottom:-6px; border-left:1px dashed #cbd8ea; }
+    .step-index { width:22px; height:22px; border-radius:50%; display:grid; place-items:center; background:#edf1f6; color:#7b899c; font-size:10px; font-weight:800; z-index:1; }
+    .step.done .step-index { color:var(--green); background:var(--green-soft); }
+    .step.running .step-index { color:#fff; background:var(--blue); }
+    .step b { display:block; font-size:12px; line-height:1.4; }
+    .step p { margin:3px 0 0; color:var(--muted); font-size:11px; line-height:1.4; }
+    .step-state { font-size:10px; color:#8b99ac; padding-top:3px; white-space:nowrap; }
+    .step.done .step-state { color:var(--green); }
+    .step.running .step-state { color:var(--blue); font-weight:800; }
+    .run-actions { display:flex; gap:8px; padding:0 14px 14px; }
+    .primary,.secondary,.ghost { min-height:42px; border-radius:11px; padding:0 14px; border:1px solid transparent; font-weight:750; }
+    .primary { background:var(--blue); color:white; flex:1; }
+    .secondary { background:white; color:#42526a; border-color:#d7e1ee; }
+    .ghost { background:transparent; color:var(--red); }
+    .pipeline { margin-top:16px; padding:20px; }
+    .pipeline-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:15px; }
+    .pipeline-head h2 { margin:0; font-size:17px; }
+    .pipeline-head p { margin:5px 0 0; color:var(--muted); font-size:12px; }
+    .pipeline-head button { min-height:38px; padding:0 12px; border:1px solid #d5e0ee; border-radius:10px; background:#fff; color:#516078; font-weight:700; }
+    .pipeline-grid { display:grid; grid-template-columns:1.18fr repeat(5,1fr); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+    .pipe { min-height:154px; padding:13px; border-right:1px solid var(--line); background:#fbfcfe; }
+    .pipe:last-child { border-right:0; }
+    .pipe.active { background:#f8fbff; box-shadow:inset 0 3px 0 var(--blue); }
+    .pipe-title { display:flex; justify-content:space-between; gap:8px; align-items:center; color:#69788c; font-size:11px; font-weight:800; }
+    .pipe-title em { min-width:20px; height:20px; display:grid; place-items:center; border-radius:999px; background:#e9eef5; color:#64748b; font-style:normal; }
+    .pipe.active .pipe-title { color:var(--blue); }
+    .pipe.active .pipe-title em { color:white; background:var(--blue); }
+    .asset { margin-top:12px; padding:11px; background:white; border:1px solid #dce5f0; border-radius:11px; }
+    .asset strong { display:block; font-size:12px; line-height:1.45; }
+    .asset small { display:block; color:var(--muted); margin-top:6px; line-height:1.45; }
+    .asset-progress { height:4px; border-radius:99px; background:#e6edf7; margin-top:10px; overflow:hidden; }
+    .asset-progress i { display:block; height:100%; width:50%; background:var(--blue); }
+    .empty { min-height:105px; display:grid; place-items:center; text-align:center; color:#9aa6b6; font-size:11px; line-height:1.5; padding:12px; }
+    .platform-list { display:grid; gap:8px; margin-top:12px; }
+    .platform-row { display:flex; align-items:center; justify-content:space-between; gap:7px; font-size:11px; }
+    .platform-row span { display:flex; align-items:center; gap:6px; color:#536278; }
+    .platform-row img { width:16px; height:16px; }
+    .status-dot { width:7px!important; height:7px!important; border-radius:50%; background:var(--green); }
+    .status-dot.wait { background:var(--amber); }
+    .pipeline-foot { display:flex; justify-content:space-between; align-items:center; gap:16px; border-top:1px solid var(--line); margin:17px -20px -20px; padding:14px 20px; background:#fafcff; }
+    .safety { color:#66768d; font-size:12px; }
+    .safety b { color:var(--text); }
+    .pipeline-actions { display:flex; gap:8px; }
+    .pipeline-actions button { min-height:42px; border-radius:11px; padding:0 15px; font-weight:750; }
+    .preview { background:#fff; color:#4b5a70; border:1px solid #d6e0ec; }
+    .sync { color:#fff; background:var(--blue); border:1px solid var(--blue); }
+    .toast { position:fixed; right:24px; bottom:24px; max-width:360px; padding:13px 15px; color:#fff; background:#182235; border-radius:12px; box-shadow:var(--shadow); opacity:0; transform:translateY(8px); pointer-events:none; transition:.2s ease; }
+    .toast.show { opacity:1; transform:none; }
+    @media (max-width:1180px) {
+      .shell { grid-template-columns:76px minmax(0,1fr); }
+      .sidebar { padding:20px 10px; }
+      .brand { padding:4px 10px 22px; }
+      .brand strong,.brand span,.nav-item span,.runtime-mini span { display:none; }
+      .nav-item { justify-content:center; padding:0; }
+      .work-grid { grid-template-columns:1fr; }
+    }
+    @media (max-width:820px) {
+      .shell { display:block; }
+      .sidebar { display:none; }
+      main { padding:20px 14px 32px; }
+      .page-head,.pipeline-head,.pipeline-foot { flex-direction:column; }
+      .metrics { grid-template-columns:1fr 1fr; }
+      .metric:nth-child(2) { border-right:0; }
+      .metric:nth-child(-n+2) { border-bottom:1px solid var(--line); }
+      .opportunity { grid-template-columns:1fr; }
+      .evidence { text-align:left; }
+      .pipeline-grid { grid-template-columns:1fr; }
+      .pipe { border-right:0; border-bottom:1px solid var(--line); }
+    }
+    @media (prefers-reduced-motion:reduce) { * { transition:none!important; scroll-behavior:auto!important; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar" aria-label="主导航">
+    <div class="brand"><div class="brand-mark" aria-hidden="true"></div><div><strong>春秋元泉 GEO</strong><span>智能观测与行动</span></div></div>
+    <nav>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><path d="M3 11 12 4l9 7v9H3z"/><path d="M9 20v-6h6v6"/></svg><span>决策地图</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2"/></svg><span>信源地图</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><path d="M4 7h15M4 17h15M8 4 4 7l4 3m8 4 4 3-4 3"/></svg><span>竞品对比</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.3 2.3 0 1 1 3.3 2.1c-.8.4-1.1 1-1.1 1.9m0 3h.01"/></svg><span>问题库</span></a>
+      <a class="nav-item active" href="#"><svg viewBox="0 0 24 24"><path d="M5 19 19 5M10 5h9v9"/></svg><span>优先行动</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"/></svg><span>运营状态</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><path d="m12 3 9 9-9 9-9-9z"/></svg><span>模型与渠道</span></a>
+      <a class="nav-item" href="#"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1z"/></svg><span>设置</span></a>
+    </nav>
+    <div class="sidebar-foot"><div class="runtime-mini"><i class="dot"></i><span>Codex 运行正常</span></div></div>
+  </aside>
+
+  <main>
+    <div class="prototype-note"><span><b>实施原型</b> · 运行中状态示例，不代表后端能力已上线</span><span>1440px 桌面基准</span></div>
+    <header class="page-head">
+      <div><p class="eyebrow">GEO ACTION WORKBENCH</p><h1>优先行动</h1><p class="subhead">从真实观测缺口出发，让 Codex 查规则、核对品牌事实并生成可审核的平台稿。</p></div>
+      <button class="runtime" id="runtimeButton" type="button"><span class="logo"><img src="assets/openai.svg" alt="OpenAI" /></span><span><b>Codex 已连接</b><small>gpt-5.6 · 本机登录</small></span><i class="dot"></i></button>
+    </header>
+
+    <section class="filters" aria-label="观测范围">
+      <label class="select-wrap"><select aria-label="批次"><option>当前批次 #113</option></select></label>
+      <label class="select-wrap"><select aria-label="模型"><option>全部模型 · 4</option></select></label>
+      <label class="select-wrap"><select aria-label="问题"><option>全部问题 · 12</option></select></label>
+    </section>
+
+    <section class="metrics" aria-label="行动摘要">
+      <div class="metric"><span class="metric-icon orange">!</span><div><small>待处理缺口</small><strong>6</strong></div></div>
+      <div class="metric"><span class="metric-icon red">↗</span><div><small>高优先级</small><strong>2</strong></div></div>
+      <div class="metric"><span class="metric-icon blue">▤</span><div><small>Agent 运行中</small><strong>1</strong></div></div>
+      <div class="metric"><span class="metric-icon green">✓</span><div><small>已完成待复测</small><strong>3</strong></div></div>
+    </section>
+
+    <section class="work-grid">
+      <div class="panel">
+        <div class="panel-head"><h2>系统发现的优先机会</h2><span>只显示通过证据门禁的机会</span></div>
+        <div class="opportunities" id="opportunities">
+          <button class="opportunity active" type="button" data-title="补齐「Token 统一管控平台怎么选？」中的品牌答案" data-question="Token 统一管控平台怎么选？">
+            <div><span class="priority">高优先级</span><h3>补齐「Token 统一管控平台怎么选？」中的品牌答案</h3><p>12 个真实回答中，春秋元泉仅 5 次进入候选，且未获得官网内容引用。</p><div class="models"><span class="model-badge"><img src="../../apps/web/public/brand/deepseek.svg" alt="DeepSeek" />DeepSeek</span><span class="model-badge"><img src="../../apps/web/public/brand/qwen.png" alt="通义千问" />通义千问</span></div></div>
+            <div class="gap-block"><small>缺失信源</small><div class="gap-tags"><span>企业选型对比</span><span>私有化部署</span><span>客户案例</span></div><small style="margin-top:11px">推荐：知乎深度回答 + 微信专题</small></div>
+            <div class="evidence"><span class="evidence-state">✓ 证据充分</span><span class="evidence-link">查看 15 条证据 →</span></div>
+          </button>
+          <button class="opportunity" type="button" data-title="补充私有化部署和权限边界说明" data-question="企业级 Token 管控如何做私有化部署？">
+            <div><span class="priority">高优先级</span><h3>补充私有化部署和权限边界说明</h3><p>3 个模型都引用了竞品的部署说明，但没有引用春秋元泉可控页面。</p><div class="models"><span class="model-badge"><img src="../../apps/web/public/brand/glm.svg" alt="智谱 GLM" />智谱 GLM</span><span class="model-badge"><img src="../../apps/web/public/brand/qwen.png" alt="通义千问" />通义千问</span></div></div>
+            <div class="gap-block"><small>缺失信源</small><div class="gap-tags"><span>架构说明</span><span>权限模型</span><span>部署边界</span></div><small style="margin-top:11px">推荐：官网方案页 + 掘金技术文章</small></div>
+            <div class="evidence"><span class="evidence-state">✓ 证据充分</span><span class="evidence-link">查看 9 条证据 →</span></div>
+          </button>
+          <button class="opportunity" type="button" data-title="完善企业采购决策标准" data-question="企业如何评估 Token 安全管控平台？">
+            <div><span class="priority" style="color:#a66a00;background:#fff7e8">中优先级</span><h3>完善企业采购决策标准</h3><p>回答频繁出现审计、成本、扩展性标准，现有内容没有统一表达。</p><div class="models"><span class="model-badge"><img src="../../apps/web/public/brand/deepseek.svg" alt="DeepSeek" />DeepSeek</span><span class="model-badge"><img src="../../apps/web/public/brand/glm.svg" alt="智谱 GLM" />智谱 GLM</span></div></div>
+            <div class="gap-block"><small>缺失信源</small><div class="gap-tags"><span>采购清单</span><span>评估维度</span><span>FAQ</span></div><small style="margin-top:11px">推荐：官网 FAQ + CSDN 实操文</small></div>
+            <div class="evidence"><span class="evidence-state">✓ 证据充分</span><span class="evidence-link">查看 12 条证据 →</span></div>
+          </button>
+        </div>
+      </div>
+
+      <aside class="panel" aria-label="当前行动">
+        <div class="panel-head"><h2>当前行动</h2><span>#A-016</span></div>
+        <div class="action-body">
+          <div class="action-summary"><small>已选机会</small><h3 id="selectedTitle">补齐「Token 统一管控平台怎么选？」中的品牌答案</h3><p id="selectedQuestion">问题：Token 统一管控平台怎么选？</p><div class="target-platforms"><span class="platform-badge"><img src="assets/zhihu.svg" alt="知乎" />知乎</span><span class="platform-badge"><img src="assets/wechat.svg" alt="微信" />微信公众号</span></div></div>
+          <div class="run-card">
+            <div class="run-head"><div class="run-title"><span class="agent-logo"><img src="assets/openai.svg" alt="OpenAI Codex" /></span><div><b>Codex 正在生成可审核内容</b><small>Run #241 · 已运行 2 分 18 秒</small></div></div><div class="run-percent"><b>50%</b><small>已完成 3/5 阶段</small></div></div>
+            <div class="progress"><i></i></div>
+            <ol class="steps" id="steps">
+              <li class="step done"><span class="step-index">✓</span><div><b>准备事实与证据</b><p>已锁定 15 条真实观测与 7 条品牌事实</p></div><span class="step-state">已完成</span></li>
+              <li class="step done"><span class="step-index">✓</span><div><b>查看目标平台规则</b><p>已归档知乎与微信官方创作规则</p></div><span class="step-state">已完成</span></li>
+              <li class="step done"><span class="step-index">✓</span><div><b>理解春秋元泉与采集素材</b><p>已归档官网产品页与 2 张界面截图</p></div><span class="step-state">已完成</span></li>
+              <li class="step running"><span class="step-index">4</span><div><b>生成母稿与平台稿</b><p>正在生成知乎深度回答…</p></div><span class="step-state">进行中</span></li>
+              <li class="step"><span class="step-index">5</span><div><b>核对事实并等待审核</b><p>完成后仅进入待审核，不会同步或发布</p></div><span class="step-state">等待</span></li>
+            </ol>
+            <div class="run-actions"><button class="primary" type="button" id="liveButton">查看实时执行</button><button class="ghost" type="button" id="stopButton">中止任务</button></div>
+          </div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel pipeline" aria-label="内容与发布进度">
+      <div class="pipeline-head"><div><h2>内容与发布进度</h2><p>每个数量都来自真实内容资产或分发记录。</p></div><button type="button" id="historyButton">查看全部草稿</button></div>
+      <div class="pipeline-grid">
+        <div class="pipe active"><div class="pipe-title"><span>内容草稿</span><em>1</em></div><div class="asset"><strong>Token 统一管控平台怎么选？</strong><small>Codex · v1 · 生成中</small><div class="asset-progress"><i></i></div></div></div>
+        <div class="pipe"><div class="pipe-title"><span>事实核验</span><em>0</em></div><div class="empty">等待母稿完成后<br />生成 Claim 核验清单</div></div>
+        <div class="pipe"><div class="pipe-title"><span>平台适配</span><em>0</em></div><div class="platform-list"><div class="platform-row"><span><img src="assets/zhihu.svg" alt="知乎" />知乎</span><i class="status-dot wait"></i></div><div class="platform-row"><span><img src="assets/wechat.svg" alt="微信" />微信公众号</span><i class="status-dot wait"></i></div><div class="empty" style="min-height:62px">平台稿正在生成</div></div></div>
+        <div class="pipe"><div class="pipe-title"><span>写入草稿</span><em>0</em></div><div class="empty">审核通过并选择平台后<br />才可打开同步助手</div></div>
+        <div class="pipe"><div class="pipe-title"><span>人工发布</span><em>0</em></div><div class="empty">系统不自动发布<br />等待人工记录 URL</div></div>
+        <div class="pipe"><div class="pipe-title"><span>等待复测</span><em>0</em></div><div class="empty">真实发布后<br />按原问题与模型范围复测</div></div>
+      </div>
+      <footer class="pipeline-foot"><div class="safety"><b>人工门禁：</b> Codex 只产生待审稿；同步助手只在审核通过后由用户点击打开。</div><div class="pipeline-actions"><button class="preview" type="button" id="previewButton">预览执行依据</button><button class="sync" type="button" id="syncButton" disabled title="平台稿尚未审核">打开文章同步助手</button></div></footer>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script>
+  const toast = document.getElementById('toast');
+  function notify(message) { toast.textContent = message; toast.classList.add('show'); clearTimeout(window.__toastTimer); window.__toastTimer = setTimeout(() => toast.classList.remove('show'), 2600); }
+  document.querySelectorAll('.opportunity').forEach((row) => row.addEventListener('click', () => {
+    document.querySelectorAll('.opportunity').forEach((item) => item.classList.remove('active'));
+    row.classList.add('active');
+    document.getElementById('selectedTitle').textContent = row.dataset.title;
+    document.getElementById('selectedQuestion').textContent = `问题：${row.dataset.question}`;
+    notify('已切换当前机会；实施时将读取该机会的真实 Action/Run 状态。');
+  }));
+  document.getElementById('runtimeButton').addEventListener('click', () => notify('Codex 运行时：本机已登录 · gpt-5.6 · 最近自检正常。'));
+  document.getElementById('liveButton').addEventListener('click', () => notify('实施时将展开 run #241 的有序 SSE 事件和已归档工件。'));
+  document.getElementById('stopButton').addEventListener('click', () => notify('原型未中止任务；实施时会先调用 interrupt，等待后端确认 cancelled。'));
+  document.getElementById('historyButton').addEventListener('click', () => notify('实施时将打开当前账号的内容资产列表。'));
+  document.getElementById('previewButton').addEventListener('click', () => notify('执行依据将包含观测证据、品牌事实、平台规则和截图工件。'));
+</script>
+</body>
+</html>
