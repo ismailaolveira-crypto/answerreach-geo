@@ -17,11 +17,13 @@ from app.models.cleanroom_v1 import (
     GeoObservationBatch,
     GeoObservationTask,
     GeoQuestionPlan,
+    GeoWebsiteAudit,
     GeoWorkspace,
 )
 
 
 RULE_VERSION = "opportunity.v1"
+WEBSITE_RULE_VERSION = "website-opportunity.v1"
 POSITIVE_BRAND_STATUSES = {"mentioned", "shortlisted", "recommended", "cited"}
 
 
@@ -69,6 +71,125 @@ def _candidate_summary(workspace: GeoWorkspace, question: GeoQuestionPlan, absen
         f"在“{question.question_text}”的真实观测中，{workspace.brand_name}有 {absent}/{total} 个回答未被提及"
         f"（{ratio:.0%}）。建议围绕该问题补齐可引用的权威内容，并在复测中验证变化。"
     )
+
+
+def materialize_website_opportunity(
+    db: Session,
+    workspace: GeoWorkspace,
+    audit: GeoWebsiteAudit,
+) -> GeoActionOpportunity | None:
+    """Turn one immutable website audit into a deduplicated, source-labelled opportunity.
+
+    Website audits are deliberately not inserted into ``GeoEvidence``: they are public-site
+    captures, not model observations. Their raw hash, artifact manifest and findings remain in
+    the audit row and are carried by reference in the opportunity scope.
+    """
+
+    open_rows = list(
+        db.scalars(
+            select(GeoActionOpportunity).where(
+                GeoActionOpportunity.workspace_id == workspace.id,
+                GeoActionOpportunity.opportunity_type == "website_citation_readiness",
+                GeoActionOpportunity.status == "open",
+            )
+        )
+    )
+    findings = [item for item in (audit.findings or []) if isinstance(item, dict)]
+    finding_codes = sorted(
+        {
+            str(item.get("code") or "").strip()
+            for item in findings
+            if str(item.get("code") or "").strip()
+        }
+    )
+    if audit.status == "ready" or not finding_codes:
+        for row in open_rows:
+            row.status = "stale"
+        return None
+
+    fingerprint = _fingerprint(
+        workspace.id,
+        "website_citation_readiness",
+        finding_codes,
+        WEBSITE_RULE_VERSION,
+    )
+    for row in open_rows:
+        if row.fingerprint != fingerprint:
+            row.status = "stale"
+
+    opportunity = db.scalar(
+        select(GeoActionOpportunity).where(
+            GeoActionOpportunity.workspace_id == workspace.id,
+            GeoActionOpportunity.fingerprint == fingerprint,
+        )
+    )
+    blocked = audit.status == "blocked"
+    client_shell = "client_rendering_required" in finding_codes
+    missing_body = any(
+        code in finding_codes
+        for code in {"server_visible_content_missing", "server_visible_content_too_short"}
+    )
+    if blocked:
+        title = "恢复官网公开可访问性并重新检查"
+        asset_type = "article"
+    elif client_shell or missing_body:
+        title = "补齐官网服务端可读的产品答案"
+        asset_type = "article"
+    else:
+        title = "补齐官网可抓取、可理解的引用信息"
+        asset_type = "article"
+
+    priority_score = round(max(0.0, min(100.0, 100.0 - float(audit.score))), 2)
+    priority = "high" if blocked or priority_score >= 60 else "medium" if priority_score >= 35 else "low"
+    evidence_strength = 1.0 if audit.raw_html_sha256 and audit.artifact_manifest else 0.55
+    top_findings = [str(item.get("title") or item.get("code") or "").strip() for item in findings[:3]]
+    summary = (
+        f"官网审计 #{audit.id} 得分 {round(audit.score)}/100，"
+        f"确认 {len(finding_codes)} 项公开页面问题：{'、'.join(top_findings)}。"
+        "该结论来自官网原始响应，不是模型回答或 GEO 提及结果。"
+    )
+    scope_snapshot = {
+        "source_type": "website_audit",
+        "website_audit_id": audit.id,
+        "website_url": audit.final_url or audit.requested_url,
+        "website_audit_status": audit.status,
+        "website_audit_score": audit.score,
+        "website_audit_version": audit.audit_version,
+        "raw_html_sha256": audit.raw_html_sha256,
+        "raw_html_size": audit.raw_html_size,
+        "artifact_manifest": audit.artifact_manifest,
+        "finding_codes": finding_codes,
+        "findings": findings,
+        "question": "官网是否便于搜索引擎和 AI 系统抓取、理解与引用？",
+        "recommended_carrier": "官网服务端正文与结构化信息",
+        "eligibility": "public_response+raw_artifact_manifest+immutable_audit",
+    }
+    values = {
+        "opportunity_type": "website_citation_readiness",
+        "title": title,
+        "summary": summary,
+        "priority_score": priority_score,
+        "priority_label": priority,
+        "evidence_strength": evidence_strength,
+        "source_gap_type": "website_citation_readiness",
+        "recommended_asset_type": asset_type,
+        "recommended_platforms": ["official_site"],
+        "scope_snapshot": scope_snapshot,
+        "rule_version": WEBSITE_RULE_VERSION,
+        "status": "open",
+    }
+    if opportunity is None:
+        opportunity = GeoActionOpportunity(
+            workspace_id=workspace.id,
+            fingerprint=fingerprint,
+            **values,
+        )
+        db.add(opportunity)
+        db.flush()
+    elif opportunity.status not in {"selected", "completed", "dismissed"}:
+        for key, value in values.items():
+            setattr(opportunity, key, value)
+    return opportunity
 
 
 def discover_opportunities(

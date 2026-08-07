@@ -27,6 +27,7 @@ from app.models.cleanroom_v1 import (
     GeoOptimizationAction,
     GeoPlatformVariant,
     GeoQuestionPlan,
+    GeoWebsiteAudit,
     GeoWorkspace,
 )
 from app.services.codex_agent_runtime import (
@@ -190,6 +191,12 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
     if existing:
         return existing
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    website_audit = None
+    if opportunity and opportunity.opportunity_type == "website_citation_readiness":
+        audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
+        website_audit = db.get(GeoWebsiteAudit, audit_id) if audit_id else None
+        if website_audit is None or website_audit.workspace_id != action.workspace_id:
+            raise ValueError("Website audit evidence is no longer available")
     evidence_links = []
     if opportunity:
         evidence_links = list(
@@ -202,7 +209,19 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         )
     evidence_ids = [row.evidence_id for row in evidence_links]
     source_urls = list(dict.fromkeys(row.source_url for row in evidence_links if row.source_url))
+    if website_audit:
+        source_urls = list(
+            dict.fromkeys(
+                [*source_urls, website_audit.final_url or website_audit.requested_url]
+            )
+        )
     question = db.get(GeoQuestionPlan, action.question_plan_id) if action.question_plan_id else None
+    website_ready = bool(
+        website_audit
+        and website_audit.status != "blocked"
+        and website_audit.raw_html_sha256
+        and website_audit.artifact_manifest
+    )
     brief = GeoContentBrief(
         workspace_id=action.workspace_id,
         action_id=action.id,
@@ -210,17 +229,34 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         audience="企业技术与采购决策者",
         intent="decision",
         asset_type=opportunity.recommended_asset_type if opportunity else "article",
-        required_sections=["先给结论", "选型标准", "品牌可核验能力", "适用边界", "来源"],
+        required_sections=(
+            ["首屏直接答案", "产品能力与边界", "适用场景", "验证方式", "常见问题", "来源"]
+            if website_audit
+            else ["先给结论", "选型标准", "品牌可核验能力", "适用边界", "来源"]
+        ),
         brand_fact_ids=[],
         evidence_ids=evidence_ids,
         source_urls=source_urls,
-        required_claims=[question.question_text if question else action.title],
+        required_claims=(
+            [
+                action.title,
+                "不得把官网审计结果表述为模型引用、品牌推荐或 GEO 效果提升",
+            ]
+            if website_audit
+            else [question.question_text if question else action.title]
+        ),
         forbidden_claims=["未有来源支持的绝对化承诺", "伪造客户案例", "声称已发布或已改善 GEO 效果"],
         open_questions=[],
         input_fingerprint=_hash(
-            {"action_id": action.id, "evidence_ids": evidence_ids, "question": question.question_text if question else None}
+            {
+                "action_id": action.id,
+                "evidence_ids": evidence_ids,
+                "website_audit_id": website_audit.id if website_audit else None,
+                "website_audit_hash": website_audit.raw_html_sha256 if website_audit else None,
+                "question": question.question_text if question else None,
+            }
         ),
-        status="ready",
+        status="ready" if evidence_ids or website_ready else "blocked",
     )
     db.add(brief)
     db.flush()
@@ -233,7 +269,16 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
     if workspace is None or action is None:
         raise ValueError("Agent workspace or action no longer exists")
     brief = _ensure_brief(db, action)
+    if brief.status != "ready":
+        raise ValueError("Action brief is blocked because complete source artifacts are missing")
     question = db.get(GeoQuestionPlan, action.question_plan_id) if action.question_plan_id else None
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    website_audit = None
+    if opportunity and opportunity.opportunity_type == "website_citation_readiness":
+        audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
+        website_audit = db.get(GeoWebsiteAudit, audit_id) if audit_id else None
+        if website_audit is None or website_audit.workspace_id != workspace.id:
+            raise ValueError("Website audit evidence is no longer available")
     facts = list(
         db.scalars(
             select(GeoBrandFact).where(
@@ -275,6 +320,11 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
                 "rationale": action.rationale,
                 "hypothesis": action.hypothesis,
                 "question": question.question_text if question else None,
+                "source_type": (
+                    "website_audit"
+                    if website_audit
+                    else "model_observation"
+                ),
             },
             "brief": {
                 "audience": brief.audience,
@@ -287,6 +337,25 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
             "platforms": platform_contracts,
             "observation_evidence": evidence,
     }
+    if website_audit:
+        context["website_audit_evidence"] = {
+            "id": website_audit.id,
+            "status": website_audit.status,
+            "score": website_audit.score,
+            "audit_version": website_audit.audit_version,
+            "requested_url": website_audit.requested_url,
+            "final_url": website_audit.final_url,
+            "raw_html_sha256": website_audit.raw_html_sha256,
+            "raw_html_size": website_audit.raw_html_size,
+            "checks": website_audit.checks,
+            "findings": website_audit.findings,
+            "artifact_manifest": website_audit.artifact_manifest,
+            "raw_homepage_html_excerpt": (website_audit.raw_html or "")[:12000],
+            "interpretation_boundary": (
+                "This is a public website capture, not a model observation. "
+                "Use it only to remediate the official site; do not claim model citation or GEO improvement."
+            ),
+        }
     previous_asset_id = int(run.result_snapshot.get("asset_id") or 0)
     previous_asset = db.get(GeoContentAsset, previous_asset_id) if previous_asset_id else None
     if (
@@ -356,7 +425,9 @@ the edits. The host will retain the rejected version and save this response as t
 Mandatory order:
 1. Use live web search to verify the current editorial tone and material restrictions for every target platform. Prefer each platform's official help/rules pages and return their URLs.
 2. Learn the brand only from stored facts and its supplied official website. Clearly list unknowns. Never infer customer counts, rankings, performance, certifications, or cases.
-3. Read the archived observation excerpts as problem evidence, not as authoritative brand facts.
+3. Read archived observation excerpts as problem evidence, not as authoritative brand facts. If
+website_audit_evidence is present, treat its raw capture and findings as official-site remediation
+evidence only; never convert its score into a model citation, ranking or GEO-effect claim.
 4. Write a useful master draft that directly answers the target question and separates sourced facts from judgment.
 5. Produce a materially different variant for every requested platform. Respect title length, paragraph rhythm, promotion restrictions and audience expectations found in step 1.
 6. Enumerate factual claims. A claim without a public URL must be marked pending.

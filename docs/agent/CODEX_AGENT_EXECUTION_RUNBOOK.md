@@ -30,6 +30,7 @@
 ```json
 {
   "schema_version": "geo-agent-task.v1",
+  "source_type": "model_observation",
   "run_id": 241,
   "workspace": {"id": 1, "brand_name": "春秋元泉", "official_domain": "icqtoken.ichunqiu.com"},
   "opportunity": {"id": 16, "type": "citation_gap", "title": "...", "priority": "high"},
@@ -42,7 +43,9 @@
 }
 ```
 
-缺少机会 ID、真实证据 ID、问题或目标平台时，不得开始写稿；输出 `waiting_human` 及缺失项。
+默认任务缺少机会 ID、真实证据 ID、问题或目标平台时，不得开始写稿；输出 `waiting_human` 及缺失项。
+
+官网修复行动是唯一例外：`source_type=website_audit` 时必须提供不可变的 `website_audit_id`、原始 HTML SHA-256、工件清单、检查项和问题清单，目标平台只能是 `official_site`。官网审计证据不得写入模型观测表，也不得被解释为模型已经引用、推荐或产生 GEO 效果。
 
 ## 2. 固定执行顺序
 
@@ -52,7 +55,7 @@
 2. 确认每条事实有 `brand_fact_id` 或可追溯 URL。
 3. 记录 `input_fingerprint`；相同输入不重复启动并行任务。
 
-通过标准：输入完整，且至少一条观测证据通过真实性门禁。
+通过标准：输入完整，且至少一条观测证据通过真实性门禁；或官网审计含可回读原始 HTML、SHA-256 与工件清单。
 
 ### 阶段 B：查平台规则
 

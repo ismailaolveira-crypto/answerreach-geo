@@ -146,3 +146,7 @@ pnpm run verify
 - 每次检查持久化首页、`robots.txt` 与 `sitemap.xml` 的原始响应、SHA-256、大小和截断状态；对外 API 只返回工件清单和哈希，不返回原始文档。
 - 存储表为 `geo_website_audits_v1`，迁移版本 `20260808_0022`；最新结果通过 `GET /api/v1/workspaces/{workspaceId}/website-audits/latest` 回读。
 - 页面的等待态不显示虚假百分比，检查完成前不显示绿色结果；结果仅表示页面抓取与引用基础，不计入模型出现率。
+- 每次审计完成后，`materialize_website_opportunity` 按问题码集合确定性创建或更新 `website_citation_readiness` 机会；相同问题不重复堆积，问题消失会把仍开放的旧机会标为 `stale`。
+- 机会通过 `scope_snapshot` 引用审计 ID、原始 HTML SHA-256、工件清单和发现项，不向 `geo_evidence_v1` 填造模型证据。
+- 选择后可进入本机 Codex，但目标锁定为 `official_site`；上下文包含受限长度的原始 HTML 片段与明确解释边界。
+- 官网稿通过人工审核后只进入内容库和网站负责人交付，不启用文章同步助手，也不自动显示为已上线。

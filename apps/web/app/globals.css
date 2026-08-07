@@ -1688,6 +1688,15 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
 }
 .pa-site-audit > footer > span { color: #718096; font-size: 9px; line-height: 1.5; }
 .pa-site-audit > footer code { background: #f0f4fa; border-radius: 5px; color: #627189; font-size: 9px; padding: 4px 6px; white-space: nowrap; }
+.pa-opportunity-source { align-items: center; display: flex; gap: 7px; margin-top: 9px; }
+.pa-opportunity-source img { background: #edf4ff; border-radius: 6px; height: 24px; object-fit: contain; padding: 4px; width: 24px; }
+.pa-opportunity-source span { display: grid; gap: 1px; }
+.pa-opportunity-source b { color: #40516a; font-size: 10px; }
+.pa-opportunity-source small { color: #8290a3; font-size: 9px; }
+.pa-action-blocked { align-items: center; color: #ad672e; display: flex; font-size: 9px; font-weight: 750; gap: 4px; }
+.pa-action-blocked svg { height: 14px; width: 14px; }
+.pa-opportunity-proof { color: #8a97a9; display: block; font-size: 9px; line-height: 1.4; margin-top: 7px; overflow-wrap: anywhere; }
+.pa-stage-card > a { align-items: center; color: #1e5eea; display: inline-flex; font-size: 10px; font-weight: 760; min-height: 32px; }
 @keyframes pa-site-audit-spin { to { transform: rotate(360deg); } }
 @media(max-width:900px) {
   .pa-site-audit-signals { grid-template-columns: repeat(2, minmax(0, 1fr)); }

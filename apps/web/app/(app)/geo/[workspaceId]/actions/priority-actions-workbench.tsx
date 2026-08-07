@@ -158,15 +158,17 @@ function discoverSyncAccounts(api: ArticleSyncPageApi) {
 }
 
 const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
-const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先" } as const;
+const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先", website: "官网审计" } as const;
 
 function suggestedSources(type: PriorityActionOpportunity["type"]) {
+	if (type === "website") return ["服务端正文", "页面标题结构", "结构化数据"];
 	if (type === "citation") return ["关键指标释义", "应用场景说明", "行业解决方案"];
 	if (type === "competitor") return ["客户证言", "权威媒体报道", "第三方评测"];
 	return ["企业选型对比", "私有化部署说明", "真实客户案例"];
 }
 
 function suggestedCarrier(type: PriorityActionOpportunity["type"]) {
+	if (type === "website") return "官网服务端正文 + FAQ";
 	if (type === "citation") return "官网解决方案页 + 技术文章";
 	if (type === "competitor") return "深度回答 + 媒体稿件";
 	return "官网专题页 + 深度回答";
@@ -236,6 +238,7 @@ const agentStageLabels: Record<string, string> = {
 };
 
 const platformOptions = [
+	{ key: "official_site", label: "春秋元泉官网", logo: "/icon.svg" },
 	{ key: "zhihu", label: "知乎", logo: "/brand/zhihu.svg" },
 	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
 ] as const;
@@ -379,6 +382,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
+	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
+	const hasApprovedOfficialSiteDraft = approvedPlatformKeys.includes("official_site");
 	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status)) ?? [];
 	const confirmedPendingClaimCount = pendingClaims.filter((claim) => confirmedClaimIds.includes(claim.id)).length;
 	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - confirmedPendingClaimCount);
@@ -435,6 +440,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				: visibleAgentProgress
 					? `${visibleAgentProgress.event_count} 条持久化事件`
 					: "正在读取持久化进度";
+	const availableTargetPlatforms = selected?.type === "website"
+		? platformOptions.filter((platform) => platform.key === "official_site")
+		: platformOptions.filter((platform) => platform.key !== "official_site");
 
 	useEffect(() => {
 		setSelectedBatchId(initialScope.batchId);
@@ -446,6 +454,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
 	useEffect(() => setRetests(initialRetests), [initialRetests]);
 	useEffect(() => setWebsiteAudit(initialWebsiteAudit), [initialWebsiteAudit]);
+	useEffect(() => {
+		if (!selected) return;
+		setTargetPlatforms(selected.type === "website" ? ["official_site"] : ["zhihu", "wechat"]);
+	}, [selected?.id, selected?.type]);
 	useEffect(() => {
 		if (!reviewOpen && !syncOpen) return;
 		const previousOverflow = document.body.style.overflow;
@@ -589,6 +601,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					: result.status === "blocked"
 						? "检查未完成，请根据阻塞原因处理后重试。"
 						: "检查完成：已找到需要优先补齐的官网可引用性问题。");
+				router.refresh();
 			} catch (error) {
 				setWebsiteAuditFeedback(error instanceof Error ? error.message : "官网检查失败");
 			}
@@ -672,7 +685,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					note: reviewNote || null,
 				});
 				setReviewPackages((current) => [result, ...current.filter((item) => item.asset.id !== result.asset.id)]);
-				setReviewFeedback(verdict === "approved" ? "审核已记录，已通过的平台稿可以交给文章同步助手。" : "修改要求已记录，本版本不会进入同步。");
+				setReviewFeedback(verdict === "approved"
+					? result.approved_platform_keys.some((key) => key === "zhihu" || key === "wechat")
+						? "审核已记录，已通过的外部平台稿可以交给文章同步助手。"
+						: "官网稿审核已记录；请交给网站负责人部署，系统不会把审核当作已上线。"
+					: "修改要求已记录，本版本不会进入同步。");
 				router.refresh();
 			} catch (error) {
 				setReviewFeedback(error instanceof Error ? error.message : "无法保存审核结果");
@@ -699,7 +716,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	}
 
 	async function openSyncAssistant() {
-		if (!syncAction || !currentReviewPackage || !approvedPlatformKeys.length) {
+		if (!syncAction || !currentReviewPackage || !syncableApprovedPlatformKeys.length) {
 			setPreviewMessage("请先完成人工审核，至少通过一个平台稿。");
 			return;
 		}
@@ -710,7 +727,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		const existingTargets = currentDistribution?.content_asset_id === currentReviewPackage.asset.id
 			? currentDistribution.targets
 			: [];
-		const syncablePlatformKeys = approvedPlatformKeys.filter((platformKey) => (
+		const syncablePlatformKeys = syncableApprovedPlatformKeys.filter((platformKey) => (
 			existingTargets.find((target) => target.platform_key === platformKey)?.draft_readback_status !== "draft_saved"
 		));
 		setSyncOpen(true);
@@ -737,7 +754,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				return;
 			}
 			setSyncPhase("confirm");
-			const preservedCount = approvedPlatformKeys.length - syncablePlatformKeys.length;
+			const preservedCount = syncableApprovedPlatformKeys.length - syncablePlatformKeys.length;
 			setSyncMessage(platformAccounts.length === 1
 				? preservedCount ? `已有 ${preservedCount} 个平台草稿完成回读，本次只需重试剩余平台。` : "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
 				: `已检测到 ${platformAccounts.length} 个待写入平台。选择目标后由你确认，系统不会自动发布。`);
@@ -847,7 +864,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	return <main className="pa-page">
 		<section className="pa-topline">
 			<header className="pa-hero">
-				<div><h1>优先行动</h1><span>从真实观测缺口出发，补齐信源、生成内容、写入草稿，并在下一轮验证变化。</span>
+				<div><h1>优先行动</h1><span>从真实模型观测与官网审计出发，补齐信源、生成内容，并用后续证据验证变化。</span>
 					<div className="pa-runtime-wrap">
 						<button type="button" className={`pa-runtime-status${!agentRuntime?.ready ? " is-warning" : agentCapacityAvailable ? " is-ready" : " is-busy"}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
 							<i />{!agentRuntime?.ready ? "Codex 需要处理" : agentCapacityAvailable ? "Codex 已连接" : `Codex 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}`}<Icon name="chevron" />
@@ -871,7 +888,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</section>
 		</section>
 
-		<section className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">
+		<section id="website-audit" className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">
 			<header>
 				<div><small>真实问题发现 · 官网</small><h2 id="website-audit-title">官网可引用性</h2><p>{websiteUrl || "工作区尚未配置官网地址"}</p></div>
 				<div className="pa-site-audit-action">
@@ -897,12 +914,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>当前范围没有达到门槛的机会</h2><p>{selectedBatch ? "这里只接受完整回答、真实搜索事件、来源 URL 和原始工件都齐全的证据。可以刷新当前范围，或返回决策地图发起新观测。" : "完成一次真实联网观测并归档完整证据后，系统才会识别行动机会。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || !selectedBatchId}>{isSaving ? "正在分析…" : "刷新当前范围"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
-					<header><div><h2>系统发现的优先机会</h2><p>仅使用已归档回答生成，不补造证据。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
+					<header><div><h2>系统发现的优先机会</h2><p>来自完整模型观测或官网原始响应；两类证据分开标记。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
 					<div className="pa-opportunity-list">
 						{filtered.map((item) => <article key={item.id} className={selected?.id === item.id ? "is-selected" : ""}>
-							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3><p>{item.summary}</p><div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div></div>
-							<div className="pa-gap"><small>缺失信源</small><div className="pa-source-tags">{suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}</div><em>建议载体 · {suggestedCarrier(item.type)}</em></div>
-							<div className="pa-opportunity-actions"><span className={item.existingAction ? "pa-action-current" : "pa-evidence-ok"}><Icon name={item.existingAction ? "arrow" : "check"} />{item.existingAction ? "行动进行中" : "证据充分"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button><Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link></div>
+							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3><p>{item.summary}</p>{item.sourceType === "website_audit" ? <div className="pa-opportunity-source"><img src="/icon.svg" alt="春秋元泉 GEO 标志" /><span><b>官网原始响应</b><small>审计 #{item.websiteAuditId} · 不计为模型观测</small></span></div> : <div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div>}<small className="pa-opportunity-proof">{item.proof}</small></div>
+							<div className="pa-gap"><small>{item.type === "website" ? "需要补齐" : "缺失信源"}</small><div className="pa-source-tags">{suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}</div><em>建议载体 · {suggestedCarrier(item.type)}</em></div>
+							<div className="pa-opportunity-actions"><span className={item.existingAction ? "pa-action-current" : item.generationReady ? "pa-evidence-ok" : "pa-action-blocked"}><Icon name={item.existingAction ? "arrow" : item.generationReady ? "check" : "warning"} />{item.existingAction ? "行动进行中" : item.generationReady ? "证据充分" : "检查受阻"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button>{item.websiteAuditId ? <a href="#website-audit">查看官网证据 <Icon name="arrow" /></a> : item.evidenceIds[0] ? <Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link> : null}</div>
 						</article>)}
 					</div>
 				</div>
@@ -910,9 +927,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<aside className={`pa-current-action ${isTimelineCollapsed ? "is-collapsed" : ""}`}>
 					<header><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)}>{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
 					{!isTimelineCollapsed && selected ? <ol>
-						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={`下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} /><input type="hidden" name="question_plan_id" value={selected.questionId} /><input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} />{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">已关联当前问题的真实证据与行动记录。</p>}</ActionStage>
+						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={selected.type === "website" ? "完成官网内容修复后，以新一轮同版本审计验证服务端可读性与页面结构变化。" : `下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} />{selected.questionId ? <input type="hidden" name="question_plan_id" value={selected.questionId} /> : null}{selected.evidenceIds[0] ? <input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} /> : null}{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">{selected.sourceType === "website_audit" ? `已关联官网审计 #${selected.websiteAuditId} 的原始响应与问题清单。` : "已关联当前问题的真实模型观测与行动记录。"}</p>}</ActionStage>
 						<ActionStage index={2} label="Agent 调研与生成" state={runActive ? "active" : currentReviewPackage ? "done" : currentRun ? "idle" : stage === 1 ? "active" : "idle"}>
-							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。</p><div className="pa-platform-picker">{platformOptions.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={`${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentCanStart} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : !agentRuntime?.ready ? "Codex 未就绪，请先去设置" : !agentCapacityAvailable ? "Agent 正忙，请等待当前任务" : "启动本机 Codex Agent"}</button></div> : null}
+							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>{selected.type === "website" ? selected.generationReady ? "Codex 会先读取本轮官网原始 HTML 和问题清单，再生成仅用于官网修复的待审核稿。" : "本轮没有回读到完整官网原始 HTML。请先恢复公网访问并重新检查，当前不会伪装生成内容。" : "Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。"}</p><div className="pa-platform-picker">{availableTargetPlatforms.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} disabled={selected.type === "website"} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={platform.key === "official_site" ? "春秋元泉 GEO 标志" : `${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentCanStart || !selected.generationReady} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : !selected.generationReady ? "等待官网重新检查" : !agentRuntime?.ready ? "Codex 未就绪，请先去设置" : !agentCapacityAvailable ? "Agent 正忙，请等待当前任务" : "启动本机 Codex Agent"}</button></div> : null}
 							{currentRun ? <div className="pa-agent-run">
 								<div className="pa-agent-runtime">
 									<span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span>
@@ -948,7 +965,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
 						</ActionStage>
 						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张需人工确认。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
-						<ActionStage index={4} label="写入平台草稿" state={allDraftsSaved ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p>}</ActionStage>
+						<ActionStage index={4} label={selected.type === "website" ? "交付官网稿" : "写入平台草稿"} state={allDraftsSaved ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? <div className="pa-stage-card"><b>官网稿已通过审核，等待人工上线</b><p>稿件已保存在内容库；请交给网站负责人部署。未回读公开 URL 前，系统不会显示为已发布或已改善。</p><Link href={`/geo/${workspaceId}/content`}>查看官网稿</Link></div> : <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved || !syncableApprovedPlatformKeys.length}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p>}</ActionStage>
 						<ActionStage index={5} label="人工发布" state={allTargetsPublished ? "done" : allDraftsSaved ? "active" : "idle"}>
 							{allDraftsSaved && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
 								const platform = platformOptions.find((item) => item.key === target.platform_key);
@@ -965,8 +982,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
-				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div className={allDraftsSaved && !allTargetsPublished ? "is-current" : ""}><b>人工发布</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个平台已记录公开 URL` : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "发布完成后复用原问题与模型"}</p></div></div>
-				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!approvedPlatformKeys.length || allDraftsSaved} title={allDraftsSaved ? "已审核平台稿均已完成草稿回读" : approvedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个平台稿"}>{allDraftsSaved ? "草稿已写入" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
+				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? "官网稿等待网站负责人部署" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div><div className={allDraftsSaved && !allTargetsPublished ? "is-current" : ""}><b>人工发布</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个平台已记录公开 URL` : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "发布完成后复用原问题与模型"}</p></div></div>
+				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!syncableApprovedPlatformKeys.length || allDraftsSaved} title={allDraftsSaved ? "已审核平台稿均已完成草稿回读" : syncableApprovedPlatformKeys.length ? "打开文章同步助手" : hasApprovedOfficialSiteDraft ? "官网稿需交给网站负责人部署" : "请先通过至少一个外部平台稿"}>{allDraftsSaved ? "草稿已写入" : hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? "官网稿待上线" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>

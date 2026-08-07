@@ -6,12 +6,16 @@ export type PriorityActionOpportunity = {
 	questionId: number;
 	questionText: string;
 	evidenceIds: number[];
+	websiteAuditId?: number;
+	sourceType: "model_observation" | "website_audit";
 	modelLabels: string[];
-	type: "visibility" | "citation" | "competitor";
+	type: "visibility" | "citation" | "competitor" | "website";
 	priority: "high" | "medium" | "low";
 	title: string;
 	summary: string;
 	recommendedAsset: string;
+	recommendedPlatforms: string[];
+	generationReady: boolean;
 	proof: string;
 	existingAction?: CleanroomAction;
 };
@@ -26,20 +30,38 @@ export function mapBackendPriorityActionOpportunities(
 		const questionId = Number(row.scope_snapshot.question_plan_id ?? 0);
 		const questionText = String(row.scope_snapshot.question ?? row.title);
 		const evidenceIds = row.evidence.map((item) => item.evidence_id);
-		const type = row.opportunity_type === "competitor_gap" ? "competitor" : row.opportunity_type === "citation_gap" ? "citation" : "visibility";
+		const sourceType = row.scope_snapshot.source_type === "website_audit" ? "website_audit" : "model_observation";
+		const websiteAuditId = Number(row.scope_snapshot.website_audit_id ?? 0) || undefined;
+		const websiteAuditHash = String(row.scope_snapshot.raw_html_sha256 ?? "");
+		const type = row.opportunity_type === "website_citation_readiness"
+			? "website"
+			: row.opportunity_type === "competitor_gap"
+				? "competitor"
+				: row.opportunity_type === "citation_gap"
+					? "citation"
+					: "visibility";
 		return {
 			id: String(row.id),
 			backendId: row.id,
 			questionId,
 			questionText,
 			evidenceIds,
+			websiteAuditId,
+			sourceType,
 			modelLabels: [...new Set(row.evidence.map((item) => item.model_key))],
 			type,
 			priority: row.priority_label,
 			title: row.title,
 			summary: row.summary,
-			recommendedAsset: row.recommended_asset_type,
-			proof: `依据 ${evidenceIds.length} 条真实证据 · 规则 ${row.rule_version}`,
+			recommendedAsset: String(row.scope_snapshot.recommended_carrier ?? row.recommended_asset_type),
+			recommendedPlatforms: row.recommended_platforms,
+			generationReady: sourceType !== "website_audit"
+				|| (row.scope_snapshot.website_audit_status !== "blocked" && Boolean(websiteAuditHash)),
+			proof: sourceType === "website_audit"
+				? websiteAuditHash
+					? `依据官网审计 #${websiteAuditId ?? "—"} · 原始证据 ${websiteAuditHash.slice(0, 12)}`
+					: `依据官网审计 #${websiteAuditId ?? "—"} · 公网访问阻塞记录`
+				: `依据 ${evidenceIds.length} 条真实证据 · 规则 ${row.rule_version}`,
 			existingAction: actionByOpportunity.get(row.id),
 		};
 	});
@@ -100,6 +122,8 @@ export function derivePriorityActionOpportunities({
 			opportunities.push({
 				id: `${questionId}:visibility`, questionId, questionText: question.question_text,
 				evidenceIds, modelLabels, type: "visibility", priority: absentRows.length === rows.length ? "high" : "medium",
+				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
+				generationReady: true,
 				title: "补齐采购决策入口", recommendedAsset: "采购选型 FAQ + 对比页",
 				summary: `在 ${absentRows.length}/${rows.length} 条真实回答中，春秋元泉未进入候选；同题已出现 ${competitors.slice(0, 2).join("、")} 等竞品。`,
 				proof: `依据 ${evidenceIds.length} 条已归档回答 · 覆盖 ${modelLabels.join("、")}`,
@@ -112,6 +136,8 @@ export function derivePriorityActionOpportunities({
 			opportunities.push({
 				id: `${questionId}:citation`, questionId, questionText: question.question_text,
 				evidenceIds, modelLabels, type: "citation", priority: citedSources.length >= rows.length ? "high" : "medium",
+				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
+				generationReady: true,
 				title: "补齐可被引用的依据", recommendedAsset: "可引用的数据说明 / FAQ",
 				summary: `模型在该问题中引用了 ${uniqueSources.slice(0, 2).join("、")} 等来源，但尚未引用春秋元泉的可控内容。`,
 				proof: `依据 ${uniqueSources.length} 个真实引用来源 · ${rows.length} 条回答`,

@@ -148,7 +148,11 @@ from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_eviden
 from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
-from app.v1.action_opportunities import discover_opportunities, valid_action_evidence
+from app.v1.action_opportunities import (
+    discover_opportunities,
+    materialize_website_opportunity,
+    valid_action_evidence,
+)
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
 from app.v1.website_audit import WebsiteAuditTargetError, audit_website
@@ -3694,17 +3698,20 @@ def list_action_opportunities(
     if batch_id is not None:
         rows = [
             row for row in rows
-            if int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
+            if row.opportunity_type == "website_citation_readiness"
+            or int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
         ]
     if model_key:
         rows = [
             row for row in rows
-            if model_key in ((row.scope_snapshot or {}).get("model_keys") or [])
+            if row.opportunity_type != "website_citation_readiness"
+            and model_key in ((row.scope_snapshot or {}).get("model_keys") or [])
         ]
     if question_plan_id is not None:
         rows = [
             row for row in rows
-            if int((row.scope_snapshot or {}).get("question_plan_id") or 0)
+            if row.opportunity_type != "website_citation_readiness"
+            and int((row.scope_snapshot or {}).get("question_plan_id") or 0)
             == question_plan_id
         ]
     return [_opportunity_read(db, opportunity) for opportunity in rows]
@@ -3738,6 +3745,21 @@ def select_action_opportunity(
         )
     )
     question_plan_id = opportunity.scope_snapshot.get("question_plan_id")
+    is_website_action = opportunity.opportunity_type == "website_citation_readiness"
+    selected_scope = {
+        "opportunity_id": opportunity.id,
+        "evidence_ids": [link.evidence_id for link in links],
+        "question_plan_id": question_plan_id,
+        "source_type": (opportunity.scope_snapshot or {}).get("source_type", "model_observation"),
+    }
+    if is_website_action:
+        selected_scope.update(
+            {
+                "website_audit_id": opportunity.scope_snapshot.get("website_audit_id"),
+                "raw_html_sha256": opportunity.scope_snapshot.get("raw_html_sha256"),
+                "finding_codes": opportunity.scope_snapshot.get("finding_codes", []),
+            }
+        )
     action = GeoOptimizationAction(
         workspace_id=workspace_id,
         opportunity_id=opportunity.id,
@@ -3745,16 +3767,16 @@ def select_action_opportunity(
         source_evidence_id=links[0].evidence_id if links else None,
         title=opportunity.title,
         rationale=opportunity.summary,
-        hypothesis="补齐可引用、可复测的品牌答案后，目标问题中的品牌出现率应提升。",
+        hypothesis=(
+            "补齐审计确认的服务端正文与页面结构后，重新审计应能验证官网可引用性改善。"
+            if is_website_action
+            else "补齐可引用、可复测的品牌答案后，目标问题中的品牌出现率应提升。"
+        ),
         priority=opportunity.priority_label,
         status="proposed",
         stage="selected",
         baseline_snapshot=opportunity.scope_snapshot,
-        selected_scope={
-            "opportunity_id": opportunity.id,
-            "evidence_ids": [link.evidence_id for link in links],
-            "question_plan_id": question_plan_id,
-        },
+        selected_scope=selected_scope,
         selected_at=datetime.now(timezone.utc),
     )
     opportunity.status = "selected"
@@ -3769,7 +3791,12 @@ def select_action_opportunity(
             to_stage="selected",
             actor_type="user",
             actor_user_id=user.id,
-            detail={"opportunity_id": opportunity.id, "evidence_ids": action.selected_scope["evidence_ids"]},
+            detail={
+                "opportunity_id": opportunity.id,
+                "source_type": selected_scope["source_type"],
+                "evidence_ids": selected_scope["evidence_ids"],
+                "website_audit_id": selected_scope.get("website_audit_id"),
+            },
         )
     )
     db.commit()
@@ -3875,6 +3902,13 @@ def create_content_brief(
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
     question = db.get(GeoQuestionPlan, action.question_plan_id) if action.question_plan_id else None
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    website_audit = None
+    if opportunity and opportunity.opportunity_type == "website_citation_readiness":
+        website_audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
+        website_audit = db.get(GeoWebsiteAudit, website_audit_id) if website_audit_id else None
+        if website_audit is None or website_audit.workspace_id != workspace_id:
+            raise HTTPException(status_code=409, detail="Website audit evidence is no longer available")
     links = []
     if action.opportunity_id:
         links = list(
@@ -3899,14 +3933,40 @@ def create_content_brief(
         )
     evidence_ids = [link.evidence_id for link in links if getattr(link, "evidence_id", None)]
     source_urls = list(dict.fromkeys(link.source_url for link in links if getattr(link, "source_url", None)))
+    if website_audit:
+        source_urls = list(
+            dict.fromkeys(
+                [*source_urls, website_audit.final_url or website_audit.requested_url]
+            )
+        )
     audience = payload.audience or ({"ciso": "安全与技术决策者", "procurement": "采购与业务负责人"}.get(question.role, "技术负责人") if question else "技术负责人")
     intent = payload.intent or (question.journey_stage if question else "consideration")
-    required_sections = payload.required_sections or ["问题背景", "可验证的解决方案", "证据与引用", "下一步行动"]
+    required_sections = payload.required_sections or (
+        ["首屏直接答案", "产品能力与边界", "适用场景", "验证方式", "常见问题", "来源"]
+        if website_audit
+        else ["问题背景", "可验证的解决方案", "证据与引用", "下一步行动"]
+    )
     required_claims = [f"直接回答问题：{question.question_text}"] if question else [action.title]
+    if website_audit:
+        required_claims.extend(
+            [
+                "仅修复官网审计已确认的可读性与结构问题",
+                "不得把官网审计得分表述为模型引用、品牌推荐或效果提升",
+            ]
+        )
     required_claims.append(f"所有关键事实均需引用已采集来源（{len(source_urls)} 个）")
     input_fingerprint = sha256(
         json.dumps(
-            {"action_id": action.id, "audience": audience, "intent": intent, "sections": required_sections, "evidence_ids": evidence_ids, "source_urls": source_urls},
+            {
+                "action_id": action.id,
+                "audience": audience,
+                "intent": intent,
+                "sections": required_sections,
+                "evidence_ids": evidence_ids,
+                "website_audit_id": website_audit.id if website_audit else None,
+                "website_audit_hash": website_audit.raw_html_sha256 if website_audit else None,
+                "source_urls": source_urls,
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -3935,11 +3995,25 @@ def create_content_brief(
         forbidden_claims=payload.forbidden_claims,
         open_questions=payload.open_questions,
         input_fingerprint=input_fingerprint,
-        status="ready" if evidence_ids and source_urls else "blocked",
+        status=(
+            "ready"
+            if (evidence_ids and source_urls)
+            or (
+                website_audit
+                and website_audit.status != "blocked"
+                and website_audit.raw_html_sha256
+                and website_audit.artifact_manifest
+            )
+            else "blocked"
+        ),
     )
     action.stage = "brief_ready" if brief.status == "ready" else "blocked"
     action.status = "in_progress"
-    action.blocked_reason = None if brief.status == "ready" else "No real source-backed evidence is attached"
+    action.blocked_reason = (
+        None
+        if brief.status == "ready"
+        else "No complete model observation or website audit artifact is attached"
+    )
     db.add(brief)
     db.add(
         GeoActionEvent(
@@ -3950,7 +4024,13 @@ def create_content_brief(
             to_stage=action.stage,
             actor_type="user",
             actor_user_id=user.id,
-            detail={"brief_status": brief.status, "evidence_ids": evidence_ids, "source_count": len(source_urls)},
+            detail={
+                "brief_status": brief.status,
+                "source_type": "website_audit" if website_audit else "model_observation",
+                "evidence_ids": evidence_ids,
+                "website_audit_id": website_audit.id if website_audit else None,
+                "source_count": len(source_urls),
+            },
         )
     )
     db.commit()
@@ -5065,6 +5145,22 @@ def create_agent_run(
 ):
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    website_audit = None
+    if opportunity and opportunity.opportunity_type == "website_citation_readiness":
+        website_audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
+        website_audit = db.get(GeoWebsiteAudit, website_audit_id) if website_audit_id else None
+        if website_audit is None or website_audit.workspace_id != workspace_id:
+            raise HTTPException(status_code=409, detail="Website audit evidence is no longer available")
+        if (
+            website_audit.status == "blocked"
+            or not website_audit.raw_html_sha256
+            or not website_audit.artifact_manifest
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Website audit is incomplete; resolve access and run the audit again before drafting",
+            )
     diagnostic = diagnose_local_codex()
     if not diagnostic.get("ready"):
         raise HTTPException(
@@ -5086,6 +5182,11 @@ def create_agent_run(
     platforms = list(dict.fromkeys(payload.selected_platforms or _default_agent_platforms(db, action)))
     if not platforms:
         raise HTTPException(status_code=422, detail="Select at least one target platform")
+    if website_audit and platforms != ["official_site"]:
+        raise HTTPException(
+            status_code=422,
+            detail="Website audit actions must generate the official-site draft before external distribution",
+        )
     model = payload.model or diagnostic.get("default_model")
     if model and model not in diagnostic.get("available_models", []):
         raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
@@ -6115,6 +6216,7 @@ def create_website_audit(
     )
     db.add(audit)
     db.flush()
+    opportunity = materialize_website_opportunity(db, workspace, audit)
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -6129,6 +6231,7 @@ def create_website_audit(
                 "requested_url": audit.requested_url,
                 "raw_html_sha256": audit.raw_html_sha256,
                 "finding_codes": [item.get("code") for item in audit.findings],
+                "opportunity_id": opportunity.id if opportunity else None,
             },
         )
     )
