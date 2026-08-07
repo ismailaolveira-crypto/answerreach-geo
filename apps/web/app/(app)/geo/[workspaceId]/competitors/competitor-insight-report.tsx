@@ -61,13 +61,14 @@ export function CompetitorInsightReport({
 
         <section className={styles.section} aria-labelledby="analysis-body">
           <div className={styles.sectionHeading}><span>02</span><div><p>主体分析内容</p><h2 id="analysis-body">当前范围下的关键观察</h2></div></div>
-          <div className={styles.findings}>
+          <div className={styles.analysisNarrative}>
             {insight.analysis.findings.map((finding, index) => <article key={`${finding.title}-${index}`}>
-              <span>{String(index + 1).padStart(2, "0")}</span><h3>{finding.title}</h3><p>{finding.detail}</p>
-              {finding.evidence_ids.length ? <small>引用 {finding.evidence_ids.length} 条证据</small> : <small>未引用单条证据</small>}
+              <span>{String(index + 1).padStart(2, "0")}</span><div><h3>{finding.title}</h3><p>{finding.detail}</p>
+                {finding.evidence_ids.length ? <div className={styles.inlineEvidence}>对应证据：{finding.evidence_ids.map((id) => <Link key={id} href={`/geo/${workspaceId}/evidence/${id}`}>#{id}</Link>)}</div> : <small>本段未引用单条证据</small>}
+              </div>
             </article>)}
           </div>
-          <div className={styles.actionBlock}><h3>建议行动</h3><ol>{insight.analysis.recommended_actions.map((action) => <li key={action}>{action}</li>)}</ol></div>
+          <div className={styles.recommendations}><h3>建议行动</h3><ol>{insight.analysis.recommended_actions.map((action) => <li key={action}>{action}</li>)}</ol></div>
         </section>
 
         <section className={styles.section} aria-labelledby="evidence">
