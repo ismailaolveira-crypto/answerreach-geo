@@ -214,6 +214,11 @@ export type SourceMapItem = {
 	brand_absent_answer_count: number;
 	brand_absent_answer_ratio: number;
 	evidence_ids: number[];
+	evidence_references: Array<{
+		evidence_id: number;
+		source_url: string;
+		source_title?: string | null;
+	}>;
 	evidence_total: number;
 	evidence_truncated: boolean;
 	models: SourceMapBreakdown[];

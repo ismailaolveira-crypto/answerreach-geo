@@ -24,9 +24,16 @@ function number(value: number) {
 }
 
 function EvidenceLinks({ workspaceId, item }: { workspaceId: string; item: SourceMapItem }) {
+  const references = item.evidence_references.length
+    ? item.evidence_references
+    : item.evidence_ids.map((evidence_id) => ({ evidence_id, source_url: "" }));
   return <div className={styles.evidenceLinks} aria-label={`核验 ${item.label} 的原始回答`}>
-    {item.evidence_ids.slice(0, 3).map((evidenceId, index) => (
-      <Link key={evidenceId} href={`/geo/${workspaceId}/evidence/${evidenceId}`}>
+    {references.slice(0, 3).map((reference, index) => (
+      <Link
+        key={`${reference.evidence_id}-${reference.source_url}`}
+        href={`/geo/${workspaceId}/evidence/${reference.evidence_id}${reference.source_url ? `?source=${encodeURIComponent(reference.source_url)}` : ""}`}
+        aria-label={`查看证据 ${index + 1} 的原始回答及对应信源`}
+      >
         证据 {index + 1}<span aria-hidden="true">↗</span>
       </Link>
     ))}

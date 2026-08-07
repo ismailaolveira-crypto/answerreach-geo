@@ -99,6 +99,13 @@ def test_build_source_map_deduplicates_per_answer_and_keeps_traceability() -> No
     assert domain["model_count"] == 2
     assert domain["brand_absent_answer_count"] == 1
     assert domain["evidence_ids"] == [2]
+    assert domain["evidence_references"] == [
+        {
+            "evidence_id": 2,
+            "source_url": "https://example.com/a",
+            "source_title": "A",
+        }
+    ]
     assert domain["evidence_total"] == 2
     assert domain["evidence_truncated"] is True
     assert result["opportunities"][0]["label"] == "example.com"

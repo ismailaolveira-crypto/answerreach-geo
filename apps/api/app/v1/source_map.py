@@ -22,6 +22,15 @@ class _Breakdown:
     evidence_ids: set[int] = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class _EvidenceReference:
+    """A source citation linked to the exact archived answer that produced it."""
+
+    evidence_id: int
+    source_url: str
+    source_title: str | None = None
+
+
 @dataclass
 class _Aggregate:
     key: str
@@ -30,6 +39,7 @@ class _Aggregate:
     title: str | None = None
     citation_count: int = 0
     evidence_ids: set[int] = field(default_factory=set)
+    evidence_references: dict[int, _EvidenceReference] = field(default_factory=dict)
     brand_absent_evidence_ids: set[int] = field(default_factory=set)
     models: dict[str, _Breakdown] = field(default_factory=lambda: defaultdict(_Breakdown))
     questions: dict[int, _Breakdown] = field(default_factory=lambda: defaultdict(_Breakdown))
@@ -121,6 +131,11 @@ def _serialize_aggregate(
         key=lambda evidence_id: _captured_sort_key(evidence_by_id[evidence_id]),
         reverse=True,
     )
+    evidence_references = [
+        aggregate.evidence_references[evidence_id]
+        for evidence_id in evidence_ids
+        if evidence_id in aggregate.evidence_references
+    ]
     answer_count = len(evidence_ids)
     absent_count = len(aggregate.brand_absent_evidence_ids)
     models, question_rows = _breakdowns(aggregate, evidence_by_id, questions)
@@ -137,6 +152,14 @@ def _serialize_aggregate(
         if answer_count
         else 0.0,
         "evidence_ids": evidence_ids[:evidence_limit],
+        "evidence_references": [
+            {
+                "evidence_id": reference.evidence_id,
+                "source_url": reference.source_url,
+                "source_title": reference.source_title,
+            }
+            for reference in evidence_references[:evidence_limit]
+        ],
         "evidence_total": len(evidence_ids),
         "evidence_truncated": len(evidence_ids) > evidence_limit,
         "models": models,
@@ -176,13 +199,14 @@ def build_source_map(
             total_citations += 1
 
             title = source.get("title") if isinstance(source, dict) else None
+            source_title = title if isinstance(title, str) and title.strip() else None
             page = pages.setdefault(
                 normalized.page_key,
                 _Aggregate(
                     key=normalized.page_key,
                     label=normalized.canonical_url,
                     canonical_url=normalized.canonical_url,
-                    title=title if isinstance(title, str) and title.strip() else None,
+                    title=source_title,
                 ),
             )
             domain = domains.setdefault(
@@ -192,6 +216,17 @@ def build_source_map(
             for aggregate in (page, domain):
                 aggregate.citation_count += 1
                 aggregate.evidence_ids.add(evidence.id)
+                # A domain can occur more than once in one answer. Keep the
+                # first concrete URL so an evidence link never becomes a vague,
+                # domain-only jump with no matching source to inspect.
+                aggregate.evidence_references.setdefault(
+                    evidence.id,
+                    _EvidenceReference(
+                        evidence_id=evidence.id,
+                        source_url=normalized.canonical_url,
+                        source_title=source_title,
+                    ),
+                )
                 if evidence.brand_status == "absent":
                     aggregate.brand_absent_evidence_ids.add(evidence.id)
                 aggregate.models[evidence.model_key].citation_count += 1

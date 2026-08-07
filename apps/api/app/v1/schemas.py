@@ -324,6 +324,12 @@ class SourceMapBreakdown(BaseModel):
     answer_count: int
 
 
+class SourceMapEvidenceReference(BaseModel):
+    evidence_id: int
+    source_url: str
+    source_title: str | None = None
+
+
 class SourceMapItem(BaseModel):
     key: str
     label: str
@@ -335,6 +341,7 @@ class SourceMapItem(BaseModel):
     brand_absent_answer_count: int
     brand_absent_answer_ratio: float
     evidence_ids: list[int]
+    evidence_references: list[SourceMapEvidenceReference]
     evidence_total: int
     evidence_truncated: bool
     models: list[SourceMapBreakdown]
