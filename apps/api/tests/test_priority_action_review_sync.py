@@ -280,6 +280,85 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
 
 
+def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu", "wechat"],
+        },
+    )
+    assert approved.status_code == 201
+
+    created = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu", "wechat"],
+            "idempotency_key": "asset-1-sequential-two-platforms",
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["id"]
+
+    first = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "zhihu",
+                    "request_status": "draft_saved",
+                    "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/one",
+                }
+            ]
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["status"] == "partial"
+    by_platform = {target["platform_key"]: target for target in first.json()["targets"]}
+    assert by_platform["zhihu"]["draft_readback_status"] == "draft_saved"
+    assert by_platform["wechat"]["draft_readback_status"] == "not_started"
+    assert all(target["final_action_clicked"] is False for target in first.json()["targets"])
+
+    second = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "wechat",
+                    "request_status": "failed",
+                    "message": "公众号登录已失效",
+                }
+            ]
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["status"] == "partial"
+
+    retry = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "wechat",
+                    "request_status": "draft_saved",
+                    "external_draft_id": "wechat-draft-1",
+                }
+            ]
+        },
+    )
+    assert retry.status_code == 200
+    assert retry.json()["status"] == "draft_saved"
+    assert all(
+        target["draft_readback_status"] == "draft_saved"
+        and target["final_action_clicked"] is False
+        for target in retry.json()["targets"]
+    )
+
+
 def test_agent_progress_is_derived_from_persisted_events_without_local_paths(
     review_client: TestClient,
 ) -> None:
