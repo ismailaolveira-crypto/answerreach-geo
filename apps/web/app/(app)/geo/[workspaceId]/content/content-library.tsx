@@ -18,9 +18,11 @@ const FILTERS = [
 	{ key: "revision", label: "待修订" },
 	{ key: "approved", label: "已通过" },
 	{ key: "draft_saved", label: "已写草稿" },
+	{ key: "published", label: "人工已发布" },
 ] as const;
 
 function itemState(item: CleanroomContentLibraryItem) {
+	if (item.draft_targets.some((target) => target.human_publish_status === "published" && target.public_url)) return "published";
 	if (item.saved_draft_count > 0) return "draft_saved";
 	if (item.asset.status === "superseded") return "superseded";
 	if (item.latest_review_verdict === "changes_requested") return "revision";
@@ -34,6 +36,7 @@ function stateLabel(state: string) {
 		revision: "待修订",
 		approved: "已通过",
 		draft_saved: "草稿已回读",
+		published: "人工已发布",
 		superseded: "历史版本",
 	}[state] || state;
 }
@@ -74,6 +77,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 				const state = itemState(item);
 				const reviewComplete = item.approved_platform_keys.length > 0;
 				const draftComplete = item.saved_draft_count > 0;
+				const publishedCount = item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url).length;
 				return <article className={styles.item} key={item.asset.id}>
 					<header>
 						<div className={styles.identity}><span className={`${styles.state} ${styles[state]}`}>{stateLabel(state)}</span><small>内容 #{item.asset.id} · v{item.asset.version} · {formatDate(item.asset.updated_at)}</small></div>
@@ -84,9 +88,10 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						<div className={styles.done}><span>1</span><b>Agent 生成</b><small>已持久化</small></div>
 						<div className={reviewComplete ? styles.done : state === "revision" ? styles.warning : styles.current}><span>2</span><b>人工审核</b><small>{reviewComplete ? `${item.approved_platform_keys.length} 个平台已通过` : state === "revision" ? "已退回修订" : `${item.pending_claim_count} 条待确认`}</small></div>
 						<div className={draftComplete ? styles.done : reviewComplete ? styles.current : ""}><span>3</span><b>平台草稿</b><small>{draftComplete ? `${item.saved_draft_count}/${item.total_draft_targets} 已回读` : reviewComplete ? "可打开同步助手" : "尚未开放"}</small></div>
-						<div><span>4</span><b>人工发布</b><small>未记录为已发布</small></div>
+						<div className={publishedCount > 0 ? styles.done : draftComplete ? styles.current : ""}><span>4</span><b>人工发布</b><small>{publishedCount > 0 ? `${publishedCount}/${item.total_draft_targets} 已记录 URL` : draftComplete ? "等待平台人工确认" : "尚未开放"}</small></div>
 					</div>
 					{item.draft_targets.some((target) => target.draft_url) ? <div className={styles.draftLinks}><b>已回读草稿</b>{item.draft_targets.filter((target) => target.draft_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.draft_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}打开{meta?.label || target.platform_key}草稿</a>; })}</div> : null}
+					{publishedCount > 0 ? <div className={styles.publicLinks}><b>人工发布记录</b>{item.draft_targets.filter((target) => target.public_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.public_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}查看{meta?.label || target.platform_key}公开文章</a>; })}</div> : null}
 					<details className={styles.details}>
 						<summary>查看正文与 {item.variants.length} 个平台版本<span aria-hidden="true">›</span></summary>
 						<div className={styles.documents}>

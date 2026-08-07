@@ -240,6 +240,31 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert persisted.json()["status"] == "draft_saved"
     assert persisted.json()["targets"][0]["draft_readback_status"] == "draft_saved"
     assert persisted.json()["targets"][0]["final_action_clicked"] is False
+    assert persisted.json()["targets"][0]["human_publish_status"] == "awaiting_publish"
+
+    target_id = persisted.json()["targets"][0]["id"]
+    wrong_platform = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://example.com/articles/not-zhihu"},
+    )
+    assert wrong_platform.status_code == 422
+
+    published = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
+    )
+    assert published.status_code == 200
+    assert published.json()["status"] == "published"
+    assert published.json()["targets"][0]["human_publish_status"] == "published"
+    assert published.json()["targets"][0]["publication_verification_status"] == "human_confirmed"
+    assert published.json()["targets"][0]["final_action_clicked"] is False
+
+    corrected = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://www.zhihu.com/question/123/answer/456"},
+    )
+    assert corrected.status_code == 200
+    assert corrected.json()["targets"][0]["public_url"].endswith("/answer/456")
 
     library = review_client.get("/api/v1/workspaces/1/content-library")
     assert library.status_code == 200
@@ -247,6 +272,7 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert library.json()[0]["approved_platform_keys"] == ["zhihu"]
     assert library.json()[0]["saved_draft_count"] == 1
     assert library.json()[0]["draft_targets"][0]["draft_url"].startswith("https://www.zhihu.com/")
+    assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
 
 
 def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(

@@ -89,6 +89,7 @@ from app.v1.schemas import (
     DistributionRunCreate,
     DistributionClientResults,
     DistributionRunRead,
+    HumanPublicationRecord,
     PlatformVariantCreate,
     PlatformVariantRead,
     DecisionMapRead,
@@ -110,6 +111,7 @@ from app.v1.schemas import (
     OfficialApiObservationResponse,
     QueuedOfficialApiObservationResponse,
     ReobservationCreate,
+    ActionRetestRead,
     ScorecardRead,
     SourceMapRead,
     StandardObservationRequest,
@@ -141,6 +143,7 @@ from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities
+from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
 from app.services.codex_agent_runtime import LocalCodexRuntime, diagnose_local_codex
@@ -4372,6 +4375,9 @@ def record_distribution_client_results(
             target.waiting_human_reason = "平台草稿已回读；最终发布仍等待人工确认。"
             target.blocked_reason = None
             target.last_error_code = None
+            if target.human_publish_status != "published":
+                target.human_publish_status = "awaiting_publish"
+                target.publication_verification_status = "not_checked"
         elif result.request_status == "failed":
             target.request_status = "failed"
             target.draft_readback_status = "failed"
@@ -4416,6 +4422,118 @@ def record_distribution_client_results(
                 "saved_count": saved_count,
                 "failed_count": failed_count,
                 "pending_count": pending_count,
+                "final_action_clicked": False,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+def _validated_publication_url(
+    workspace: GeoWorkspace,
+    platform_key: str,
+    value: str,
+) -> str:
+    url = value.strip()
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="公开文章地址必须是完整的 HTTPS URL")
+    if not parsed.path or parsed.path == "/":
+        raise HTTPException(status_code=422, detail="请填写具体文章页面，而不是平台首页")
+
+    def host_matches(expected: str) -> bool:
+        return host == expected or host.endswith(f".{expected}")
+
+    if platform_key == "zhihu":
+        valid = host_matches("zhihu.com")
+        expected_label = "知乎"
+    elif platform_key == "wechat":
+        valid = host == "mp.weixin.qq.com"
+        expected_label = "微信公众号"
+    elif platform_key == "xiaohongshu":
+        valid = host_matches("xiaohongshu.com")
+        expected_label = "小红书"
+    elif platform_key == "official_site":
+        website_host = (urlsplit(workspace.website_url or "").hostname or "").lower().rstrip(".")
+        if not website_host:
+            raise HTTPException(status_code=422, detail="请先在设置中配置官网域名")
+        valid = host == website_host or host.endswith(f".{website_host}")
+        expected_label = "当前工作区官网"
+    else:
+        raise HTTPException(status_code=422, detail="当前平台尚不支持发布结果归档")
+    if not valid:
+        raise HTTPException(status_code=422, detail=f"该地址不是{expected_label}的公开文章 URL")
+    return parsed.geturl()
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+    response_model=DistributionRunRead,
+)
+def record_human_publication(
+    workspace_id: int,
+    run_id: int,
+    target_id: int,
+    payload: HumanPublicationRecord,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace = workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    target = db.get(GeoDistributionTarget, target_id)
+    if target is None or target.distribution_run_id != run.id:
+        raise HTTPException(status_code=404, detail="发布目标不存在")
+    if target.draft_readback_status != "draft_saved":
+        raise HTTPException(status_code=409, detail="只有已回读的真实平台草稿可以记录发布结果")
+    public_url = _validated_publication_url(workspace, target.platform_key, payload.public_url)
+    previous_url = target.public_url
+    now = datetime.now(timezone.utc)
+    target.human_publish_status = "published"
+    target.public_url = public_url
+    target.publication_verification_status = "human_confirmed"
+    target.published_at = now
+    target.published_by_user_id = user.id
+    target.waiting_human_reason = None
+    # The product records the user's platform action; it never claims that our
+    # system clicked the final publish control.
+    target.final_action_clicked = False
+
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id)
+        )
+    )
+    all_published = bool(targets) and all(
+        item.human_publish_status == "published" and item.public_url for item in targets
+    )
+    run.stage = "published" if all_published else "awaiting_publication"
+    run.status = "published" if all_published else "partial"
+    action = db.get(GeoOptimizationAction, run.action_id) if run.action_id else None
+    previous_stage = action.stage if action else run.stage
+    if action:
+        action.stage = "ready_for_retest" if all_published else "awaiting_publication"
+        action.blocked_reason = None
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=run.action_id,
+            event_type="human_publication_recorded",
+            from_stage=previous_stage,
+            to_stage=action.stage if action else run.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "distribution_run_id": run.id,
+                "target_id": target.id,
+                "platform_key": target.platform_key,
+                "public_url": public_url,
+                "corrected": bool(previous_url and previous_url != public_url),
+                "all_targets_published": all_published,
                 "final_action_clicked": False,
             },
         )
@@ -5107,12 +5225,17 @@ def update_action(
 ):
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
-    if payload.status == "closed" and not db.scalar(
-        select(GeoReobservation).where(GeoReobservation.action_id == action.id)
-    ):
+    completed_retest = db.scalar(
+        select(GeoReobservation).where(
+            GeoReobservation.action_id == action.id,
+            GeoReobservation.status == "completed",
+            GeoReobservation.conclusion.in_(("improved", "unchanged", "regressed")),
+        )
+    )
+    if payload.status == "closed" and not completed_retest:
         raise HTTPException(
             status_code=422,
-            detail="A re-observation and conclusion are required before closing an action",
+            detail="完成同口径复测并获得可比较结论后才能关闭行动",
         )
     if payload.status:
         action.status = payload.status
@@ -5144,13 +5267,334 @@ def create_reobservation(
         workspace_id=workspace_id,
         run_id=run.id,
         evidence_id=evidence.id,
-        conclusion=payload.conclusion,
-        measured_delta=payload.measured_delta,
+        status="legacy_recorded",
+        conclusion="insufficient_evidence",
+        measured_delta={
+            "comparable": False,
+            "reason": "legacy_single_evidence_has_no_comparable_batch_scope",
+            "submitted_conclusion": payload.conclusion,
+            "submitted_delta": payload.measured_delta,
+        },
+        completed_at=datetime.now(timezone.utc),
     )
-    action.status = "verified"
+    action.status = "in_progress"
+    action.stage = "retest_inconclusive"
+    action.blocked_reason = "单条证据无法形成同口径复测结论，请使用行动复测入口。"
     db.add(row)
     db.commit()
     return {"id": row.id, "action_id": action.id, "status": action.status}
+
+
+def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
+    batch_summary = None
+    queue_job = db.get(QueueJob, row.retest_queue_job_id) if row.retest_queue_job_id else None
+    if queue_job is not None:
+        batch_summary = _official_api_batch_summary(db, queue_job)
+        if row.status not in {"completed", "failed"}:
+            if batch_summary["status"] in {"pending", "running"}:
+                row.status = "queued" if batch_summary["status"] == "pending" else "running"
+            else:
+                baseline_batch = db.get(GeoObservationBatch, row.baseline_batch_id)
+                retest_batch = db.get(GeoObservationBatch, row.retest_batch_id)
+                scope = row.scope_snapshot or {}
+                question_plan_id = int(scope.get("question_plan_id") or 0)
+                provider_ids = [int(value) for value in scope.get("provider_ids") or []]
+                if baseline_batch is None or retest_batch is None or not question_plan_id or not provider_ids:
+                    row.status = "failed"
+                    row.conclusion = "insufficient_evidence"
+                    row.measured_delta = {
+                        "comparable": False,
+                        "reason": "retest_scope_or_batch_missing",
+                    }
+                else:
+                    baseline_metrics = build_batch_metrics(
+                        db,
+                        baseline_batch,
+                        question_plan_id=question_plan_id,
+                        provider_ids=provider_ids,
+                    )
+                    retest_metrics = build_batch_metrics(
+                        db,
+                        retest_batch,
+                        question_plan_id=question_plan_id,
+                        provider_ids=provider_ids,
+                    )
+                    conclusion, measured_delta = compare_batches(
+                        baseline_batch,
+                        retest_batch,
+                        baseline_metrics,
+                        retest_metrics,
+                    )
+                    row.baseline_metrics = baseline_metrics
+                    row.retest_metrics = retest_metrics
+                    row.conclusion = conclusion
+                    row.measured_delta = measured_delta
+                    row.status = "completed"
+                    row.completed_at = datetime.now(timezone.utc)
+                    action = db.get(GeoOptimizationAction, row.action_id)
+                    if action:
+                        if conclusion in {"improved", "unchanged", "regressed"}:
+                            action.status = "verified"
+                            action.stage = "verified"
+                            action.completed_at = row.completed_at
+                            action.blocked_reason = None
+                        else:
+                            action.status = "in_progress"
+                            action.stage = "retest_inconclusive"
+                            action.blocked_reason = "复测已结束，但样本或模型版本不满足同口径比较要求。"
+                    db.add(
+                        GeoActionEvent(
+                            workspace_id=row.workspace_id,
+                            action_id=row.action_id,
+                            event_type="comparable_retest_completed",
+                            from_stage="retesting",
+                            to_stage=action.stage if action else "retest_completed",
+                            actor_type="system",
+                            job_id=row.retest_queue_job_id,
+                            detail={
+                                "reobservation_id": row.id,
+                                "conclusion": conclusion,
+                                "comparable": bool(measured_delta.get("comparable")),
+                                "baseline_batch_id": row.baseline_batch_id,
+                                "retest_batch_id": row.retest_batch_id,
+                            },
+                        )
+                    )
+            db.commit()
+            db.refresh(row)
+    elif row.status not in {"completed", "failed"}:
+        row.status = "failed"
+        row.conclusion = "insufficient_evidence"
+        row.measured_delta = {"comparable": False, "reason": "queue_job_missing"}
+        action = db.get(GeoOptimizationAction, row.action_id)
+        if action:
+            action.status = "in_progress"
+            action.stage = "retest_failed"
+            action.blocked_reason = "复测队列记录不存在，请重新创建复测。"
+        db.commit()
+        db.refresh(row)
+    return {
+        "id": row.id,
+        "action_id": row.action_id,
+        "workspace_id": row.workspace_id,
+        "status": row.status,
+        "baseline_batch_id": row.baseline_batch_id,
+        "retest_batch_id": row.retest_batch_id,
+        "retest_queue_job_id": row.retest_queue_job_id,
+        "scope_snapshot": row.scope_snapshot or {},
+        "baseline_metrics": row.baseline_metrics or {},
+        "retest_metrics": row.retest_metrics or {},
+        "conclusion": row.conclusion,
+        "measured_delta": row.measured_delta or {},
+        "batch": batch_summary,
+        "started_at": row.started_at,
+        "completed_at": row.completed_at,
+    }
+
+
+@router.get(
+    "/workspaces/{workspace_id}/actions/{action_id}/retest",
+    response_model=ActionRetestRead,
+)
+def read_action_retest(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    row = db.scalar(select(GeoReobservation).where(GeoReobservation.action_id == action.id))
+    if row is None:
+        raise HTTPException(status_code=404, detail="该行动还没有复测任务")
+    return _action_retest_read(db, row)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/retest",
+    response_model=ActionRetestRead,
+    status_code=202,
+)
+def create_action_retest(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    existing = db.scalar(select(GeoReobservation).where(GeoReobservation.action_id == action.id))
+    if existing and existing.status in {"preparing", "queued", "running"}:
+        return _action_retest_read(db, existing)
+    if existing and existing.status == "completed" and existing.conclusion != "insufficient_evidence":
+        return _action_retest_read(db, existing)
+
+    published_run = None
+    for distribution in db.scalars(
+        select(GeoDistributionRun)
+        .where(
+            GeoDistributionRun.workspace_id == workspace_id,
+            GeoDistributionRun.action_id == action.id,
+        )
+        .order_by(GeoDistributionRun.id.desc())
+    ):
+        targets = list(
+            db.scalars(
+                select(GeoDistributionTarget).where(
+                    GeoDistributionTarget.distribution_run_id == distribution.id
+                )
+            )
+        )
+        if targets and all(
+            target.human_publish_status == "published" and target.public_url
+            for target in targets
+        ):
+            published_run = (distribution, targets)
+            break
+    if published_run is None:
+        raise HTTPException(
+            status_code=409,
+            detail="请先为本次同步的全部平台记录真实公开文章 URL",
+        )
+
+    baseline_batch_id = int((action.baseline_snapshot or {}).get("batch_id") or 0)
+    baseline_batch = db.get(GeoObservationBatch, baseline_batch_id)
+    if baseline_batch is None or baseline_batch.workspace_id != workspace_id:
+        raise HTTPException(status_code=409, detail="行动缺少可追溯的基线观测批次")
+    if baseline_batch.status != "completed":
+        raise HTTPException(status_code=409, detail="基线观测批次尚未完整结束")
+    if not action.question_plan_id:
+        raise HTTPException(status_code=409, detail="行动未关联原始问题，不能创建同口径复测")
+    configuration = baseline_batch.configuration or {}
+    provider_ids = [
+        int(item.get("id") or 0)
+        for item in configuration.get("providers") or []
+        if isinstance(item, dict) and int(item.get("id") or 0) > 0
+    ]
+    provider_ids = list(dict.fromkeys(provider_ids))
+    if not provider_ids:
+        raise HTTPException(status_code=409, detail="基线批次没有可复用的模型渠道")
+    baseline_metrics = build_batch_metrics(
+        db,
+        baseline_batch,
+        question_plan_id=action.question_plan_id,
+        provider_ids=provider_ids,
+    )
+    if (
+        int(baseline_metrics.get("eligible_samples") or 0) < 1
+        or baseline_metrics.get("eligible_samples") != baseline_metrics.get("expected_samples")
+    ):
+        raise HTTPException(status_code=409, detail="基线样本不满足真实联网证据门槛，不能做可比复测")
+
+    now = datetime.now(timezone.utc)
+    distribution, publication_targets = published_run
+    previous_attempts = []
+    if existing:
+        previous_attempts = list((existing.scope_snapshot or {}).get("previous_attempts") or [])
+        previous_attempts.append(
+            {
+                "retest_batch_id": existing.retest_batch_id,
+                "retest_queue_job_id": existing.retest_queue_job_id,
+                "status": existing.status,
+                "conclusion": existing.conclusion,
+                "completed_at": existing.completed_at.isoformat() if existing.completed_at else None,
+            }
+        )
+        row = existing
+    else:
+        row = GeoReobservation(action_id=action.id, workspace_id=workspace_id)
+        db.add(row)
+    row.status = "preparing"
+    row.baseline_batch_id = baseline_batch.id
+    row.retest_batch_id = None
+    row.retest_queue_job_id = None
+    row.scope_snapshot = {
+        "schema": "comparable-action-retest/v1",
+        "question_plan_id": action.question_plan_id,
+        "provider_ids": provider_ids,
+        "repeat_count": baseline_batch.repeat_count,
+        "baseline_batch_id": baseline_batch.id,
+        "distribution_run_id": distribution.id,
+        "published_targets": [
+            {
+                "platform_key": target.platform_key,
+                "public_url": target.public_url,
+                "published_at": target.published_at.isoformat() if target.published_at else None,
+            }
+            for target in publication_targets
+        ],
+        "previous_attempts": previous_attempts,
+    }
+    row.baseline_metrics = baseline_metrics
+    row.retest_metrics = {}
+    row.conclusion = "pending"
+    row.measured_delta = {}
+    row.started_at = now
+    row.completed_at = None
+    db.flush()
+    try:
+        batch_receipt = create_provider_web_search_batch(
+            workspace_id,
+            OfficialApiObservationBatchCreate(
+                provider_ids=provider_ids,
+                question_plan_ids=[action.question_plan_id],
+                repeat_count=baseline_batch.repeat_count,
+            ),
+            db,
+            user,
+        )
+    except Exception:
+        db.rollback()
+        raise
+    queue_job_id = int(batch_receipt["batch_id"])
+    retest_batch = db.scalar(
+        select(GeoObservationBatch).where(GeoObservationBatch.queue_job_id == queue_job_id)
+    )
+    if retest_batch is None:
+        row.status = "failed"
+        row.conclusion = "insufficient_evidence"
+        row.measured_delta = {"comparable": False, "reason": "ledger_batch_missing"}
+        db.commit()
+        raise HTTPException(status_code=500, detail="复测队列已创建，但统一观测账本缺失")
+    retest_batch.source_type = "action_retest"
+    retest_batch.configuration = {
+        **(retest_batch.configuration or {}),
+        "action_retest": {
+            "action_id": action.id,
+            "reobservation_id": row.id,
+            "baseline_batch_id": baseline_batch.id,
+        },
+    }
+    row.retest_batch_id = retest_batch.id
+    row.retest_queue_job_id = queue_job_id
+    row.status = "queued"
+    action.status = "in_progress"
+    previous_stage = action.stage
+    action.stage = "retesting"
+    action.blocked_reason = None
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="comparable_retest_queued",
+            from_stage=previous_stage,
+            to_stage="retesting",
+            actor_type="user",
+            actor_user_id=user.id,
+            job_id=queue_job_id,
+            detail={
+                "reobservation_id": row.id,
+                "baseline_batch_id": baseline_batch.id,
+                "retest_batch_id": retest_batch.id,
+                "question_plan_id": action.question_plan_id,
+                "provider_ids": provider_ids,
+                "repeat_count": baseline_batch.repeat_count,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(row)
+    return _action_retest_read(db, row)
 
 
 @router.get("/workspaces/{workspace_id}/brand-facts", response_model=list[BrandFactRead])

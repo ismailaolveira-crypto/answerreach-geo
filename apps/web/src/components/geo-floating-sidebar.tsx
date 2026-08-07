@@ -52,7 +52,10 @@ export function GeoFloatingSidebar() {
 
 	useEffect(() => {
 		const saved = window.localStorage.getItem("cq-geo-sidebar-expanded");
-		if (saved !== null) setExpanded(saved === "true");
+		// A desktop preference must not cover the entire canvas after the same
+		// session moves to a phone-sized viewport.
+		if (window.innerWidth < 700) setExpanded(false);
+		else if (saved !== null) setExpanded(saved === "true");
 		else if (window.innerWidth < 920) setExpanded(false);
 	}, []);
 

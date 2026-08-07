@@ -6,9 +6,8 @@ export default async function ContentLibraryPage({ params }: { params: Promise<{
 	const { workspaceId } = await params;
 	const items = await getCleanroomContentLibrary(workspaceId);
 	const awaitingReview = items.filter((item) => item.asset.status === "draft").length;
-	const needsRevision = items.filter((item) => item.latest_review_verdict === "changes_requested" && item.asset.status !== "superseded").length;
-	const readyForSync = items.filter((item) => item.approved_platform_keys.length > 0 && item.saved_draft_count === 0).length;
 	const savedDrafts = items.reduce((total, item) => total + item.saved_draft_count, 0);
+	const publishedArticles = items.reduce((total, item) => total + item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url).length, 0);
 
 	return <main className={styles.page}>
 		<header className={styles.hero}>
@@ -16,8 +15,8 @@ export default async function ContentLibraryPage({ params }: { params: Promise<{
 			<div className={styles.summary} aria-label="内容库摘要">
 				<div><small>全部版本</small><strong>{items.length}</strong></div>
 				<div><small>待人工审核</small><strong>{awaitingReview}</strong></div>
-				<div><small>待修订 / 待同步</small><strong>{needsRevision + readyForSync}</strong></div>
 				<div><small>已回读草稿</small><strong>{savedDrafts}</strong></div>
+				<div><small>人工已发布</small><strong>{publishedArticles}</strong></div>
 			</div>
 		</header>
 		<ContentLibrary workspaceId={workspaceId} items={items} />

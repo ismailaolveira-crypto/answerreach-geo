@@ -1,5 +1,5 @@
 .page { color: #1d2a3d; margin: 0 auto; max-width: 1160px; padding: 42px 34px 80px; }
-.header { align-items: end; display: flex; justify-content: space-between; margin-bottom: 28px; }
+.header { align-items: flex-end; display: flex; justify-content: space-between; margin-bottom: 28px; }
 .header p { color: #2868e8; font-size: 12px; font-weight: 800; letter-spacing: .08em; margin: 0 0 8px; text-transform: uppercase; }
 .header h1 { font-size: 38px; letter-spacing: -.055em; margin: 0; }
 .header span { color: #8390a2; display: block; font-size: 14px; margin-top: 10px; }

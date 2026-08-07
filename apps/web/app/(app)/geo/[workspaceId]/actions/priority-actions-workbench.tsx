@@ -7,6 +7,7 @@ import { BrandLogo } from "@/components/brand-logo";
 import type {
 	AgentRuntime,
 	CleanroomAction,
+	CleanroomActionRetest,
 	CleanroomAgentEvent,
 	CleanroomAgentRun,
 	CleanroomContentReviewPackage,
@@ -23,6 +24,7 @@ type Props = {
 	initialAgentRuns: CleanroomAgentRun[];
 	initialReviewPackages: CleanroomContentReviewPackage[];
 	initialDistributionRuns: CleanroomDistributionRun[];
+	initialRetests: CleanroomActionRetest[];
 	createAction: (formData: FormData) => Promise<void>;
 	startAgent: (actionId: number, platforms: string[]) => Promise<CleanroomAgentRun>;
 	interruptAgent: (runId: number) => Promise<CleanroomAgentRun>;
@@ -32,6 +34,9 @@ type Props = {
 	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
 	recordDistributionResults: (runId: number, targets: Array<{ platform_key: string; request_status: "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>) => Promise<CleanroomDistributionRun>;
+	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
+	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
+	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	discoverActions: () => Promise<void>;
 };
 
@@ -207,7 +212,7 @@ const platformOptions = [
 	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
 ] as const;
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
 	const [selectedModel, setSelectedModel] = useState("all");
@@ -224,6 +229,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const [agentFeedback, setAgentFeedback] = useState("");
 	const [reviewPackages, setReviewPackages] = useState(initialReviewPackages);
 	const [distributionRuns, setDistributionRuns] = useState(initialDistributionRuns);
+	const [retests, setRetests] = useState(initialRetests);
+	const [publicationUrls, setPublicationUrls] = useState<Record<number, string>>({});
+	const [publicationMessage, setPublicationMessage] = useState("");
+	const [retestMessage, setRetestMessage] = useState("");
 	const [reviewOpen, setReviewOpen] = useState(false);
 	const [reviewTab, setReviewTab] = useState("master");
 	const [confirmedClaimIds, setConfirmedClaimIds] = useState<number[]>([]);
@@ -245,7 +254,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		const reviewPackage = reviewPackages.find((item) => item.asset.id === assetId);
 		return run.status === "awaiting_review" && !reviewPackage?.approved_platform_keys.length;
 	}).length;
-	const retestReady = actions.filter((item) => ["verified", "closed"].includes(item.status)).length;
+	const retestReady = retests.filter((item) => item.status === "completed").length;
 	const stage = actionStage(selected?.existingAction);
 	const syncAction = selected?.existingAction ?? actions[0];
 	const currentRun = useMemo(() => agentRuns
@@ -262,9 +271,25 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		.sort((a, b) => b.id - a.id)[0];
 	const savedDraftCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "draft_saved").length ?? 0;
 	const allDraftsSaved = Boolean(currentDistribution?.targets.length && savedDraftCount === currentDistribution.targets.length);
+	const publishedTargetCount = currentDistribution?.targets.filter((target) => target.human_publish_status === "published" && target.public_url).length ?? 0;
+	const allTargetsPublished = Boolean(currentDistribution?.targets.length && publishedTargetCount === currentDistribution.targets.length);
+	const currentRetest = retests.find((item) => item.action_id === selected?.existingAction?.id);
+	const retestActive = Boolean(currentRetest && ["preparing", "queued", "running"].includes(currentRetest.status));
+	const retestComplete = currentRetest?.status === "completed";
+	const comparableRetestComplete = Boolean(retestComplete && currentRetest?.measured_delta.comparable);
+	const retestProviderCount = Array.isArray(currentRetest?.scope_snapshot.provider_ids) ? currentRetest.scope_snapshot.provider_ids.length : 0;
+	const retestRepeatCount = Number(currentRetest?.scope_snapshot.repeat_count || 0);
+	const retestConclusionLabel = currentRetest ? ({
+		improved: "可见度提升",
+		unchanged: "暂未变化",
+		regressed: "可见度下降",
+		insufficient_evidence: "证据不足",
+		pending: "等待复测完成",
+	} as Record<string, string>)[currentRetest.conclusion] || currentRetest.conclusion : "";
 
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
+	useEffect(() => setRetests(initialRetests), [initialRetests]);
 
 	useEffect(() => {
 		const actionId = selected?.existingAction?.id;
@@ -307,6 +332,26 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		source.onerror = () => source.close();
 		return () => source.close();
 	}, [agentEvents, currentRun, router, workspaceId]);
+
+	useEffect(() => {
+		const actionId = selected?.existingAction?.id;
+		if (!actionId || !retestActive) return;
+		const activeActionId = actionId;
+		let cancelled = false;
+		async function refreshRetest() {
+			try {
+				const result = await readRetest(activeActionId);
+				if (cancelled) return;
+				setRetests((current) => [result, ...current.filter((item) => item.action_id !== activeActionId)]);
+				if (!["preparing", "queued", "running"].includes(result.status)) router.refresh();
+			} catch (error) {
+				if (!cancelled) setRetestMessage(error instanceof Error ? error.message : "无法读取复测进度");
+			}
+		}
+		void refreshRetest();
+		const timer = window.setInterval(() => void refreshRetest(), 2000);
+		return () => { cancelled = true; window.clearInterval(timer); };
+	}, [readRetest, retestActive, router, selected?.existingAction?.id]);
 
 	function beginAgent() {
 		if (!selected?.existingAction || !targetPlatforms.length) return;
@@ -465,6 +510,44 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		}
 	}
 
+	function savePublication(targetId: number) {
+		if (!currentDistribution) return;
+		const target = currentDistribution.targets.find((item) => item.id === targetId);
+		const publicUrl = (publicationUrls[targetId] ?? target?.public_url ?? "").trim();
+		if (!target || !publicUrl) {
+			setPublicationMessage("请粘贴该平台的具体公开文章 URL。");
+			return;
+		}
+		setPublicationMessage("");
+		startSaving(async () => {
+			try {
+				const result = await recordHumanPublication(currentDistribution.id, targetId, publicUrl);
+				setDistributionRuns((current) => [result, ...current.filter((item) => item.id !== result.id)]);
+				setPublicationUrls((current) => ({ ...current, [targetId]: publicUrl }));
+				const published = result.targets.filter((item) => item.human_publish_status === "published").length;
+				setPublicationMessage(`${published}/${result.targets.length} 个平台已记录人工发布结果。系统没有代替你点击发布。`);
+				router.refresh();
+			} catch (error) {
+				setPublicationMessage(error instanceof Error ? error.message : "无法保存发布结果");
+			}
+		});
+	}
+
+	function beginRetest() {
+		if (!selected?.existingAction || !allTargetsPublished) return;
+		setRetestMessage("");
+		startSaving(async () => {
+			try {
+				const result = await createRetest(selected.existingAction!.id);
+				setRetests((current) => [result, ...current.filter((item) => item.action_id !== result.action_id)]);
+				setRetestMessage("复测已按基线问题、模型版本和重复次数进入真实观测队列。");
+				router.refresh();
+			} catch (error) {
+				setRetestMessage(error instanceof Error ? error.message : "无法创建同口径复测");
+			}
+		});
+	}
+
 	return <main className="pa-page">
 		<section className="pa-topline">
 			<header className="pa-hero">
@@ -482,7 +565,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>待处理缺口</small><strong>{actionable.length}</strong></div></article>
 				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>高优先级</small><strong>{high}</strong></div></article>
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>草稿待确认</small><strong>{pendingActions}</strong></div></article>
-				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>已完成待复测</small><strong>{retestReady}</strong></div></article>
+				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
 		</section>
 
@@ -510,14 +593,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 						</ActionStage>
 						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张需人工确认。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
 						<ActionStage index={4} label="写入平台草稿" state={allDraftsSaved ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p>}</ActionStage>
-						<ActionStage index={5} label="下轮复测" state={stage >= 4 ? "active" : "idle"}>{stage >= 4 ? <p className="pa-stage-note">请使用相同问题与模型集合创建复测批次。</p> : null}</ActionStage>
+						<ActionStage index={5} label="人工发布" state={allTargetsPublished ? "done" : allDraftsSaved ? "active" : "idle"}>
+							{allDraftsSaved && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
+								const platform = platformOptions.find((item) => item.key === target.platform_key);
+								const published = target.human_publish_status === "published" && Boolean(target.public_url);
+								return <section key={target.id} className={published ? "is-published" : ""}><header><span>{platform ? <img src={platform.logo} alt="" /> : null}<b>{platform?.label || target.platform_key}</b></span><small>{published ? "人工已记录" : "等待人工发布"}</small></header><div><input type="url" aria-label={`${platform?.label || target.platform_key}公开文章 URL`} placeholder="粘贴具体公开文章 URL" value={publicationUrls[target.id] ?? target.public_url ?? ""} onChange={(event) => setPublicationUrls((current) => ({ ...current, [target.id]: event.target.value }))} /><button type="button" disabled={isSaving || !((publicationUrls[target.id] ?? target.public_url ?? "").trim())} onClick={() => savePublication(target.id)}>{published ? "更正记录" : "记录发布"}</button></div>{target.draft_url ? <a href={target.draft_url} target="_blank" rel="noreferrer">打开平台草稿</a> : null}{target.public_url ? <a href={target.public_url} target="_blank" rel="noreferrer">查看公开文章</a> : null}</section>;
+							})}{publicationMessage ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <p className="pa-stage-note">草稿真实回读后，才可记录人工发布结果。</p>}
+						</ActionStage>
+						<ActionStage index={6} label="同口径复测" state={comparableRetestComplete ? "done" : retestActive || allTargetsPublished ? "active" : "idle"}>
+							{allTargetsPublished ? <div className="pa-stage-card pa-retest-card"><b>{retestComplete ? retestConclusionLabel : retestActive ? "真实联网复测进行中" : "可以创建可比复测"}</b><p>{currentRetest ? `基线批次 #${currentRetest.baseline_batch_id} · ${retestProviderCount} 个模型 × ${retestRepeatCount} 次 · 原问题不变。` : "后端会复用基线问题、模型渠道、模型版本和重复次数；不允许前端自行改变口径。"}</p>{currentRetest?.batch ? <><div className="pa-retest-progress" aria-label={`复测进度 ${currentRetest.batch.progress_percent}%`}><i style={{ width: `${currentRetest.batch.progress_percent}%` }} /></div><small>{currentRetest.batch.succeeded + currentRetest.batch.failed}/{currentRetest.batch.total} 已结束 · 成功 {currentRetest.batch.succeeded} · 失败 {currentRetest.batch.failed}</small></> : null}{!retestActive && (!retestComplete || !comparableRetestComplete) ? <button type="button" onClick={beginRetest} disabled={isSaving}>{isSaving ? "正在创建…" : currentRetest?.conclusion === "insufficient_evidence" ? "重新创建同口径复测" : "创建真实复测"}</button> : null}{retestComplete ? <p className={comparableRetestComplete ? "is-success" : "is-warning"}>{comparableRetestComplete ? `结论：${retestConclusionLabel}。该结论只描述同口径观测差异，不宣称发布构成因果。` : "本轮已经结束，但样本或模型版本不完整，不能得出变化结论。"}</p> : null}{retestMessage ? <p className="pa-inline-feedback" role="status">{retestMessage}</p> : null}</div> : <p className="pa-stage-note">全部目标平台记录真实公开 URL 后，复测入口才会开放。</p>}
+						</ActionStage>
 					</ol> : !isTimelineCollapsed ? <p className="pa-empty-copy">调整筛选条件后，选择一个机会开始。</p> : null}
 				</aside>
 			</section>
 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
-				<div className="pa-progress-lanes"><div className={agentRuns.some((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "is-current" : ""}><b>Agent 生成</b><span>{agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length}</span><p>{agentRuns.find((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "正在调研与生成" : "已生成内容进入后续流程"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div><b>人工发布 / 复测</b><span>{actions.filter((item) => ["verified", "closed"].includes(item.status)).length}</span><p>平台发布始终由人工确认</p></div></div>
+				<div className="pa-progress-lanes"><div className={agentRuns.some((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "is-current" : ""}><b>Agent 生成</b><span>{agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length}</span><p>{agentRuns.find((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "正在调研与生成" : "已生成内容进入后续流程"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div className={allDraftsSaved && !allTargetsPublished ? "is-current" : ""}><b>人工发布</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个平台已记录公开 URL` : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "发布完成后复用原问题与模型"}</p></div></div>
 				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!approvedPlatformKeys.length} title={approvedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个平台稿"}>打开同步助手 <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}

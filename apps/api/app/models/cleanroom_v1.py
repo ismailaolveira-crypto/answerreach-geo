@@ -618,6 +618,15 @@ class GeoDistributionTarget(CleanRoomTimestamp, Base):
     blocked_reason: Mapped[str | None] = mapped_column(Text)
     last_error_code: Mapped[str | None] = mapped_column(String(80))
     final_action_clicked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    human_publish_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_ready", index=True
+    )
+    public_url: Mapped[str | None] = mapped_column(String(1500))
+    publication_verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_checked"
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
 
 
 class GeoReobservation(CleanRoomTimestamp, Base):
@@ -630,10 +639,23 @@ class GeoReobservation(CleanRoomTimestamp, Base):
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
     )
-    run_id: Mapped[int] = mapped_column(ForeignKey("geo_observation_runs_v1.id"), nullable=False)
-    evidence_id: Mapped[int] = mapped_column(ForeignKey("geo_evidence_v1.id"), nullable=False)
-    conclusion: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[int | None] = mapped_column(ForeignKey("geo_observation_runs_v1.id"))
+    evidence_id: Mapped[int | None] = mapped_column(ForeignKey("geo_evidence_v1.id"))
+    baseline_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    retest_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    retest_queue_job_id: Mapped[int | None] = mapped_column(ForeignKey("queue_jobs.id"), index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="preparing", index=True)
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    baseline_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    retest_metrics: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    conclusion: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     measured_delta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class GeoBrandFact(CleanRoomTimestamp, Base):

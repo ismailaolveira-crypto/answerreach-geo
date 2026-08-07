@@ -794,6 +794,11 @@ export type CleanroomDistributionTarget = {
 	blocked_reason?: string | null;
 	last_error_code?: string | null;
 	final_action_clicked: boolean;
+	human_publish_status: string;
+	public_url?: string | null;
+	publication_verification_status: string;
+	published_at?: string | null;
+	published_by_user_id?: number | null;
 };
 
 export type CleanroomDistributionRun = {
@@ -806,6 +811,24 @@ export type CleanroomDistributionRun = {
 	idempotency_key: string;
 	status: string;
 	targets: CleanroomDistributionTarget[];
+};
+
+export type CleanroomActionRetest = {
+	id: number;
+	action_id: number;
+	workspace_id: number;
+	status: string;
+	baseline_batch_id?: number | null;
+	retest_batch_id?: number | null;
+	retest_queue_job_id?: number | null;
+	scope_snapshot: Record<string, unknown>;
+	baseline_metrics: Record<string, unknown>;
+	retest_metrics: Record<string, unknown>;
+	conclusion: string;
+	measured_delta: Record<string, unknown>;
+	batch?: OfficialApiObservationBatchSummary | null;
+	started_at?: string | null;
+	completed_at?: string | null;
 };
 
 export type CleanroomContentGenerationJob = {
@@ -1401,6 +1424,31 @@ export function recordCleanroomDistributionClientResults(
 	return apiRequest<CleanroomDistributionRun>(`/workspaces/${workspaceId}/distribution-runs/${runId}/client-results`, {
 		method: "POST",
 		body: JSON.stringify({ targets }),
+	});
+}
+
+export function recordCleanroomHumanPublication(
+	workspaceId: string | number,
+	runId: number,
+	targetId: number,
+	publicUrl: string,
+) {
+	return apiRequest<CleanroomDistributionRun>(
+		`/workspaces/${workspaceId}/distribution-runs/${runId}/targets/${targetId}/human-publication`,
+		{
+			method: "POST",
+			body: JSON.stringify({ public_url: publicUrl }),
+		},
+	);
+}
+
+export function getCleanroomActionRetest(workspaceId: string | number, actionId: number) {
+	return apiRequest<CleanroomActionRetest>(`/workspaces/${workspaceId}/actions/${actionId}/retest`);
+}
+
+export function createCleanroomActionRetest(workspaceId: string | number, actionId: number) {
+	return apiRequest<CleanroomActionRetest>(`/workspaces/${workspaceId}/actions/${actionId}/retest`, {
+		method: "POST",
 	});
 }
 

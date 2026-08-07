@@ -2,10 +2,12 @@ import { revalidatePath } from "next/cache";
 import {
 	createCleanroomAction,
 	createCleanroomAgentRun,
+	createCleanroomActionRetest,
 	createCleanroomDistributionRun,
 	decideCleanroomContentReview,
 	discoverCleanroomActionOpportunities,
 	getActionAgentRuns,
+	getCleanroomActionRetest,
 	getAgentRunEvents,
 	getAgentRuntime,
 	getCleanroomContentReviewPackage,
@@ -16,6 +18,7 @@ import {
 	getQuestionLibrary,
 	interruptCleanroomAgentRun,
 	recordCleanroomDistributionClientResults,
+	recordCleanroomHumanPublication,
 	resumeCleanroomAgentRun,
 	reviseCleanroomAgentRun,
 } from "@/lib/cleanroom-v1-api";
@@ -35,9 +38,10 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 	]);
 	const agentRuns = runGroups.flat();
 	const assetIds = [...new Set(agentRuns.map((run) => Number(run.result_snapshot.asset_id)).filter((id) => Number.isInteger(id) && id > 0))];
-	const [reviewPackages, distributionRuns] = await Promise.all([
+	const [reviewPackages, distributionRuns, retests] = await Promise.all([
 		Promise.all(assetIds.map((assetId) => getCleanroomContentReviewPackage(workspaceId, assetId).catch(() => null))),
 		getCleanroomDistributionRuns(workspaceId).catch(() => []),
+		Promise.all(actions.map((action) => getCleanroomActionRetest(workspaceId, action.id).catch(() => null))),
 	]);
 	const opportunities = persistedOpportunities.length > 0
 		? mapBackendPriorityActionOpportunities(persistedOpportunities, actions)
@@ -140,5 +144,25 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 		return result;
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} discoverActions={discoverActions} />;
+	async function recordHumanPublication(runId: number, targetId: number, publicUrl: string) {
+		"use server";
+		const result = await recordCleanroomHumanPublication(workspaceId, runId, targetId, publicUrl);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
+		return result;
+	}
+
+	async function createRetest(actionId: number) {
+		"use server";
+		const result = await createCleanroomActionRetest(workspaceId, actionId);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		return result;
+	}
+
+	async function readRetest(actionId: number) {
+		"use server";
+		return getCleanroomActionRetest(workspaceId, actionId);
+	}
+
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} initialRetests={retests.filter((item): item is NonNullable<typeof item> => item !== null)} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} />;
 }

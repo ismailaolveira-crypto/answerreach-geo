@@ -1219,6 +1219,11 @@ class DistributionTargetRead(BaseModel):
     blocked_reason: str | None
     last_error_code: str | None
     final_action_clicked: bool
+    human_publish_status: str = "not_ready"
+    public_url: str | None = None
+    publication_verification_status: str = "not_checked"
+    published_at: datetime | None = None
+    published_by_user_id: int | None = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -1265,6 +1270,28 @@ class DistributionClientTargetResult(BaseModel):
 
 class DistributionClientResults(BaseModel):
     targets: list[DistributionClientTargetResult] = Field(min_length=1, max_length=20)
+
+
+class HumanPublicationRecord(BaseModel):
+    public_url: str = Field(min_length=8, max_length=1500)
+
+
+class ActionRetestRead(BaseModel):
+    id: int
+    action_id: int
+    workspace_id: int
+    status: str
+    baseline_batch_id: int | None = None
+    retest_batch_id: int | None = None
+    retest_queue_job_id: int | None = None
+    scope_snapshot: dict = Field(default_factory=dict)
+    baseline_metrics: dict = Field(default_factory=dict)
+    retest_metrics: dict = Field(default_factory=dict)
+    conclusion: str = "pending"
+    measured_delta: dict = Field(default_factory=dict)
+    batch: OfficialApiObservationBatchSummary | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class PromptTemplateRead(BaseModel):
