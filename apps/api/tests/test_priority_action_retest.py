@@ -15,6 +15,7 @@ from app.main import create_app
 from app.models import QueueJob
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
+    GeoActionOpportunity,
     GeoDistributionRun,
     GeoDistributionTarget,
     GeoEvidence,
@@ -132,9 +133,31 @@ def retest_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None
             )
         )
         db.add(
+            GeoActionOpportunity(
+                id=1,
+                workspace_id=1,
+                fingerprint="a" * 64,
+                opportunity_type="candidate_gap",
+                title="补齐品牌答案",
+                summary="基线未出现品牌",
+                priority_score=92,
+                priority_label="high",
+                evidence_strength=1,
+                source_gap_type="owned_content",
+                recommended_asset_type="article",
+                recommended_platforms=["zhihu", "wechat"],
+                scope_snapshot={"batch_id": 1, "question_plan_id": 1},
+                rule_version="opportunity.v1",
+                status="selected",
+                first_seen_batch_id=1,
+                latest_seen_batch_id=1,
+            )
+        )
+        db.add(
             GeoOptimizationAction(
                 id=1,
                 workspace_id=1,
+                opportunity_id=1,
                 question_plan_id=1,
                 title="补齐品牌答案",
                 rationale="基线未出现品牌",
@@ -401,9 +424,16 @@ def test_retest_reuses_exact_scope_and_completes_from_real_evidence(
 
     with session_factory() as db:
         action = db.get(GeoOptimizationAction, 1)
+        opportunity = db.get(GeoActionOpportunity, 1)
         assert action is not None
+        assert opportunity is not None
         assert action.status == "verified"
         assert action.stage == "verified"
+        assert opportunity.status == "completed"
+
+    unresolved = retest_client.get("/api/v1/workspaces/1/action-opportunities")
+    assert unresolved.status_code == 200
+    assert unresolved.json() == []
 
 
 def test_legacy_single_evidence_cannot_mark_action_verified(

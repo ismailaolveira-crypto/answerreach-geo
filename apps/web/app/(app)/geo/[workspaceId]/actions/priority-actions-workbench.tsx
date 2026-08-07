@@ -172,7 +172,7 @@ function modelBrand(label: string) {
 	const value = label.toLowerCase();
 	if (value.includes("deepseek")) return "deepseek";
 	if (value.includes("doubao") || value.includes("豆包")) return "doubao";
-	if (value.includes("qwen") || value.includes("千问")) return "qwen";
+	if (value.includes("qwen") || value.includes("qianwen") || value.includes("千问")) return "qwen";
 	if (value.includes("glm") || value.includes("智谱")) return "glm";
 	if (value.includes("kimi") || value.includes("moonshot")) return "kimi";
 	if (value.includes("hunyuan") || value.includes("混元")) return "hunyuan";
@@ -327,8 +327,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const filtered = opportunities;
 	useEffect(() => { if (!filtered.some((item) => item.id === selectedId)) setSelectedId(filtered[0]?.id ?? ""); }, [filtered, selectedId]);
 	const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0];
-	const actionable = filtered.filter((item) => !item.existingAction);
-	const high = actionable.filter((item) => item.priority === "high").length;
+	const unresolved = filtered.filter((item) => !item.existingAction || !["verified", "closed"].includes(item.existingAction.status));
+	const unselected = unresolved.filter((item) => !item.existingAction).length;
+	const inProgress = unresolved.filter((item) => item.existingAction).length;
+	const high = unresolved.filter((item) => item.priority === "high").length;
 	const pendingActions = agentRuns.filter((run) => {
 		const assetId = Number(run.result_snapshot.asset_id);
 		const reviewPackage = reviewPackages.find((item) => item.asset.id === assetId);
@@ -825,8 +827,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</header>
 
 			<section className="pa-summary" aria-label="行动状态摘要">
-				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>待处理缺口</small><strong>{isScopePending ? "—" : actionable.length}</strong></div></article>
-				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>高优先级</small><strong>{isScopePending ? "—" : high}</strong></div></article>
+				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>未闭环机会</small><strong>{isScopePending ? "—" : unresolved.length}</strong></div></article>
+				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>其中高优先级</small><strong>{isScopePending ? "—" : high}</strong></div></article>
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>草稿待确认</small><strong>{pendingActions}</strong></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
@@ -835,12 +837,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>当前范围没有达到门槛的机会</h2><p>{selectedBatch ? "这里只接受完整回答、真实搜索事件、来源 URL 和原始工件都齐全的证据。可以刷新当前范围，或返回决策地图发起新观测。" : "完成一次真实联网观测并归档完整证据后，系统才会识别行动机会。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || !selectedBatchId}>{isSaving ? "正在分析…" : "刷新当前范围"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
-					<header><div><h2>系统发现的优先机会</h2><p>仅使用已归档回答生成，不补造证据。</p></div><small>{filtered.length} 个机会</small></header>
+					<header><div><h2>系统发现的优先机会</h2><p>仅使用已归档回答生成，不补造证据。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
 					<div className="pa-opportunity-list">
 						{filtered.map((item) => <article key={item.id} className={selected?.id === item.id ? "is-selected" : ""}>
 							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3><p>{item.summary}</p><div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div></div>
 							<div className="pa-gap"><small>缺失信源</small><div className="pa-source-tags">{suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}</div><em>建议载体 · {suggestedCarrier(item.type)}</em></div>
-							<div className="pa-opportunity-actions"><span className="pa-evidence-ok"><Icon name="check" />证据充分</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "查看行动" : "选择并开始"}</button><Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link></div>
+							<div className="pa-opportunity-actions"><span className={item.existingAction ? "pa-action-current" : "pa-evidence-ok"}><Icon name={item.existingAction ? "arrow" : "check"} />{item.existingAction ? "行动进行中" : "证据充分"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button><Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link></div>
 						</article>)}
 					</div>
 				</div>

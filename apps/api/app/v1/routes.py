@@ -5728,6 +5728,12 @@ def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
                             action.stage = "verified"
                             action.completed_at = row.completed_at
                             action.blocked_reason = None
+                            if action.opportunity_id:
+                                opportunity = db.get(
+                                    GeoActionOpportunity, action.opportunity_id
+                                )
+                                if opportunity and opportunity.workspace_id == row.workspace_id:
+                                    opportunity.status = "completed"
                         else:
                             action.status = "in_progress"
                             action.stage = "retest_inconclusive"
