@@ -313,6 +313,25 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		insufficient_evidence: "证据不足",
 		pending: "等待复测完成",
 	} as Record<string, string>)[currentRetest.conclusion] || currentRetest.conclusion : "";
+	const syncConnectionReady = ["confirm", "syncing", "complete"].includes(syncPhase) || (syncPhase === "error" && syncAccounts.length > 0);
+	const syncSelectionReady = ["syncing", "complete"].includes(syncPhase) || (syncPhase === "error" && selectedSyncAccounts.length > 0);
+	const syncProgressSteps = [
+		{
+			label: "连接助手",
+			hint: syncConnectionReady ? `${syncAccounts.length} 个匹配账号` : "检查扩展与登录状态",
+			state: syncConnectionReady ? "done" : syncPhase === "discovering" ? "current" : syncPhase === "error" ? "issue" : "waiting",
+		},
+		{
+			label: "确认平台",
+			hint: syncPhase === "confirm" ? `已选择 ${selectedSyncAccounts.length}/${syncAccounts.length}` : syncSelectionReady ? `${selectedSyncAccounts.length} 个平台已确认` : "由你决定写入范围",
+			state: syncSelectionReady ? "done" : syncPhase === "confirm" ? "current" : "waiting",
+		},
+		{
+			label: "写入并回读",
+			hint: syncPhase === "complete" ? "结果已按草稿链接归档" : "未回读不计为已保存",
+			state: syncPhase === "complete" ? "done" : syncPhase === "syncing" ? "current" : syncPhase === "error" && selectedSyncAccounts.length > 0 ? "issue" : "waiting",
+		},
+	] as const;
 
 	useEffect(() => {
 		setSelectedBatchId(initialScope.batchId);
@@ -746,13 +765,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>
 			<section className="pa-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-assistant-title">
 				<header><div><small>文章同步助手</small><h2 id="sync-assistant-title">选择平台并确认写入</h2></div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"} aria-label="关闭同步助手">×</button></header>
-				<div className="pa-sync-summary"><b>{currentReviewPackage?.asset.title || syncAction?.title}</b><p>将按平台分别使用已审核的标题和正文；只保存草稿，不执行发布。</p></div>
-				<p className={`pa-sync-message is-${syncPhase}`} role="status">{syncMessage}</p>
-				{syncAccounts.length ? <div className="pa-sync-platforms">{syncAccounts.map((account) => {
-					const disabled = syncPhase !== "confirm";
-					const checked = selectedSyncAccounts.includes(account.type);
-					return <label key={account.type} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => setSelectedSyncAccounts((current) => current.includes(account.type) ? current.filter((value) => value !== account.type) : [...current, account.type])} /><span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿已返回" : account.status === "failed" ? (account.error || "写入失败") : account.msg || account.title}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
-				})}</div> : null}
+				<div className="pa-sync-body">
+					<div className="pa-sync-summary"><b>{currentReviewPackage?.asset.title || syncAction?.title}</b><p>将按平台分别使用已审核的标题和正文；只保存草稿，不执行发布。</p></div>
+					<ol className="pa-sync-progress" aria-label="同步助手进度">{syncProgressSteps.map((step, index) => <li className={`is-${step.state}`} key={step.label}><i>{step.state === "done" ? "✓" : step.state === "issue" ? "!" : index + 1}</i><span><b>{step.label}</b><small>{step.hint}</small></span></li>)}</ol>
+					<p className={`pa-sync-message is-${syncPhase}`} role="status">{syncMessage}</p>
+					{syncAccounts.length ? <div className="pa-sync-platforms">{syncAccounts.map((account) => {
+						const disabled = syncPhase !== "confirm";
+						const checked = selectedSyncAccounts.includes(account.type);
+						return <label key={account.type} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => setSelectedSyncAccounts((current) => current.includes(account.type) ? current.filter((value) => value !== account.type) : [...current, account.type])} /><span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿已返回" : account.status === "failed" ? (account.error || "写入失败") : account.msg || account.title}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
+					})}</div> : null}
+				</div>
 				<footer><span>确认只会触发草稿写入，不会点击平台发布。</span><div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"}>取消</button>{syncPhase === "confirm" ? <button className="is-primary" type="button" onClick={confirmSync} disabled={!selectedSyncAccounts.length}>确认写入 {selectedSyncAccounts.length} 个平台</button> : null}{syncPhase === "error" ? <button className="is-primary" type="button" onClick={openSyncAssistant}>重新检测</button> : null}</div></footer>
 			</section>
 		</div> : null}
