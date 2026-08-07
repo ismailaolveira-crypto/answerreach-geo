@@ -431,6 +431,35 @@ class CompetitorBreakdown(BaseModel):
     brands: list[CompetitorBrandStat]
 
 
+class CompetitorInsightRequest(BaseModel):
+    period_days: int = Field(default=90, ge=1, le=3650)
+    model_key: str | None = Field(default=None, min_length=1, max_length=120)
+    question_plan_id: int | None = Field(default=None, ge=1)
+    evidence_limit: int = Field(default=50, ge=1, le=100)
+
+
+class CompetitorInsightFindingRead(BaseModel):
+    title: str
+    detail: str
+    evidence_ids: list[int] = Field(default_factory=list)
+
+
+class CompetitorInsightAnalysisRead(BaseModel):
+    scope_summary: str
+    overall_assessment: str
+    findings: list[CompetitorInsightFindingRead]
+    recommended_actions: list[str]
+    limitations: list[str]
+
+
+class CompetitorInsightRead(BaseModel):
+    provider: str
+    model: str
+    generated_at: datetime
+    scope: dict
+    analysis: CompetitorInsightAnalysisRead
+
+
 class CompetitorComparisonSummary(BaseModel):
     answer_count: int
     tracked_brand_count: int

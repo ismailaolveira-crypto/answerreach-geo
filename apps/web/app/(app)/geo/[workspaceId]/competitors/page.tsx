@@ -8,6 +8,7 @@ import {
   type CompetitorBreakdown,
   type CompetitorEvidenceSnippet,
 } from "@/lib/cleanroom-v1-api";
+import { CompetitorAiInsight } from "./competitor-ai-insight";
 import styles from "./competitor-comparison.module.css";
 
 type Props = {
@@ -42,7 +43,9 @@ function evidenceLabel(row: CompetitorEvidenceSnippet) {
 }
 
 function evidenceRows(brand: CompetitorBrandStat) {
-  return brand.win_evidence.length ? brand.win_evidence : brand.evidence;
+  // This column supports the appearance rate, so it must reveal every archived
+  // answer counted in that rate, not only the smaller subset of win signals.
+  return brand.evidence;
 }
 
 function EvidenceDisclosure({
@@ -55,16 +58,16 @@ function EvidenceDisclosure({
   if (!rows.length) return <span className={styles.zeroEvidence}>真实 0</span>;
 
   return <details className={styles.evidenceDisclosure}>
-    <summary>查看证据</summary>
+    <summary>查看 {Math.min(rows.length, 8)} 条对应证据</summary>
     <div>
-      {rows.slice(0, 8).map((row) => <Link
-        href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}
-        key={`${row.brand_key}-${row.evidence_id}`}
-      >
-        <b>{row.model_label} · {evidenceLabel(row)}</b>
-        <span>{row.question}</span>
-        <small>{row.context_snippet || "查看完整回答与引用"}</small>
-      </Link>)}
+      {rows.slice(0, 8).map((row) => <article key={`${row.brand_key}-${row.evidence_id}`}>
+        <header><b>{row.model_label}</b><span>{evidenceLabel(row)}</span></header>
+        <dl>
+          <div><dt>对应问题</dt><dd>{row.question}</dd></div>
+          <div><dt>命中片段</dt><dd>{row.context_snippet || "原回答中已命中该品牌，查看原回答与引用。"}</dd></div>
+        </dl>
+        <Link href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}>查看原回答和关联引用 <span aria-hidden="true">↗</span></Link>
+      </article>)}
     </div>
   </details>;
 }
@@ -133,13 +136,38 @@ function BrandRanking({
 function DiagnosticPanel({
   workspaceId,
   items,
+  selectedQuestionId,
 }: {
   workspaceId: string;
   items: ActionDiagnostic[];
+  selectedQuestionId?: number;
 }) {
+  const grouped = [...items.reduce((groups, item) => {
+    const current = groups.get(item.competitor_key) ?? {
+      name: item.competitor_name,
+      signalCount: 0,
+      questionIds: new Set<number>(),
+      modelKeys: new Set<string>(),
+      evidence: [] as CompetitorEvidenceSnippet[],
+    };
+    current.signalCount += item.wins_over_baseline;
+    current.questionIds.add(item.question_plan_id);
+    current.modelKeys.add(item.model_key);
+    current.evidence.push(...item.evidence);
+    groups.set(item.competitor_key, current);
+    return groups;
+  }, new Map<string, { name: string; signalCount: number; questionIds: Set<number>; modelKeys: Set<string>; evidence: CompetitorEvidenceSnippet[] }>()).values()]
+    .sort((left, right) => right.signalCount - left.signalCount || left.name.localeCompare(right.name, "zh-CN"));
+  const isSingleQuestion = selectedQuestionId != null;
   return <section className={styles.diagnosticPanel} id="action-diagnostics">
-    <header><div><h2>需要核验的对比信号</h2><p>这不等同于出现率；展开后可回看模型、问题和原回答。</p></div><b>{items.length}</b></header>
-    {items.length ? <div className={styles.diagnosticList}>
+    <header><div><h2>{isSingleQuestion ? "这个问题的对比反馈" : "全部问题对比信号"}</h2><p>{isSingleQuestion ? "只针对当前问题，可回看模型、量化差值和原回答。" : "按全部选中问题汇总，不用单个问题代表整体结论。"}</p></div><b>{items.length}</b></header>
+    {!isSingleQuestion && items.length ? <div className={styles.overallDiagnosticList}>
+      {grouped.map((item) => <article key={item.name}>
+        <div><b>{item.name}</b><span>{item.signalCount} 条信号 · 覆盖 {item.questionIds.size} 个问题 · {item.modelKeys.size} 个模型</span></div>
+        <EvidenceDisclosure workspaceId={workspaceId} rows={item.evidence} />
+      </article>)}
+    </div> : null}
+    {isSingleQuestion && items.length ? <div className={styles.diagnosticList}>
       {items.slice(0, 3).map((item, index) => {
         const signedGap = item.mention_gap > 0 ? `+${item.mention_gap}` : String(item.mention_gap);
         return <details
@@ -164,10 +192,11 @@ function DiagnosticPanel({
           </div>
         </details>;
       })}
-    </div> : <div className={styles.diagnosticEmpty}>
+    </div> : null}
+    {!items.length ? <div className={styles.diagnosticEmpty}>
       <span>◎</span><h3>当前没有可确认的竞品胜出</h3>
       <p>真实 0 保持可见；扩大问题或模型采样后再判断，不补写虚构原因。</p>
-    </div>}
+    </div> : null}
   </section>;
 }
 
@@ -275,6 +304,13 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
         <div className={styles.gap}><span>最高竞品出现率</span><b>{topAppearingCompetitor ? `${topAppearingCompetitor.canonical_name} · ${topAppearingCompetitor.hit_answer_count}/${topAppearingCompetitor.sample_answer_count} 条（${topAppearingCompetitor.mention_rate}%）` : "当前没有追踪竞品"}</b><a href="#action-diagnostics">查看对比信号 →</a></div>
       </section>
 
+      <CompetitorAiInsight
+        workspaceId={workspaceId}
+        periodDays={Number(period)}
+        modelKey={model}
+        questionPlanId={question > 0 ? question : undefined}
+      />
+
       <div className={styles.comparisonGrid}>
         <section className={styles.ranking} id="competitor-leaderboard">
           <header><div><h2>品牌出现率排行榜</h2><p>出现率 = 品牌出现的回答数 ÷ 当前筛选的有效回答总数；真实 0 保留。</p></div><span>{scopeLabel}</span></header>
@@ -290,7 +326,7 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
             </nav></header>
             <p><b>{selectedQuestion}</b><span>{selectedModel}</span><small>{comparison.summary.answer_count} 条真实回答</small></p>
           </section>
-          <DiagnosticPanel workspaceId={workspaceId} items={comparison.action_diagnostics} />
+          <DiagnosticPanel workspaceId={workspaceId} items={comparison.action_diagnostics} selectedQuestionId={question > 0 ? question : undefined} />
         </aside>
       </div>
 

@@ -414,13 +414,14 @@
 }
 
 .evidenceDisclosure > div {
-  background: #fff;
-  border: 1px solid #dce3ed;
-  border-radius: 13px;
-  box-shadow: 0 18px 40px rgb(28 43 68 / 16%);
+  background: rgb(255 255 255 / .96);
+  border: 1px solid #d4e0f1;
+  border-radius: 15px;
+  box-shadow: 0 20px 46px rgb(28 43 68 / 18%), inset 0 1px 0 rgb(255 255 255 / .9);
   display: grid;
+  gap: 7px;
   max-height: 330px;
-  min-width: 360px;
+  min-width: 390px;
   overflow: auto;
   padding: 7px;
   position: absolute;
@@ -429,39 +430,71 @@
   z-index: 12;
 }
 
-.evidenceDisclosure a {
-  border-radius: 9px;
-  display: grid;
-  padding: 9px 10px;
+.evidenceDisclosure > div > article {
+  background: #fbfdff;
+  border: 1px solid #e0e8f3;
+  border-radius: 11px;
+  padding: 10px;
 }
 
-.evidenceDisclosure a:hover {
-  background: #f5f8ff;
+.evidenceDisclosure > div > article > header {
+  align-items: center;
+  display: flex;
+  gap: 7px;
+  justify-content: space-between;
 }
 
-.evidenceDisclosure a b,
-.evidenceDisclosure a span,
-.evidenceDisclosure a small {
-  overflow: hidden;
-  text-overflow: ellipsis;
+.evidenceDisclosure > div > article > header b {
+  color: #32445f;
+  font-size: 10px;
+}
+
+.evidenceDisclosure > div > article > header span {
+  background: #edf4ff;
+  border-radius: 999px;
+  color: #2865cb;
+  font-size: 9px;
+  font-weight: 740;
+  padding: 4px 6px;
   white-space: nowrap;
 }
 
-.evidenceDisclosure a b {
-  color: #33445d;
-  font-size: 9px;
+.evidenceDisclosure > div > article dl {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0;
 }
 
-.evidenceDisclosure a span {
-  color: #4f5f75;
-  font-size: 9px;
-  margin-top: 4px;
+.evidenceDisclosure > div > article dl div {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 49px minmax(0, 1fr);
 }
 
-.evidenceDisclosure a small {
-  color: #596779;
-  line-height: 1.45;
-  max-width: 330px;
+.evidenceDisclosure > div > article dt {
+  color: #6e7d93;
+  font-size: 9px;
+  font-weight: 740;
+}
+
+.evidenceDisclosure > div > article dd {
+  color: #4d5e77;
+  font-size: 10px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.evidenceDisclosure > div > article > a {
+  border-radius: 7px;
+  color: #1f62cb;
+  display: block;
+  font-size: 10px;
+  font-weight: 760;
+  padding: 5px 0 1px;
+}
+
+.evidenceDisclosure > div > article > a:hover {
+  color: #144eab;
 }
 
 .zeroEvidence {
@@ -571,6 +604,47 @@
   max-height: 500px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.overallDiagnosticList {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.overallDiagnosticList > article {
+  align-items: center;
+  background: #fbfcfe;
+  border: 1px solid #e1e8f2;
+  border-radius: 11px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 11px;
+}
+
+.overallDiagnosticList > article > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.overallDiagnosticList > article b {
+  color: #30425d;
+  font-size: 12px;
+}
+
+.overallDiagnosticList > article span {
+  color: #697991;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.overallDiagnosticList .evidenceDisclosure summary {
+  background: #edf4ff;
+  border-radius: 7px;
+  color: #2764ca;
+  padding: 6px 7px;
 }
 
 .diagnosticItem {

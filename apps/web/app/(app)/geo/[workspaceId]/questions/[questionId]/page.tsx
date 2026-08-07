@@ -18,17 +18,15 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const JOURNEY_LABELS: Record<string, string> = {
-	awareness: "认知阶段",
-	consideration: "考虑阶段",
-	evaluation: "评估阶段",
-	decision: "决策阶段",
+	awareness: "认知",
+	consideration: "评估",
+	decision: "决策",
 };
 
 const ROLE_LABELS: Record<string, string> = {
+	ciso: "CISO / 安全",
 	technical_lead: "技术负责人",
-	procurement: "采购负责人",
-	business_owner: "业务负责人",
-	executive: "管理层",
+	procurement: "采购 / 商务",
 };
 
 function percent(value: number) {

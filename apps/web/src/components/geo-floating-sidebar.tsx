@@ -56,7 +56,7 @@ export function GeoFloatingSidebar() {
 	if (!pathname.startsWith("/geo/") && !pathname.startsWith("/admin/providers")) return null;
 	const workspaceId = pathname.match(/^\/geo\/([^/]+)/)?.[1] ?? "1";
 	const current = activeKey(pathname);
-	const questionId = pathname.match(/^\/geo\/[^/]+\/questions\/([^/]+)/)?.[1];
+	const questionAnalysisActive = /^\/geo\/[^/]+\/questions\/(analysis|\d+)/.test(pathname);
 	const setSidebarExpanded = (next: boolean) => {
 		setExpanded(next);
 		window.localStorage.setItem("cq-geo-sidebar-expanded", String(next));
@@ -76,7 +76,7 @@ export function GeoFloatingSidebar() {
 				<Link href={item.href(workspaceId) as Route} className={current === item.key ? "is-active" : ""} aria-current={current === item.key ? "page" : undefined} title={!expanded ? item.label : undefined}>
 					<span className="geo-floating-icon"><NavIcon name={item.icon} /></span><span className="geo-floating-label">{item.label}</span>
 				</Link>
-				{item.key === "questions" && questionId ? <Link className="geo-floating-subnav is-active" href={`/geo/${workspaceId}/questions/${questionId}` as Route} aria-current="page" title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
+				{item.key === "questions" ? <Link className={`geo-floating-subnav${questionAnalysisActive ? " is-active" : ""}`} href={`/geo/${workspaceId}/questions/analysis` as Route} aria-current={questionAnalysisActive ? "page" : undefined} title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
 			</div>)}
 		</nav>
 		<nav className="geo-floating-bottom-nav" aria-label="辅助导航">

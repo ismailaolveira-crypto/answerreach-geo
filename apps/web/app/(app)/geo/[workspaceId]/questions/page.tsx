@@ -137,6 +137,7 @@ export default async function QuestionLibraryPage({
 			);
 			return {
 				role,
+				items,
 				approved: items.filter((item) =>
 					["approved", "active"].includes(item.status),
 				).length,
@@ -152,6 +153,9 @@ export default async function QuestionLibraryPage({
 	}));
 	const candidates = library.questions.filter((question) =>
 		["draft", "pending_review"].includes(question.status),
+	);
+	const hasMatrixFilters = Boolean(
+		query.search || query.status || query.stage || query.role || query.topic,
 	);
 
 	return (
@@ -287,33 +291,41 @@ export default async function QuestionLibraryPage({
 				<section className="sy-question-matrix">
 					<header>
 						<div>
-							<p>默认视图</p>
-							<h2>采购阶段 × 提问角色</h2>
+							<p>{hasMatrixFilters ? "当前筛选" : "默认视图"}</p>
+							<h2>{hasMatrixFilters ? "当前筛选的阶段 × 角色" : "采购阶段 × 提问角色"}</h2>
 						</div>
-						<small>每格显示已批准与待审核问题</small>
+						<small>{hasMatrixFilters ? "每格仅统计当前筛选结果" : "每格显示已批准与待审核问题"}</small>
 					</header>
 					<div className="sy-question-grid">
 						{matrix.map(({ stage, cells }) => (
 							<section key={stage}>
 								<h3>{STAGE_LABELS[stage]}</h3>
-								{cells.map((cell) => (
-									<article
-										key={cell.role}
-										className={!cell.approved ? "is-gap" : ""}
-									>
+								{cells.map((cell) => {
+									const destination = cell.items.length === 1
+										? `/geo/${workspaceId}/questions/${cell.items[0].id}`
+										: `/geo/${workspaceId}/questions/analysis?stage=${stage}&role=${cell.role}`;
+									const detail = cell.topics.length
+										? cell.topics.join(" · ")
+										: cell.items.length
+											? `${cell.items.length} 个问题`
+											: "暂无主题";
+									const content = <>
 										<div>
 											<b>{ROLE_LABELS[cell.role]}</b>
-											<span>
-												{cell.approved} 已批准 · {cell.pending} 待审
-											</span>
+											<span>{cell.approved} 已批准 · {cell.pending} 待审</span>
 										</div>
-										<small>
-											{cell.topics.length
-												? cell.topics.join(" · ")
-												: "暂无主题"}
-										</small>
-									</article>
-								))}
+										<small>{detail}</small>
+									</>;
+									return cell.items.length ? (
+										<Link key={cell.role} className="sy-question-matrix-link" href={destination as Route} aria-label={`查看${STAGE_LABELS[stage]}阶段${ROLE_LABELS[cell.role]}的问题分析`}>
+											{content}
+										</Link>
+									) : (
+										<article key={cell.role} className="is-gap" aria-label={`${STAGE_LABELS[stage]}阶段${ROLE_LABELS[cell.role]}暂无问题`}>
+											{content}
+										</article>
+									);
+								})}
 							</section>
 						))}
 					</div>

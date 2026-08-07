@@ -12,6 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, assert_company_access, get_current_user, require_roles
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import Company, LLMProvider, LLMProviderTestRun, Project, QueueJob
 from app.models.cleanroom_v1 import (
@@ -46,6 +47,8 @@ from app.v1.schemas import (
     BrowserAccountReleaseRequest,
     BrowserAccountUpdate,
     CompetitorComparisonRead,
+    CompetitorInsightRead,
+    CompetitorInsightRequest,
     ContentAuditRead,
     DecisionMapRead,
     EvidenceRead,
@@ -86,6 +89,7 @@ from app.v1.schemas import (
 from app.services.llm_provider import diagnose_provider, get_search_provider
 from app.services.usage import enforce_monthly_search_budget, record_usage
 from app.v1.competitor_comparison import build_competitor_comparison
+from app.v1.competitor_insight import CompetitorInsightError, generate_competitor_insight
 from app.v1.evidence_analysis import analyze_brand_status
 from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_evidence
 from app.v1.source_map import build_source_map
@@ -3000,6 +3004,81 @@ def get_competitor_comparison(
         ],
         "available_questions": questions,
     }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/competitor-insights",
+    response_model=CompetitorInsightRead,
+)
+def generate_workspace_competitor_insight(
+    workspace_id: int,
+    payload: CompetitorInsightRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Generate an on-demand DeepSeek insight from the exact selected scope.
+
+    This is intentionally not an observation and writes nothing to the
+    workspace. The client receives a transient, evidence-referenced analysis.
+    """
+    workspace = workspace_or_404(db, user, workspace_id)
+    selected_question = None
+    if payload.question_plan_id is not None:
+        selected_question = scoped_or_404(
+            db, GeoQuestionPlan, workspace_id, payload.question_plan_id
+        )
+    effective_to = datetime.now(timezone.utc)
+    effective_from = effective_to - timedelta(days=payload.period_days)
+    scoped_query = select(GeoEvidence).where(
+        GeoEvidence.workspace_id == workspace_id,
+        GeoEvidence.captured_at >= effective_from,
+        GeoEvidence.captured_at <= effective_to,
+    )
+    model_key = (payload.model_key or "").strip()
+    if model_key and model_key != "all":
+        scoped_query = scoped_query.where(GeoEvidence.model_key == model_key)
+    else:
+        model_key = ""
+    if payload.question_plan_id is not None:
+        scoped_query = scoped_query.where(GeoEvidence.question_plan_id == payload.question_plan_id)
+    scoped_rows = list(
+        db.scalars(scoped_query.order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc()))
+    )
+    real_rows = [row for row in scoped_rows if row.is_real_provider_evidence]
+    questions = list(
+        db.scalars(
+            select(GeoQuestionPlan)
+            .where(GeoQuestionPlan.workspace_id == workspace_id, GeoQuestionPlan.active.is_(True))
+            .order_by(GeoQuestionPlan.importance.desc(), GeoQuestionPlan.id)
+        )
+    )
+    comparison = build_competitor_comparison(
+        workspace,
+        real_rows,
+        questions,
+        excluded_non_real_answer_count=len(scoped_rows) - len(real_rows),
+        evidence_limit=payload.evidence_limit,
+    )
+    model_label = "全部已测模型"
+    if model_key:
+        model_label = next(
+            (row.model_label for row in real_rows if row.model_key == model_key), model_key
+        )
+    question_label = (
+        selected_question.question_text if selected_question is not None else "全部已选问题"
+    )
+    try:
+        return generate_competitor_insight(
+            comparison,
+            api_key=get_settings().deepseek_api_key,
+            selected_question_id=payload.question_plan_id,
+            selected_question_label=question_label,
+            selected_model_label=model_label,
+            selected_period_label=("全部归档" if payload.period_days == 3650 else f"近 {payload.period_days} 天"),
+        )
+    except CompetitorInsightError as error:
+        status_code = 503 if "API Key" in str(error) else 502
+        raise HTTPException(status_code=status_code, detail=str(error)) from error
 
 
 @router.get("/workspaces/{workspace_id}/decision-map", response_model=DecisionMapRead)
