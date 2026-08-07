@@ -30,6 +30,25 @@ class WorkspaceUpdate(BaseModel):
     website_url: str | None = Field(default=None, max_length=500)
 
 
+class WorkspaceIntegrationRead(BaseModel):
+    workspace_id: int
+    deepseek_api_key_configured: bool = False
+    article_sync_mcp_url: str | None = None
+    article_sync_mcp_token_configured: bool = False
+    deepseek_updated_at: datetime | None = None
+    article_sync_mcp_updated_at: datetime | None = None
+
+
+class WorkspaceIntegrationUpdate(BaseModel):
+    deepseek_api_key: str | None = Field(default=None, max_length=500)
+    article_sync_mcp_url: str | None = Field(default=None, max_length=1000)
+    article_sync_mcp_token: str | None = Field(default=None, max_length=1000)
+
+
+class WorkspaceIntegrationTestRequest(BaseModel):
+    integration: Literal["deepseek", "article_sync_mcp"]
+
+
 class QuestionPlanCreate(BaseModel):
     question_text: str = Field(min_length=4, max_length=500)
     journey_stage: Literal["awareness", "consideration", "decision", "retention"] = "consideration"

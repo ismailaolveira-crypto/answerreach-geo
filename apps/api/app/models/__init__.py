@@ -40,6 +40,7 @@ from app.models.cleanroom_v1 import (
     GeoSamplingSample,
     GeoScorecard,
     GeoWorkspace,
+    GeoWorkspaceSecret,
 )
 from app.models.job import QueueJob
 from app.models.project import Project, ProjectStageGoal
@@ -90,6 +91,7 @@ __all__ = [
     "GeoSamplingSample",
     "GeoScorecard",
     "GeoWorkspace",
+    "GeoWorkspaceSecret",
     "SystemAlert",
     "CitationSource",
     "Company",

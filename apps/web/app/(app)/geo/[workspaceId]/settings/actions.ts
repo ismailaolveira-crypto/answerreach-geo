@@ -1,9 +1,34 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { updateCleanroomWorkspace } from "@/lib/cleanroom-v1-api";
+import {
+	getWorkspaceIntegrations,
+	testWorkspaceIntegration,
+	updateCleanroomWorkspace,
+	updateWorkspaceIntegrations,
+	type WorkspaceIntegrationSettings,
+} from "@/lib/cleanroom-v1-api";
 
 export type SettingsActionState = { status: "idle" | "success" | "error"; message?: string };
+
+export async function readWorkspaceIntegrations(workspaceId: number): Promise<WorkspaceIntegrationSettings | null> {
+	try {
+		return await getWorkspaceIntegrations(workspaceId);
+	} catch {
+		return null;
+	}
+}
+
+export async function saveWorkspaceIntegrations(
+	workspaceId: number,
+	payload: { deepseek_api_key?: string; article_sync_mcp_url?: string; article_sync_mcp_token?: string },
+) {
+	return updateWorkspaceIntegrations(workspaceId, payload);
+}
+
+export async function runWorkspaceIntegrationTest(workspaceId: number, integration: "deepseek" | "article_sync_mcp") {
+	return testWorkspaceIntegration(workspaceId, integration);
+}
 
 export async function saveWorkspaceSettings(
   _previous: SettingsActionState,

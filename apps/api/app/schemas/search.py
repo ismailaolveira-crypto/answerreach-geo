@@ -41,6 +41,9 @@ class LLMProviderRead(LLMProviderBase, TimestampedSchema):
         if masked.get("api_key"):
             masked["api_key"] = "***configured***"
             masked["api_key_configured"] = True
+        if masked.get("api_key_encrypted"):
+            masked.pop("api_key_encrypted", None)
+            masked["api_key_configured"] = True
         return masked
 
 

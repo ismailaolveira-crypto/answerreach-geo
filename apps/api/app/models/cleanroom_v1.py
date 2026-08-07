@@ -41,6 +41,28 @@ class GeoWorkspace(CleanRoomTimestamp, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
 
 
+class GeoWorkspaceSecret(CleanRoomTimestamp, Base):
+    """Encrypted runtime credentials scoped to one GEO workspace.
+
+    Plaintext values never leave the API process.  The UI receives only
+    configured flags and timestamps, while workers resolve the value just
+    before making an authorized external request.
+    """
+
+    __tablename__ = "geo_workspace_secrets_v1"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "secret_key", name="uq_geo_workspace_secret_key_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    secret_key: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    encrypted_value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+
+
 class GeoQuestionPlan(CleanRoomTimestamp, Base):
     __tablename__ = "geo_question_plans_v1"
 

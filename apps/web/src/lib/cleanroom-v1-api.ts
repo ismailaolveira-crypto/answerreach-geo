@@ -14,6 +14,15 @@ export type CleanroomWorkspace = {
 	status: string;
 };
 
+export type WorkspaceIntegrationSettings = {
+	workspace_id: number;
+	deepseek_api_key_configured: boolean;
+	article_sync_mcp_url?: string | null;
+	article_sync_mcp_token_configured: boolean;
+	deepseek_updated_at?: string | null;
+	article_sync_mcp_updated_at?: string | null;
+};
+
 export type CleanroomQuestion = {
 	id: number;
 	workspace_id: number;
@@ -686,6 +695,34 @@ export function updateCleanroomWorkspace(
 		method: "PATCH",
 		body: JSON.stringify(payload),
 	});
+}
+
+export function getWorkspaceIntegrations(workspaceId: string | number) {
+	return apiRequest<WorkspaceIntegrationSettings>(`/workspaces/${workspaceId}/integrations`);
+}
+
+export function updateWorkspaceIntegrations(
+	workspaceId: string | number,
+	payload: {
+		deepseek_api_key?: string;
+		article_sync_mcp_url?: string;
+		article_sync_mcp_token?: string;
+	},
+) {
+	return apiRequest<WorkspaceIntegrationSettings>(`/workspaces/${workspaceId}/integrations`, {
+		method: "PATCH",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function testWorkspaceIntegration(
+	workspaceId: string | number,
+	integration: "deepseek" | "article_sync_mcp",
+) {
+	return apiRequest<{ integration: string; ok: boolean; message: string; latency_ms?: number; platforms?: unknown }>(
+		`/workspaces/${workspaceId}/integrations/test`,
+		{ method: "POST", body: JSON.stringify({ integration }) },
+	);
 }
 
 export function getCleanroomDecisionMap(

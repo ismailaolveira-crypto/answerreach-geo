@@ -2,6 +2,8 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCleanroomWorkspaces } from "@/lib/cleanroom-v1-api";
 import { WorkspaceSettingsForm } from "./workspace-settings-form";
+import { IntegrationSettingsForm } from "./integration-settings-form";
+import { readWorkspaceIntegrations } from "./actions";
 import styles from "./settings.module.css";
 
 export default async function GeoSettingsPage({ params }: { params: Promise<{ workspaceId: string }> }) {
@@ -16,5 +18,6 @@ export default async function GeoSettingsPage({ params }: { params: Promise<{ wo
 			<section className={styles.card}><header><span>02</span><div><h2>模型与渠道</h2><p>API 连接和联网验证在独立页面完成。</p></div></header><Link className={styles.cardLink} href="/admin/providers">管理模型与渠道 <b>→</b></Link></section>
 			<section className={styles.card}><header><span>03</span><div><h2>真实运行</h2><p>查看采集任务、失败原因与证据归档。</p></div></header><div className={styles.linkStack}><Link href={`/geo/${workspaceId}/operations`}>运营状态 <b>→</b></Link><Link href={`/geo/${workspaceId}/questions`}>问题库 <b>→</b></Link></div></section>
 		</div>
+		<IntegrationSettingsForm workspaceId={workspace.id} initialSettings={await readWorkspaceIntegrations(workspace.id)} />
 	</main>;
 }

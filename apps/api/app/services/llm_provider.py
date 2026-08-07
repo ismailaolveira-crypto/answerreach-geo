@@ -7,6 +7,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.models import Company, Competitor, LLMProvider, Project
+from app.services.workspace_secrets import decrypt_secret
 
 
 DEFAULT_BASE_URLS = {
@@ -1086,6 +1087,12 @@ def get_provider_api_key(provider: LLMProvider) -> tuple[str | None, str]:
     provider_key = (provider.auth_config or {}).get("api_key")
     if provider_key:
         return str(provider_key), "provider.auth_config.api_key"
+    encrypted_provider_key = (provider.auth_config or {}).get("api_key_encrypted")
+    if encrypted_provider_key:
+        try:
+            return decrypt_secret(str(encrypted_provider_key)), "provider.auth_config.api_key_encrypted"
+        except RuntimeError:
+            return None, "provider.auth_config.api_key_encrypted"
     if provider.provider_type in {"qwen_compatible", "bailian_qwen_responses"}:
         if settings.qwen_api_key:
             return settings.qwen_api_key, "QWEN_API_KEY"

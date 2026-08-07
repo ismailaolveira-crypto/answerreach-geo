@@ -16,6 +16,8 @@ import httpx
 
 
 class ArticleSyncAdapter(Protocol):
+    def probe(self) -> dict: ...
+
     def request_draft(self, *, platform_key: str, title: str, body_markdown: str) -> dict: ...
 
     def read_draft(self, *, platform_key: str, candidate_url: str | None = None) -> dict: ...
@@ -24,6 +26,9 @@ class ArticleSyncAdapter(Protocol):
 @dataclass(frozen=True)
 class UnconfiguredArticleSyncAdapter:
     reason: str = "sync_adapter_not_configured"
+
+    def probe(self) -> dict:
+        raise RuntimeError(self.reason)
 
     def request_draft(self, *, platform_key: str, title: str, body_markdown: str) -> dict:
         raise RuntimeError(self.reason)
@@ -37,6 +42,11 @@ class McpArticleSyncAdapter:
     endpoint: str
     token: str
     timeout_seconds: float = 60.0
+
+    def probe(self) -> dict:
+        # Capability discovery is read-only: it must never create a draft.
+        result = self._call("list_platforms", {"forceRefresh": True})
+        return {"probe_status": "mcp_connected", "platforms": result}
 
     def _call(self, tool_name: str, arguments: dict) -> dict:
         request_id = str(uuid4())
@@ -79,10 +89,9 @@ class McpArticleSyncAdapter:
         result = self._call(
             "sync_article",
             {
-                "platform_key": platform_key,
+                "platforms": [platform_key],
                 "title": title,
-                "body_markdown": body_markdown,
-                "mode": "draft",
+                "markdown": body_markdown,
             },
         )
         return {"request_status": "mcp_request_accepted", "result": result}

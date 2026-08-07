@@ -4,6 +4,7 @@ import hmac
 import json
 from pathlib import Path
 import secrets
+from time import perf_counter
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -101,6 +102,9 @@ from app.v1.schemas import (
     SamplingWorkerComplete,
     SamplingWorkerFail,
     WorkspaceCreate,
+    WorkspaceIntegrationRead,
+    WorkspaceIntegrationTestRequest,
+    WorkspaceIntegrationUpdate,
     WorkspaceRead,
     WorkspaceUpdate,
     YaoDatasetImport,
@@ -108,6 +112,7 @@ from app.v1.schemas import (
     YaoDoubaoDatasetImport,
 )
 from app.services.llm_provider import diagnose_provider, get_search_provider
+from app.services.audit import record_audit_log
 from app.services.usage import enforce_monthly_search_budget, record_usage
 from app.v1.competitor_comparison import build_competitor_comparison
 from app.v1.competitor_insight import CompetitorInsightError, generate_competitor_insight
@@ -119,6 +124,15 @@ from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
+from app.services.workspace_secrets import (
+    ARTICLE_SYNC_MCP_TOKEN,
+    ARTICLE_SYNC_MCP_URL,
+    DEEPSEEK_API_KEY,
+    get_workspace_secret,
+    resolve_article_sync_credentials,
+    secret_status,
+    set_workspace_secret,
+)
 
 
 router = APIRouter(prefix="/v1", tags=["clean-room-geo-v1"])
@@ -1132,6 +1146,135 @@ def update_workspace(
     db.commit()
     db.refresh(workspace)
     return workspace
+
+
+def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
+    workspace = db.get(GeoWorkspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    deepseek_row = secret_status(db, workspace_id, DEEPSEEK_API_KEY)
+    mcp_url_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_URL)
+    mcp_token_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_TOKEN)
+    settings = get_settings()
+    deepseek_provider = db.scalar(
+        select(LLMProvider)
+        .where(LLMProvider.provider_type == "deepseek_web_search")
+        .order_by(LLMProvider.status.desc(), LLMProvider.id.desc())
+    )
+    deepseek_configured = bool(deepseek_row["configured"] or (deepseek_provider and diagnose_provider(deepseek_provider)["auth_ready"]))
+    return {
+        "workspace_id": workspace_id,
+        "deepseek_api_key_configured": deepseek_configured,
+        "article_sync_mcp_url": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_URL) or settings.article_sync_mcp_url,
+        "article_sync_mcp_token_configured": bool(mcp_token_row["configured"] or settings.article_sync_mcp_token),
+        "deepseek_updated_at": deepseek_row["updated_at"],
+        "article_sync_mcp_updated_at": mcp_token_row["updated_at"] or mcp_url_row["updated_at"],
+    }
+
+
+@router.get("/workspaces/{workspace_id}/integrations", response_model=WorkspaceIntegrationRead)
+def get_workspace_integrations(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    workspace_or_404(db, user, workspace_id)
+    return _workspace_integration_read(db, workspace_id)
+
+
+@router.patch("/workspaces/{workspace_id}/integrations", response_model=WorkspaceIntegrationRead)
+def update_workspace_integrations(
+    workspace_id: int,
+    payload: WorkspaceIntegrationUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+) -> dict:
+    workspace_or_404(db, user, workspace_id)
+    changed: list[str] = []
+    if payload.deepseek_api_key and payload.deepseek_api_key.strip():
+        value = payload.deepseek_api_key.strip()
+        set_workspace_secret(db, workspace_id=workspace_id, key=DEEPSEEK_API_KEY, value=value, user_id=user.id)
+        provider = db.scalar(
+            select(LLMProvider)
+            .where(LLMProvider.provider_type == "deepseek_web_search")
+            .order_by(LLMProvider.status.desc(), LLMProvider.id.desc())
+        )
+        if provider is None:
+            provider = LLMProvider(
+                name="DeepSeek 官方内容生成",
+                provider_type="deepseek_web_search",
+                api_base_url="https://api.deepseek.com/anthropic",
+                model_name="deepseek-v4-flash",
+                auth_config={},
+                cost_rule={"channel_role": "official", "platform_key": "deepseek"},
+                status="active",
+            )
+            db.add(provider)
+            db.flush()
+        from app.services.workspace_secrets import encrypt_secret
+
+        provider.auth_config = {
+            **(provider.auth_config or {}),
+            "api_key_encrypted": encrypt_secret(value),
+            "api_key_configured": True,
+        }
+        provider.auth_config.pop("api_key", None)
+        changed.append("deepseek_api_key")
+    if payload.article_sync_mcp_url and payload.article_sync_mcp_url.strip():
+        set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_URL, value=payload.article_sync_mcp_url.strip(), user_id=user.id)
+        changed.append("article_sync_mcp_url")
+    if payload.article_sync_mcp_token and payload.article_sync_mcp_token.strip():
+        set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_TOKEN, value=payload.article_sync_mcp_token.strip(), user_id=user.id)
+        changed.append("article_sync_mcp_token")
+    if changed:
+        record_audit_log(
+            db,
+            user=user,
+            action="workspace.integrations.update",
+            resource_type="geo_workspace",
+            resource_id=workspace_id,
+            detail={"updated_fields": changed, "secret_values_omitted": True},
+        )
+    db.commit()
+    return _workspace_integration_read(db, workspace_id)
+
+
+@router.post("/workspaces/{workspace_id}/integrations/test")
+def test_workspace_integration(
+    workspace_id: int,
+    payload: WorkspaceIntegrationTestRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+) -> dict:
+    workspace = workspace_or_404(db, user, workspace_id)
+    started_at = perf_counter()
+    if payload.integration == "article_sync_mcp":
+        endpoint, token = resolve_article_sync_credentials(db, workspace_id)
+        adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
+        try:
+            result = adapter.probe()
+        except RuntimeError as exc:
+            message = "文章同步助手 MCP 尚未配置，请先保存 Endpoint 和 Token。" if str(exc) == "sync_adapter_not_configured" else "MCP 能力发现失败，请检查 Endpoint、Token 和服务状态。"
+            return {"integration": payload.integration, "ok": False, "message": message, "latency_ms": int((perf_counter() - started_at) * 1000)}
+        return {"integration": payload.integration, "ok": True, "message": "MCP 能力发现成功；未创建草稿。", "latency_ms": int((perf_counter() - started_at) * 1000), "platforms": result.get("platforms")}
+
+    provider = db.scalar(
+        select(LLMProvider)
+        .where(LLMProvider.provider_type == "deepseek_web_search")
+        .order_by(LLMProvider.status.desc(), LLMProvider.id.desc())
+    )
+    if provider is None:
+        return {"integration": payload.integration, "ok": False, "message": "尚未配置 DeepSeek 内容生成渠道。"}
+    diagnostic = diagnose_provider(provider)
+    if not diagnostic["auth_ready"]:
+        return {"integration": payload.integration, "ok": False, "message": "DeepSeek API Key 尚未配置。"}
+    company = db.get(Company, workspace.company_id) or Company(name=workspace.brand_name, industry="", website_url=workspace.website_url, brand_aliases=workspace.brand_aliases)
+    project = db.scalar(select(Project).where(Project.company_id == workspace.company_id).order_by(Project.id.desc())) or Project(company_id=workspace.company_id, name="内容生成连通性测试", target_industry=company.industry, target_audience="企业读者")
+    try:
+        answer = get_search_provider(provider).answer("请返回一句‘DeepSeek 内容生成连通性测试通过’，不要扩展。", company, project, [])
+    except Exception as exc:
+        return {"integration": payload.integration, "ok": False, "message": f"DeepSeek 请求失败：{str(exc)[:180]}", "latency_ms": int((perf_counter() - started_at) * 1000)}
+    return {"integration": payload.integration, "ok": bool(answer.raw_answer.strip()), "message": "DeepSeek 内容生成请求已返回；未写入草稿。", "latency_ms": int((perf_counter() - started_at) * 1000)}
 
 
 QUESTION_STAGES = ("awareness", "consideration", "decision")
@@ -3807,11 +3950,8 @@ def request_distribution_run(
 ):
     workspace_or_404(db, user, workspace_id)
     run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
-    settings = get_settings()
-    adapter = get_article_sync_adapter(
-        endpoint=settings.article_sync_mcp_url,
-        token=settings.article_sync_mcp_token,
-    )
+    endpoint, token = resolve_article_sync_credentials(db, workspace_id)
+    adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
     targets = list(
         db.scalars(
             select(GeoDistributionTarget)
@@ -3877,11 +4017,8 @@ def readback_distribution_target(
     target = db.get(GeoDistributionTarget, target_id)
     if target is None or target.distribution_run_id != run.id:
         raise HTTPException(status_code=404, detail="Distribution target not found")
-    settings = get_settings()
-    adapter = get_article_sync_adapter(
-        endpoint=settings.article_sync_mcp_url,
-        token=settings.article_sync_mcp_token,
-    )
+    endpoint, token = resolve_article_sync_credentials(db, workspace_id)
+    adapter = get_article_sync_adapter(endpoint=endpoint, token=token)
     try:
         result = adapter.read_draft(platform_key=target.platform_key, candidate_url=target.candidate_draft_url)
     except RuntimeError as exc:
