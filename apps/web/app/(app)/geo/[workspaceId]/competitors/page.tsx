@@ -48,6 +48,22 @@ function evidenceRows(brand: CompetitorBrandStat) {
   return brand.evidence;
 }
 
+function cleanEvidenceExcerpt(value?: string) {
+  if (!value) return "原回答中已命中该品牌，查看原回答与关联引用。";
+  const cleaned = value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/#{1,6}/g, "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[>*_`~|]/g, " ")
+    .replace(/-{2,}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
+}
+
 function EvidenceDisclosure({
   workspaceId,
   rows,
@@ -64,7 +80,7 @@ function EvidenceDisclosure({
         <header><b>{row.model_label}</b><span>{evidenceLabel(row)}</span></header>
         <dl>
           <div><dt>对应问题</dt><dd>{row.question}</dd></div>
-          <div><dt>命中片段</dt><dd>{row.context_snippet || "原回答中已命中该品牌，查看原回答与引用。"}</dd></div>
+          <div><dt>命中摘要</dt><dd>{cleanEvidenceExcerpt(row.context_snippet)}</dd></div>
         </dl>
         <Link href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}>查看原回答和关联引用 <span aria-hidden="true">↗</span></Link>
       </article>)}
@@ -304,13 +320,6 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
         <div className={styles.gap}><span>最高竞品出现率</span><b>{topAppearingCompetitor ? `${topAppearingCompetitor.canonical_name} · ${topAppearingCompetitor.hit_answer_count}/${topAppearingCompetitor.sample_answer_count} 条（${topAppearingCompetitor.mention_rate}%）` : "当前没有追踪竞品"}</b><a href="#action-diagnostics">查看对比信号 →</a></div>
       </section>
 
-      <CompetitorAiInsight
-        workspaceId={workspaceId}
-        periodDays={Number(period)}
-        modelKey={model}
-        questionPlanId={question > 0 ? question : undefined}
-      />
-
       <div className={styles.comparisonGrid}>
         <section className={styles.ranking} id="competitor-leaderboard">
           <header><div><h2>品牌出现率排行榜</h2><p>出现率 = 品牌出现的回答数 ÷ 当前筛选的有效回答总数；真实 0 保留。</p></div><span>{scopeLabel}</span></header>
@@ -326,6 +335,12 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
             </nav></header>
             <p><b>{selectedQuestion}</b><span>{selectedModel}</span><small>{comparison.summary.answer_count} 条真实回答</small></p>
           </section>
+          <CompetitorAiInsight
+            workspaceId={workspaceId}
+            periodDays={Number(period)}
+            modelKey={model}
+            questionPlanId={question > 0 ? question : undefined}
+          />
           <DiagnosticPanel workspaceId={workspaceId} items={comparison.action_diagnostics} selectedQuestionId={question > 0 ? question : undefined} />
         </aside>
       </div>
