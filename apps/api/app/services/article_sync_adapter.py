@@ -1,18 +1,17 @@
-"""Boundary for the article-sync assistant MCP integration.
-
-The concrete MCP transport is intentionally injected by deployment. Keeping an
-unconfigured adapter explicit prevents a queued request from being reported as
-an external draft write when no request/readback has happened.
-"""
+"""WebSocket boundary for the Article Sync Assistant browser extension."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-from uuid import uuid4
 from typing import Protocol
+from uuid import uuid4
 
-import httpx
+from websockets.exceptions import WebSocketException
+from websockets.sync.client import connect
+
+
+DEFAULT_ARTICLE_SYNC_MCP_URL = "ws://localhost:9527"
 
 
 class ArticleSyncAdapter(Protocol):
@@ -39,44 +38,33 @@ class UnconfiguredArticleSyncAdapter:
 
 @dataclass(frozen=True)
 class McpArticleSyncAdapter:
+    """Adapter for WechatSync's token-authenticated JSON messages over WebSocket.
+
+    The extension does not expose an HTTP ``tools/call`` endpoint. It accepts
+    ``{id, token, method, params}`` and replies with ``{id, result, error}``.
+    """
+
     endpoint: str
     token: str
     timeout_seconds: float = 60.0
 
-    def probe(self) -> dict:
-        # Capability discovery is read-only: it must never create a draft.
-        result = self._call("list_platforms", {"forceRefresh": True})
-        return {"probe_status": "mcp_connected", "platforms": result}
-
-    def _call(self, tool_name: str, arguments: dict) -> dict:
+    def _call(self, method: str, params: dict) -> dict:
         request_id = str(uuid4())
-        payload = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "tools/call",
-            "params": {"name": tool_name, "arguments": arguments},
-        }
+        payload = {"id": request_id, "token": self.token, "method": method, "params": params}
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
-                response = client.post(
-                    self.endpoint,
-                    headers={
-                        "Authorization": f"Bearer {self.token}",
-                        "Content-Type": "application/json",
-                        "Accept": "application/json, text/event-stream",
-                    },
-                    json=payload,
-                )
-                response.raise_for_status()
-                body = response.text.strip()
-        except (httpx.HTTPError, ValueError) as exc:
+            with connect(
+                self.endpoint,
+                open_timeout=min(10.0, self.timeout_seconds),
+                close_timeout=5.0,
+                max_size=8 * 1024 * 1024,
+            ) as websocket:
+                websocket.send(json.dumps(payload, ensure_ascii=False))
+                raw = websocket.recv(timeout=self.timeout_seconds)
+        except (OSError, TimeoutError, WebSocketException, ValueError) as exc:
             raise RuntimeError(f"article_sync_mcp_request_failed:{type(exc).__name__}") from exc
-        # MCP HTTP transports may return a JSON-RPC object or an SSE data frame.
-        if body.startswith("data:"):
-            body = next((line.removeprefix("data:").strip() for line in body.splitlines() if line.startswith("data:")), "")
         try:
-            parsed = json.loads(body)
-        except json.JSONDecodeError as exc:
+            parsed = json.loads(raw)
+        except (TypeError, json.JSONDecodeError) as exc:
             raise RuntimeError("article_sync_mcp_invalid_response") from exc
         if not isinstance(parsed, dict):
             raise RuntimeError("article_sync_mcp_invalid_response")
@@ -85,31 +73,33 @@ class McpArticleSyncAdapter:
         result = parsed.get("result")
         return result if isinstance(result, dict) else {"result": result}
 
+    def probe(self) -> dict:
+        # Capability discovery is read-only and never creates a draft.
+        result = self._call("listPlatforms", {"forceRefresh": True})
+        return {"probe_status": "mcp_connected", "platforms": result}
+
     def request_draft(self, *, platform_key: str, title: str, body_markdown: str) -> dict:
         result = self._call(
-            "sync_article",
+            "syncArticle",
             {
                 "platforms": [platform_key],
-                "title": title,
-                "markdown": body_markdown,
+                "article": {"title": title, "markdown": body_markdown},
             },
         )
         return {"request_status": "mcp_request_accepted", "result": result}
 
     def read_draft(self, *, platform_key: str, candidate_url: str | None = None) -> dict:
-        result = self._call(
-            "read_draft",
-            {"platform_key": platform_key, "candidate_url": candidate_url},
-        )
-        return {"readback_status": "readback_received", "result": result}
+        # The extension protocol has no readDraft method. Browser-side draft
+        # readback remains a required, separate acceptance step.
+        raise RuntimeError("article_sync_mcp_readback_requires_browser")
 
 
 def get_article_sync_adapter(*, endpoint: str | None, token: str | None) -> ArticleSyncAdapter:
-    """Return a real transport only after deployment supplies both secret refs.
+    """Return a real transport only after the extension token is configured."""
 
-    Token values are never logged, serialized, or returned to the API caller.
-    """
-
-    if not endpoint or not token:
+    if not token:
         return UnconfiguredArticleSyncAdapter()
-    return McpArticleSyncAdapter(endpoint=endpoint, token=token)
+    return McpArticleSyncAdapter(
+        endpoint=(endpoint or DEFAULT_ARTICLE_SYNC_MCP_URL).strip(),
+        token=token,
+    )

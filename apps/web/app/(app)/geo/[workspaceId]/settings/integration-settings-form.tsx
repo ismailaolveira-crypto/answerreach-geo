@@ -67,12 +67,12 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings }: { work
 			</div>
 			<div className={styles.integrationBlock}>
 				<div className={styles.integrationBlockTitle}><div><b>文章同步助手 MCP</b><small>{statusLabel(Boolean(settings?.article_sync_mcp_token_configured))}</small></div><i className={settings?.article_sync_mcp_token_configured ? styles.dotReady : styles.dotPending} /></div>
-				<label>MCP Endpoint<input type="url" value={mcpUrl} onChange={(event) => setMcpUrl(event.target.value)} placeholder="https://…/mcp" autoComplete="off" /></label>
+				<label>MCP WebSocket Endpoint<input type="url" value={mcpUrl} onChange={(event) => setMcpUrl(event.target.value)} placeholder="ws://localhost:9527" autoComplete="off" /></label>
 				<label>MCP Token<input type="password" value={mcpToken} onChange={(event) => setMcpToken(event.target.value)} placeholder={settings?.article_sync_mcp_token_configured ? "已配置；留空保持不变" : "粘贴 MCP Token"} autoComplete="new-password" spellCheck={false} /></label>
 				<button type="button" className={styles.testButton} onClick={() => test("article_sync_mcp")} disabled={testing !== null || saving}>{testing === "article_sync_mcp" ? "正在发现能力…" : "测试 MCP 连接"}</button>
 			</div>
 		</div>
-		<p className={styles.integrationHint}>测试 DeepSeek 只发起一次内容生成请求；测试 MCP 只调用 <code>list_platforms</code> 能力发现，不会写入草稿或发布。</p>
+		<p className={styles.integrationHint}>文章同步助手使用 WebSocket 桥接，默认地址为 <code>ws://localhost:9527</code>。测试 DeepSeek 只发起一次内容生成请求；测试 MCP 只调用 <code>listPlatforms</code> 能力发现，不会写入草稿或发布。</p>
 		{feedback.message ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}
 		<button type="button" className={styles.integrationSave} onClick={save} disabled={saving || testing !== null}>{saving ? "正在保存…" : "保存外部能力配置"}</button>
 	</section>;

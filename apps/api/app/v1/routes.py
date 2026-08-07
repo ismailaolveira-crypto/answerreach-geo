@@ -124,6 +124,7 @@ from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
+from app.services.article_sync_adapter import DEFAULT_ARTICLE_SYNC_MCP_URL
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
     ARTICLE_SYNC_MCP_URL,
@@ -1165,7 +1166,7 @@ def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
     return {
         "workspace_id": workspace_id,
         "deepseek_api_key_configured": deepseek_configured,
-        "article_sync_mcp_url": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_URL) or settings.article_sync_mcp_url,
+        "article_sync_mcp_url": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_URL) or settings.article_sync_mcp_url or DEFAULT_ARTICLE_SYNC_MCP_URL,
         "article_sync_mcp_token_configured": bool(mcp_token_row["configured"] or settings.article_sync_mcp_token),
         "deepseek_updated_at": deepseek_row["updated_at"],
         "article_sync_mcp_updated_at": mcp_token_row["updated_at"] or mcp_url_row["updated_at"],

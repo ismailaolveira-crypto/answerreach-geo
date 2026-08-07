@@ -421,6 +421,15 @@ class SyncAssistantPort(Protocol):
 - 可选 `upload_image_file(filePath, platform?)`；
 - 可选 `extract_article()`。
 
+当前文章同步助手 2.0.9 的实际传输不是 HTTP `tools/call`，而是本地 WebSocket
+桥接，默认地址为 `ws://localhost:9527`。每次请求发送
+`{id, token, method, params}`，方法名使用扩展协议的驼峰形式：
+`listPlatforms`、`checkAuth`、`syncArticle`。`syncArticle` 的正文放在
+`params.article.markdown`/`content`，平台放在 `params.platforms`。适配器不得猜测
+REST 路径或 `Authorization` 头；若部署的是不同 MCP Server，必须先读取其实际 schema
+再增加 transport 实现。该 WebSocket 桥接没有草稿回读方法，`syncArticle` 返回只记为
+`mcp_request_accepted`，仍需通过真实浏览器草稿页完成 `draft_saved` 验收。
+
 实施前必须从当前实际 API/MCP schema 读取参数和响应定义，不在代码中猜测 REST 路径、Authorization 头或平台 ID。健康检查只证明服务/扩展可达，不证明某平台已登录或可保存草稿。
 
 ### 10.2 执行流程
