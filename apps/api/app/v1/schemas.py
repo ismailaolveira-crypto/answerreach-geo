@@ -952,7 +952,26 @@ class ActionOpportunityRead(BaseModel):
 class ActionOpportunityDiscoverRequest(BaseModel):
     batch_id: int | None = Field(default=None, ge=1)
     question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
+    model_keys: list[str] = Field(default_factory=list, max_length=20)
     max_items: int = Field(default=50, ge=1, le=100)
+
+
+class ActionOpportunityScopeBatchRead(BaseModel):
+    id: int
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    eligible_evidence_count: int
+    model_keys: list[str] = Field(default_factory=list)
+    question_plan_ids: list[int] = Field(default_factory=list)
+
+
+class ActionOpportunityScopeRead(BaseModel):
+    latest_batch_id: int | None = None
+    batches: list[ActionOpportunityScopeBatchRead] = Field(default_factory=list)
+    models: list[dict] = Field(default_factory=list)
+    questions: list[dict] = Field(default_factory=list)
+    evidence_gate: str
 
 
 class ActionStageUpdate(BaseModel):

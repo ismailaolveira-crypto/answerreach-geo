@@ -7,6 +7,7 @@ import { BrandLogo } from "@/components/brand-logo";
 import type {
 	AgentRuntime,
 	CleanroomAction,
+	CleanroomActionOpportunityScope,
 	CleanroomActionRetest,
 	CleanroomAgentEvent,
 	CleanroomAgentRun,
@@ -19,6 +20,8 @@ import type { PriorityActionOpportunity } from "./priority-action-opportunities"
 type Props = {
 	workspaceId: string;
 	opportunities: PriorityActionOpportunity[];
+	opportunityScope: CleanroomActionOpportunityScope;
+	initialScope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null };
 	actions: CleanroomAction[];
 	agentRuntime: AgentRuntime | null;
 	initialAgentRuns: CleanroomAgentRun[];
@@ -37,7 +40,7 @@ type Props = {
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
-	discoverActions: () => Promise<void>;
+	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<void>;
 };
 
 type SyncAccount = {
@@ -212,11 +215,22 @@ const platformOptions = [
 	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
 ] as const;
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, discoverActions }: Props) {
+function runtimeVersionLabel(value?: string | null) {
+	if (!value) return "Codex 运行时已检测";
+	const desktopVersion = value.match(/Codex Desktop\/([^\s;]+)/i)?.[1];
+	if (desktopVersion) return `Codex Desktop ${desktopVersion}`;
+	const cliVersion = value.match(/codex(?:-cli)?\s+([^\s;]+)/i)?.[1];
+	return cliVersion ? `Codex CLI ${cliVersion}` : "Codex 运行时已检测";
+}
+
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
-	const [selectedModel, setSelectedModel] = useState("all");
-	const [selectedQuestion, setSelectedQuestion] = useState("all");
+	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
+	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
+	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
+	const [discoveryFeedback, setDiscoveryFeedback] = useState("");
+	const [runtimeExpanded, setRuntimeExpanded] = useState(false);
 	const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
 	const [previewMessage, setPreviewMessage] = useState("");
 	const [syncOpen, setSyncOpen] = useState(false);
@@ -241,13 +255,17 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const [reviewFeedback, setReviewFeedback] = useState("");
 	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "wechat"]);
 	const [isSaving, startSaving] = useTransition();
+	const [isScopePending, startScopeTransition] = useTransition();
 
-	const models = useMemo(() => [...new Set(opportunities.flatMap((item) => item.modelLabels))], [opportunities]);
-	const questions = useMemo(() => [...new Map(opportunities.map((item) => [item.questionId, item.questionText])).entries()], [opportunities]);
-	const filtered = useMemo(() => opportunities.filter((item) => (selectedModel === "all" || item.modelLabels.includes(selectedModel)) && (selectedQuestion === "all" || String(item.questionId) === selectedQuestion)), [opportunities, selectedModel, selectedQuestion]);
+	const selectedBatch = opportunityScope.batches.find((batch) => batch.id === selectedBatchId);
+	const models = opportunityScope.models.filter((model) => selectedBatch?.model_keys.includes(model.key));
+	const questions = opportunityScope.questions.filter((question) => selectedBatch?.question_plan_ids.includes(question.id));
+	// The server has already applied the exact batch/model/question scope. Do not
+	// compare model keys with user-facing model labels a second time in the client.
+	const filtered = opportunities;
 	useEffect(() => { if (!filtered.some((item) => item.id === selectedId)) setSelectedId(filtered[0]?.id ?? ""); }, [filtered, selectedId]);
 	const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0];
-	const actionable = opportunities.filter((item) => !item.existingAction);
+	const actionable = filtered.filter((item) => !item.existingAction);
 	const high = actionable.filter((item) => item.priority === "high").length;
 	const pendingActions = agentRuns.filter((run) => {
 		const assetId = Number(run.result_snapshot.asset_id);
@@ -260,6 +278,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const currentRun = useMemo(() => agentRuns
 		.filter((run) => run.action_id === selected?.existingAction?.id)
 		.sort((a, b) => b.id - a.id)[0], [agentRuns, selected?.existingAction?.id]);
+	const activeAgentRunCount = agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length;
+	const generatedAssetCount = new Set(
+		agentRuns
+			.map((run) => Number(run.result_snapshot.asset_id))
+			.filter((assetId) => Number.isFinite(assetId) && assetId > 0),
+	).size;
 	const runActive = Boolean(currentRun && ["queued", "resuming", "running", "cancelling"].includes(currentRun.status));
 	const currentAssetId = Number(currentRun?.result_snapshot.asset_id) || null;
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
@@ -286,6 +310,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		insufficient_evidence: "证据不足",
 		pending: "等待复测完成",
 	} as Record<string, string>)[currentRetest.conclusion] || currentRetest.conclusion : "";
+
+	useEffect(() => {
+		setSelectedBatchId(initialScope.batchId);
+		setSelectedModel(initialScope.modelKey ?? "all");
+		setSelectedQuestion(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
+	}, [initialScope.batchId, initialScope.modelKey, initialScope.questionPlanId]);
 
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
@@ -352,6 +382,43 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		const timer = window.setInterval(() => void refreshRetest(), 2000);
 		return () => { cancelled = true; window.clearInterval(timer); };
 	}, [readRetest, retestActive, router, selected?.existingAction?.id]);
+
+	function changeScope(next: { batchId?: number | null; modelKey?: string; questionPlanId?: number | null }) {
+		const batchId = next.batchId !== undefined ? next.batchId : selectedBatchId;
+		const batchChanged = next.batchId !== undefined && next.batchId !== selectedBatchId;
+		const modelKey = batchChanged ? "all" : next.modelKey ?? selectedModel;
+		const questionPlanId = batchChanged
+			? null
+			: next.questionPlanId !== undefined
+				? next.questionPlanId
+				: selectedQuestion === "all" ? null : Number(selectedQuestion);
+		setDiscoveryFeedback("");
+		setSelectedBatchId(batchId);
+		setSelectedModel(modelKey);
+		setSelectedQuestion(questionPlanId ? String(questionPlanId) : "all");
+		const params = new URLSearchParams();
+		if (batchId) params.set("batch", String(batchId));
+		if (modelKey !== "all") params.set("model", modelKey);
+		if (questionPlanId) params.set("question", String(questionPlanId));
+		startScopeTransition(() => router.push(`/geo/${workspaceId}/actions?${params.toString()}`, { scroll: false }));
+	}
+
+	function refreshOpportunities() {
+		setDiscoveryFeedback("");
+		startSaving(async () => {
+			try {
+				await discoverActions({
+					batchId: selectedBatchId,
+					modelKey: selectedModel === "all" ? null : selectedModel,
+					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
+				});
+				setDiscoveryFeedback("已按当前批次、模型和问题重新分析真实证据。");
+				router.refresh();
+			} catch (error) {
+				setDiscoveryFeedback(error instanceof Error ? error.message : "无法刷新行动机会");
+			}
+		});
+	}
 
 	function beginAgent() {
 		if (!selected?.existingAction || !targetPlatforms.length) return;
@@ -552,24 +619,30 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 		<section className="pa-topline">
 			<header className="pa-hero">
 				<div><h1>优先行动</h1><span>从真实观测缺口出发，补齐信源、生成内容、写入草稿，并在下一轮验证变化。</span>
-					<form action={discoverActions} className="pa-discover-form"><button type="submit">从真实观测刷新机会</button></form>
-					<div className="pa-filters" aria-label="筛选行动机会">
-						<label><Icon name="calendar" /><select defaultValue="current" disabled><option value="current">当前批次证据</option></select><Icon name="chevron" /></label>
-						<label><Icon name="filter" /><select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)}><option value="all">全部模型</option>{models.map((model) => <option key={model} value={model}>{model}</option>)}</select><Icon name="chevron" /></label>
-						<label><Icon name="spark" /><select value={selectedQuestion} onChange={(event) => setSelectedQuestion(event.target.value)}><option value="all">全部问题</option>{questions.map(([id, text]) => <option key={id} value={id}>{text}</option>)}</select><Icon name="chevron" /></label>
+					<div className="pa-runtime-wrap">
+						<button type="button" className={`pa-runtime-status${agentRuntime?.ready ? " is-ready" : " is-warning"}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
+							<i />{agentRuntime?.ready ? "Codex 已连接" : "Codex 需要处理"}<Icon name="chevron" />
+						</button>
+						{runtimeExpanded ? <div className="pa-runtime-popover" role="status"><b>{agentRuntime?.ready ? "本机 Agent 可以启动" : "本机 Agent 当前不可启动"}</b><span>{agentRuntime?.default_model || "未检测到默认模型"}</span><small>{agentRuntime?.ready ? runtimeVersionLabel(agentRuntime.runtime_version) : agentRuntime?.error || "请在设置中完成登录或自检。"}</small><Link href={`/geo/${workspaceId}/settings`}>查看 Agent 设置</Link></div> : null}
 					</div>
+					<div className="pa-filters" aria-label="筛选行动机会">
+						<label><Icon name="calendar" /><select aria-label="观测批次" value={selectedBatchId ?? ""} disabled={isScopePending || !opportunityScope.batches.length} onChange={(event) => changeScope({ batchId: Number(event.target.value) || null })}><option value="">暂无可用批次</option>{opportunityScope.batches.map((batch) => <option key={batch.id} value={batch.id}>批次 #{batch.id} · {batch.eligible_evidence_count} 条有效证据</option>)}</select><Icon name="chevron" /></label>
+						<label><Icon name="filter" /><select aria-label="模型范围" value={selectedModel} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ modelKey: event.target.value })}><option value="all">全部模型</option>{models.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select><Icon name="chevron" /></label>
+						<label><Icon name="spark" /><select aria-label="问题范围" value={selectedQuestion} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ questionPlanId: event.target.value === "all" ? null : Number(event.target.value) })}><option value="all">全部问题</option>{questions.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}</select><Icon name="chevron" /></label>
+					</div>
+					<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || !selectedBatchId}>{isSaving ? "正在分析真实证据…" : "按当前范围刷新机会"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (selectedBatch ? `当前范围来自批次 #${selectedBatch.id}` : "需要先完成一次真实联网观测")}</span></div>
 				</div>
 			</header>
 
 			<section className="pa-summary" aria-label="行动状态摘要">
-				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>待处理缺口</small><strong>{actionable.length}</strong></div></article>
-				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>高优先级</small><strong>{high}</strong></div></article>
+				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>待处理缺口</small><strong>{isScopePending ? "—" : actionable.length}</strong></div></article>
+				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>高优先级</small><strong>{isScopePending ? "—" : high}</strong></div></article>
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>草稿待确认</small><strong>{pendingActions}</strong></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
 		</section>
 
-		{opportunities.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>还没有足够的真实证据</h2><p>完成一次联网观测并归档回答与来源后，系统才会从真实结果中识别行动机会。</p><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></section> : <>
+			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>当前范围没有达到门槛的机会</h2><p>{selectedBatch ? "这里只接受完整回答、真实搜索事件、来源 URL 和原始工件都齐全的证据。可以刷新当前范围，或返回决策地图发起新观测。" : "完成一次真实联网观测并归档完整证据后，系统才会识别行动机会。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || !selectedBatchId}>{isSaving ? "正在分析…" : "刷新当前范围"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
 					<header><div><h2>系统发现的优先机会</h2><p>仅使用已归档回答生成，不补造证据。</p></div><small>{filtered.length} 个机会</small></header>
@@ -609,7 +682,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
-				<div className="pa-progress-lanes"><div className={agentRuns.some((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "is-current" : ""}><b>Agent 生成</b><span>{agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length}</span><p>{agentRuns.find((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "正在调研与生成" : "已生成内容进入后续流程"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div className={allDraftsSaved && !allTargetsPublished ? "is-current" : ""}><b>人工发布</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个平台已记录公开 URL` : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "发布完成后复用原问题与模型"}</p></div></div>
+				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div className={allDraftsSaved && !allTargetsPublished ? "is-current" : ""}><b>人工发布</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个平台已记录公开 URL` : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "发布完成后复用原问题与模型"}</p></div></div>
 				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!approvedPlatformKeys.length} title={approvedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个平台稿"}>打开同步助手 <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}

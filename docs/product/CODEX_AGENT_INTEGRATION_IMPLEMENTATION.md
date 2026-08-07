@@ -274,6 +274,8 @@ apps/api/app/agent_prompts/
 - 产出 improved / unchanged / regressed / insufficient evidence；
 - Agent 并发、配额、超时、可观测性和恢复。
 
+实施状态（2026-08-08）：公开 URL 人工归档、同问题/同模型/同重复次数复测、证据差值和四类结论已经落地。最终发布仍由人工在平台侧完成；Agent 并发配额和更完整的运行告警继续作为产品化增强项。
+
 ## 11. 验收标准
 
 P0 只有同时满足以下条件才算完成：

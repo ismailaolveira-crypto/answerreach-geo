@@ -1,4 +1,5 @@
 import asyncio
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import hmac
@@ -56,6 +57,7 @@ from app.v1.schemas import (
     ActionEventRead,
     ActionOpportunityDiscoverRequest,
     ActionOpportunityRead,
+    ActionOpportunityScopeRead,
     ActionRead,
     ActionStageUpdate,
     ActionUpdate,
@@ -142,7 +144,7 @@ from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_eviden
 from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
-from app.v1.action_opportunities import discover_opportunities
+from app.v1.action_opportunities import discover_opportunities, valid_action_evidence
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
@@ -3480,6 +3482,106 @@ def _opportunity_read(db: Session, opportunity: GeoActionOpportunity) -> dict:
     return {"id": opportunity.id, "evidence": evidence, **opportunity.__dict__}
 
 
+@router.get(
+    "/workspaces/{workspace_id}/action-opportunities/scope",
+    response_model=ActionOpportunityScopeRead,
+)
+def get_action_opportunity_scope(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return only completed ledger batches that contain action-eligible evidence."""
+
+    workspace_or_404(db, user, workspace_id)
+    batches = list(
+        db.scalars(
+            select(GeoObservationBatch)
+            .where(
+                GeoObservationBatch.workspace_id == workspace_id,
+                GeoObservationBatch.status.in_(("completed", "succeeded")),
+            )
+            .order_by(GeoObservationBatch.id.desc())
+            .limit(40)
+        )
+    )
+    batch_ids = [batch.id for batch in batches]
+    tasks = list(
+        db.scalars(
+            select(GeoObservationTask).where(
+                GeoObservationTask.workspace_id == workspace_id,
+                GeoObservationTask.batch_id.in_(batch_ids or [-1]),
+                GeoObservationTask.status.in_(("completed", "succeeded")),
+                GeoObservationTask.evidence_id.is_not(None),
+            )
+        )
+    )
+    evidence_ids = [int(task.evidence_id) for task in tasks if task.evidence_id]
+    evidence_by_id = {
+        row.id: row
+        for row in db.scalars(
+            select(GeoEvidence).where(
+                GeoEvidence.workspace_id == workspace_id,
+                GeoEvidence.id.in_(evidence_ids or [-1]),
+            )
+        )
+    }
+    eligible_tasks_by_batch: dict[int, list[GeoObservationTask]] = defaultdict(list)
+    model_labels: dict[str, str] = {}
+    question_ids: set[int] = set()
+    for task in tasks:
+        evidence = evidence_by_id.get(int(task.evidence_id or 0))
+        if evidence is None or not valid_action_evidence(evidence):
+            continue
+        eligible_tasks_by_batch[task.batch_id].append(task)
+        model_labels[task.model_key] = task.model_label
+        question_ids.add(task.question_plan_id)
+    questions = {
+        question.id: question
+        for question in db.scalars(
+            select(GeoQuestionPlan).where(
+                GeoQuestionPlan.workspace_id == workspace_id,
+                GeoQuestionPlan.id.in_(question_ids or [-1]),
+                GeoQuestionPlan.active.is_(True),
+            )
+        )
+    }
+    scope_batches = []
+    for batch in batches:
+        eligible_tasks = eligible_tasks_by_batch.get(batch.id, [])
+        if not eligible_tasks:
+            continue
+        scope_batches.append(
+            {
+                "id": batch.id,
+                "status": batch.status,
+                "created_at": batch.created_at,
+                "completed_at": batch.completed_at,
+                "eligible_evidence_count": len(eligible_tasks),
+                "model_keys": sorted({task.model_key for task in eligible_tasks}),
+                "question_plan_ids": sorted(
+                    {task.question_plan_id for task in eligible_tasks if task.question_plan_id in questions}
+                ),
+            }
+        )
+    scope_batches = scope_batches[:12]
+    return {
+        "latest_batch_id": scope_batches[0]["id"] if scope_batches else None,
+        "batches": scope_batches,
+        "models": [
+            {"key": key, "label": label}
+            for key, label in sorted(model_labels.items(), key=lambda item: item[1])
+        ],
+        "questions": [
+            {"id": question.id, "label": question.question_text}
+            for question in sorted(
+                questions.values(), key=lambda item: (-item.importance, item.id)
+            )
+        ],
+        "evidence_gate": "completed_task+real_answer+search_event+source_url+raw_artifact",
+    }
+
+
 @router.post(
     "/workspaces/{workspace_id}/action-opportunities/discover",
     response_model=list[ActionOpportunityRead],
@@ -3510,11 +3612,31 @@ def discover_action_opportunities(
     if payload.question_plan_ids:
         for question_id in payload.question_plan_ids:
             scoped_or_404(db, GeoQuestionPlan, workspace_id, question_id)
+    selected_model_keys = sorted({value.strip() for value in payload.model_keys if value.strip()})
+    if effective_batch_id and selected_model_keys:
+        available_model_keys = set(
+            db.scalars(
+                select(GeoObservationTask.model_key)
+                .where(
+                    GeoObservationTask.workspace_id == workspace_id,
+                    GeoObservationTask.batch_id == effective_batch_id,
+                    GeoObservationTask.status.in_(("completed", "succeeded")),
+                )
+                .distinct()
+            )
+        )
+        unavailable = sorted(set(selected_model_keys) - available_model_keys)
+        if unavailable:
+            raise HTTPException(
+                status_code=422,
+                detail=f"所选批次不包含模型：{', '.join(unavailable)}",
+            )
     opportunities = discover_opportunities(
         db,
         workspace,
         batch_id=effective_batch_id,
         question_plan_ids=payload.question_plan_ids or None,
+        model_keys=selected_model_keys or None,
         max_items=payload.max_items,
     )
     db.add(
@@ -3525,8 +3647,12 @@ def discover_action_opportunities(
             actor_user_id=user.id,
             detail={
                 "batch_id": effective_batch_id,
+                "model_keys": selected_model_keys,
+                "question_plan_ids": payload.question_plan_ids,
                 "opportunity_count": len(opportunities),
-                "evidence_gate": "real_answer+source_url+raw_artifact+completed_task",
+                "evidence_gate": (
+                    "completed_task+real_answer+search_event+source_url+raw_artifact"
+                ),
             },
         )
     )
@@ -3541,6 +3667,9 @@ def discover_action_opportunities(
 def list_action_opportunities(
     workspace_id: int,
     status: str | None = Query(default=None),
+    batch_id: int | None = Query(default=None, ge=1),
+    model_key: str | None = Query(default=None, min_length=1, max_length=120),
+    question_plan_id: int | None = Query(default=None, ge=1),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -3550,7 +3679,29 @@ def list_action_opportunities(
         query = query.where(GeoActionOpportunity.status == status)
     else:
         query = query.where(GeoActionOpportunity.status.in_(["open", "selected"]))
-    rows = list(db.scalars(query.order_by(GeoActionOpportunity.priority_score.desc(), GeoActionOpportunity.id.desc())))
+    rows = list(
+        db.scalars(
+            query.order_by(
+                GeoActionOpportunity.priority_score.desc(), GeoActionOpportunity.id.desc()
+            )
+        )
+    )
+    if batch_id is not None:
+        rows = [
+            row for row in rows
+            if int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
+        ]
+    if model_key:
+        rows = [
+            row for row in rows
+            if model_key in ((row.scope_snapshot or {}).get("model_keys") or [])
+        ]
+    if question_plan_id is not None:
+        rows = [
+            row for row in rows
+            if int((row.scope_snapshot or {}).get("question_plan_id") or 0)
+            == question_plan_id
+        ]
     return [_opportunity_read(db, opportunity) for opportunity in rows]
 
 

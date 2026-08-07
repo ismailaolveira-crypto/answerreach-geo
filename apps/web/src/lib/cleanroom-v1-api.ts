@@ -662,6 +662,22 @@ export type CleanroomActionOpportunity = {
 	evidence: CleanroomActionOpportunityEvidence[];
 };
 
+export type CleanroomActionOpportunityScope = {
+	latest_batch_id?: number | null;
+	batches: Array<{
+		id: number;
+		status: string;
+		created_at: string;
+		completed_at?: string | null;
+		eligible_evidence_count: number;
+		model_keys: string[];
+		question_plan_ids: number[];
+	}>;
+	models: Array<{ key: string; label: string }>;
+	questions: Array<{ id: number; label: string }>;
+	evidence_gate: string;
+};
+
 export type CleanroomContentBrief = {
 	id: number;
 	workspace_id: number;
@@ -1336,13 +1352,25 @@ export function reviseCleanroomAgentRun(workspaceId: string | number, runId: num
 	});
 }
 
-export function getCleanroomActionOpportunities(workspaceId: string | number) {
-	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities`);
+export function getCleanroomActionOpportunityScope(workspaceId: string | number) {
+	return apiRequest<CleanroomActionOpportunityScope>(`/workspaces/${workspaceId}/action-opportunities/scope`);
+}
+
+export function getCleanroomActionOpportunities(
+	workspaceId: string | number,
+	options: { batch_id?: number | null; model_key?: string | null; question_plan_id?: number | null } = {},
+) {
+	const params = new URLSearchParams();
+	if (options.batch_id) params.set("batch_id", String(options.batch_id));
+	if (options.model_key) params.set("model_key", options.model_key);
+	if (options.question_plan_id) params.set("question_plan_id", String(options.question_plan_id));
+	const suffix = params.size ? `?${params.toString()}` : "";
+	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities${suffix}`);
 }
 
 export function discoverCleanroomActionOpportunities(
 	workspaceId: string | number,
-	payload: { batch_id?: number | null; question_plan_ids?: number[]; max_items?: number } = {},
+	payload: { batch_id?: number | null; question_plan_ids?: number[]; model_keys?: string[]; max_items?: number } = {},
 ) {
 	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities/discover`, {
 		method: "POST",

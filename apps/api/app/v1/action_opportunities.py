@@ -39,13 +39,16 @@ def _source_url(source: object) -> str | None:
     return None
 
 
-def _valid_real_evidence(row: GeoEvidence) -> bool:
-    """Only evidence with a real answer, source URL and raw artifact can drive actions."""
+def valid_action_evidence(row: GeoEvidence) -> bool:
+    """Apply the complete product evidence gate before an answer can drive work."""
 
+    environment = row.sampling_environment or {}
     return bool(
         row.is_real_provider_evidence
         and row.answer_text.strip()
         and row.raw_artifact_uri
+        and environment.get("search_verified") is True
+        and int(environment.get("search_event_count") or 0) >= 1
         and any(_source_url(source) for source in (row.source_items or []))
     )
 
@@ -74,6 +77,7 @@ def discover_opportunities(
     *,
     batch_id: int | None = None,
     question_plan_ids: Iterable[int] | None = None,
+    model_keys: Iterable[str] | None = None,
     max_items: int = 50,
 ) -> list[GeoActionOpportunity]:
     """Materialize opportunities from the canonical evidence ledger.
@@ -92,6 +96,7 @@ def discover_opportunities(
         )
     }
     selected_questions = set(question_plan_ids or questions.keys())
+    selected_models = tuple(sorted({value.strip() for value in (model_keys or []) if value.strip()}))
     evidence_rows = list(
         db.scalars(
             select(GeoEvidence)
@@ -99,6 +104,7 @@ def discover_opportunities(
                 GeoEvidence.workspace_id == workspace.id,
                 GeoEvidence.is_real_provider_evidence.is_(True),
                 GeoEvidence.question_plan_id.in_(selected_questions),
+                *([GeoEvidence.model_key.in_(selected_models)] if selected_models else []),
             )
             .order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc())
         )
@@ -108,7 +114,7 @@ def discover_opportunities(
         evidence_rows = [row for row in evidence_rows if _task_for_evidence(db, row.id, batch_id)]
     else:
         evidence_rows = [row for row in evidence_rows if _task_for_evidence(db, row.id, None)]
-    evidence_rows = [row for row in evidence_rows if _valid_real_evidence(row)]
+    evidence_rows = [row for row in evidence_rows if valid_action_evidence(row)]
 
     grouped: dict[int, list[GeoEvidence]] = defaultdict(list)
     for row in evidence_rows:
@@ -121,10 +127,16 @@ def discover_opportunities(
         for existing in db.scalars(
             select(GeoActionOpportunity).where(
                 GeoActionOpportunity.workspace_id == workspace.id,
-                GeoActionOpportunity.status.in_(["open", "selected"]),
+                GeoActionOpportunity.status == "open",
             )
         ):
-            existing.status = "stale"
+            scope = existing.scope_snapshot or {}
+            scope_models = tuple(sorted(scope.get("model_keys") or []))
+            if (
+                int(scope.get("question_plan_id") or 0) in selected_questions
+                and scope_models == selected_models
+            ):
+                existing.status = "stale"
     materialized: list[GeoActionOpportunity] = []
     for question_id, rows in grouped.items():
         question = questions.get(question_id)
@@ -161,6 +173,7 @@ def discover_opportunities(
             question.id,
             opportunity_type,
             top_source or "no-source",
+            selected_models or ("all_models",),
             RULE_VERSION,
         )
         title = (
@@ -184,7 +197,10 @@ def discover_opportunities(
             "absent_ratio": round(absent_ratio, 4),
             "competitors": competitor_names[:8],
             "top_source_url": top_source,
-            "eligibility": "real_answer+source_url+raw_artifact+completed_task",
+            "model_keys": list(selected_models),
+            "eligibility": (
+                "completed_task+real_answer+search_event+source_url+raw_artifact"
+            ),
         }
         if opportunity is None:
             opportunity = GeoActionOpportunity(

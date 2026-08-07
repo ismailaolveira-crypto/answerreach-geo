@@ -124,5 +124,7 @@ pnpm run verify
 - 文章同步使用当前浏览器扩展的 `$syncer`，逐平台传入已审核的差异稿；不使用行动摘要代替正文。
 - 人工退回后可以沿用原 Codex thread 和已持久化的修改意见生成下一版；旧版标记为历史版本，不允许绕过修订直接改为通过。
 - 工作区级内容库位于 `/geo/{workspaceId}/content`，可按审核状态和平台筛选，展开母稿/平台稿，并只在有真实回读时显示草稿链接。
-- 任何同步结果都保持 `final_action_clicked=false`；最终发布、发布 URL 归档和复测仍属于 P2。
+- 任何同步结果都保持 `final_action_clicked=false`；最终发布仍由人工完成。P2 已支持人工确认后归档公开 URL，并以原行动的问题、模型和重复次数创建可比复测，输出 `improved / unchanged / regressed / insufficient_evidence`。
+- 行动机会发现已移到后端持久化服务。页面通过真实完成批次、模型和问题筛选；只有完整回答、真实搜索事件、来源 URL 和原始工件同时存在的观测才具备行动资格。切换范围时旧机会不继续显示，已选行动不会被后续刷新误标为过期。
 - 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读、退回意见传入、v2 生成和禁止冒充发布。
+- 回归测试：`tests/test_priority_action_retest.py`覆盖公开 URL 归档、可比复测、结论和证据回链；`tests/test_action_opportunity_scope.py`覆盖真实证据门槛、模型范围与已选机会保留。

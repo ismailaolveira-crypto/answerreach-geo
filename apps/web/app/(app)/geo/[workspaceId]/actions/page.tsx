@@ -12,10 +12,9 @@ import {
 	getAgentRuntime,
 	getCleanroomContentReviewPackage,
 	getCleanroomDistributionRuns,
-	getActionEvidenceSummary,
+	getCleanroomActionOpportunityScope,
 	getCleanroomActionOpportunities,
 	getCleanroomActions,
-	getQuestionLibrary,
 	interruptCleanroomAgentRun,
 	recordCleanroomDistributionClientResults,
 	recordCleanroomHumanPublication,
@@ -23,15 +22,41 @@ import {
 	reviseCleanroomAgentRun,
 } from "@/lib/cleanroom-v1-api";
 import { PriorityActionsWorkbench } from "./priority-actions-workbench";
-import { derivePriorityActionOpportunities, mapBackendPriorityActionOpportunities } from "./priority-action-opportunities";
+import { mapBackendPriorityActionOpportunities } from "./priority-action-opportunities";
 
-export default async function ActionsPage({ params }: { params: Promise<{ workspaceId: string }> }) {
-	const { workspaceId } = await params;
-	const [actions, library, persistedOpportunities] = await Promise.all([
+type ActionsPageProps = {
+	params: Promise<{ workspaceId: string }>;
+	searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+function firstValue(value: string | string[] | undefined) {
+	return Array.isArray(value) ? value[0] : value;
+}
+
+export default async function ActionsPage({ params, searchParams }: ActionsPageProps) {
+	const [{ workspaceId }, query] = await Promise.all([params, searchParams]);
+	const [actions, opportunityScope] = await Promise.all([
 		getCleanroomActions(workspaceId),
-		getQuestionLibrary(workspaceId),
-		getCleanroomActionOpportunities(workspaceId),
+		getCleanroomActionOpportunityScope(workspaceId),
 	]);
+	const requestedBatchId = Number(firstValue(query.batch));
+	const batchId = opportunityScope.batches.some((batch) => batch.id === requestedBatchId)
+		? requestedBatchId
+		: opportunityScope.latest_batch_id ?? null;
+	const selectedBatch = opportunityScope.batches.find((batch) => batch.id === batchId);
+	const requestedModel = firstValue(query.model) ?? "all";
+	const modelKey = requestedModel !== "all" && selectedBatch?.model_keys.includes(requestedModel)
+		? requestedModel
+		: null;
+	const requestedQuestionId = Number(firstValue(query.question));
+	const questionPlanId = selectedBatch?.question_plan_ids.includes(requestedQuestionId)
+		? requestedQuestionId
+		: null;
+	const persistedOpportunities = await getCleanroomActionOpportunities(workspaceId, {
+		batch_id: batchId,
+		model_key: modelKey,
+		question_plan_id: questionPlanId,
+	});
 	const [agentRuntime, runGroups] = await Promise.all([
 		getAgentRuntime(workspaceId).catch(() => null),
 		Promise.all(actions.map((action) => getActionAgentRuns(workspaceId, action.id).catch(() => []))),
@@ -43,17 +68,16 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 		getCleanroomDistributionRuns(workspaceId).catch(() => []),
 		Promise.all(actions.map((action) => getCleanroomActionRetest(workspaceId, action.id).catch(() => null))),
 	]);
-	const opportunities = persistedOpportunities.length > 0
-		? mapBackendPriorityActionOpportunities(persistedOpportunities, actions)
-		: derivePriorityActionOpportunities({
-			questions: library.questions,
-			evidence: await getActionEvidenceSummary(workspaceId),
-			actions,
-		});
+	const opportunities = mapBackendPriorityActionOpportunities(persistedOpportunities, actions);
 
-	async function discoverActions() {
+	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) {
 		"use server";
-		await discoverCleanroomActionOpportunities(workspaceId, { max_items: 50 });
+		await discoverCleanroomActionOpportunities(workspaceId, {
+			batch_id: scope.batchId,
+			model_keys: scope.modelKey ? [scope.modelKey] : [],
+			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
+			max_items: 50,
+		});
 		revalidatePath(`/geo/${workspaceId}/actions`);
 	}
 
@@ -164,5 +188,5 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 		return getCleanroomActionRetest(workspaceId, actionId);
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} initialRetests={retests.filter((item): item is NonNullable<typeof item> => item !== null)} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} />;
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} initialRetests={retests.filter((item): item is NonNullable<typeof item> => item !== null)} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} />;
 }
