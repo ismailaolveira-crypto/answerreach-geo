@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type SVGProps } from "react";
 
-type IconName = "home" | "sources" | "compare" | "questions" | "actions" | "operations" | "providers" | "settings" | "chevron";
+type IconName = "home" | "sources" | "compare" | "questions" | "actions" | "content" | "operations" | "providers" | "settings" | "chevron";
 
 const ITEMS: Array<{ key: string; label: string; icon: IconName; href: (id: string) => string }> = [
 	{ key: "overview", label: "决策地图", icon: "home", href: (id) => `/geo/${id}` },
@@ -13,6 +13,7 @@ const ITEMS: Array<{ key: string; label: string; icon: IconName; href: (id: stri
 	{ key: "competitors", label: "竞品对比", icon: "compare", href: (id) => `/geo/${id}/competitors` },
 	{ key: "questions", label: "问题库", icon: "questions", href: (id) => `/geo/${id}/questions` },
 	{ key: "actions", label: "优化行动", icon: "actions", href: (id) => `/geo/${id}/actions` },
+	{ key: "content", label: "内容库", icon: "content", href: (id) => `/geo/${id}/content` },
 	{ key: "operations", label: "运营状态", icon: "operations", href: (id) => `/geo/${id}/operations` },
 	{ key: "providers", label: "模型与渠道", icon: "providers", href: () => "/admin/providers" },
 ];
@@ -22,6 +23,7 @@ function activeKey(pathname: string) {
 	if (pathname.includes("/competitors")) return "competitors";
 	if (pathname.includes("/questions")) return "questions";
 	if (pathname.includes("/actions")) return "actions";
+	if (pathname.includes("/content")) return "content";
 	if (pathname.includes("/operations")) return "operations";
 	if (pathname.includes("/settings")) return "settings";
 	if (pathname.startsWith("/admin/providers")) return "providers";
@@ -36,6 +38,7 @@ function NavIcon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement
 		{name === "compare" && <><path {...common} d="M4 8h13.5M14.5 4l4 4-4 4M20 16H6.5M9.5 12l-4 4 4 4" /></>}
 		{name === "questions" && <><path {...common} d="M9.2 9a2.9 2.9 0 1 1 4.9 2.1c-1.6 1.4-2.1 1.8-2.1 3.4" /><path {...common} d="M12 18.5h.01" /></>}
 		{name === "actions" && <><path {...common} d="M6 18 18 6M10 6h8v8" /></>}
+		{name === "content" && <><rect {...common} x="5" y="3.5" width="14" height="17" rx="2" /><path {...common} d="M8.5 8h7M8.5 12h7M8.5 16h4.5" /></>}
 		{name === "operations" && <><path {...common} d="M5 12h3l2-5 4 10 2-5h3" /></>}
 		{name === "providers" && <><path {...common} d="m12 3 8 8-8 8-8-8z" /><path {...common} d="m4 11 8 8 8-8" /></>}
 		{name === "settings" && <><circle {...common} cx="12" cy="12" r="3" /><path {...common} d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.1 2.1-.06-.06a1.7 1.7 0 0 0-1.88-.34 1.7 1.7 0 0 0-1.03 1.56v.08h-3v-.08a1.7 1.7 0 0 0-1.03-1.56 1.7 1.7 0 0 0-1.88.34l-.06.06-2.1-2.1.06-.06A1.7 1.7 0 0 0 7.06 15a1.7 1.7 0 0 0-1.56-1.03h-.08v-3h.08A1.7 1.7 0 0 0 7.06 9.94 1.7 1.7 0 0 0 6.72 8l-.06-.06 2.1-2.1.06.06a1.7 1.7 0 0 0 1.88.34 1.7 1.7 0 0 0 1.03-1.56V4.6h3v.08a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.1 2.1-.06.06a1.7 1.7 0 0 0-.34 1.94 1.7 1.7 0 0 0 1.56 1.03h.08v3h-.08A1.7 1.7 0 0 0 19.4 15z" /></>}

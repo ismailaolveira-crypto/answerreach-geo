@@ -1114,6 +1114,8 @@ class ContentAssetRead(BaseModel):
     raw_artifact_uri: str | None
     generation_usage: dict = Field(default_factory=dict)
     status: str
+    created_at: datetime
+    updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -1190,6 +1192,10 @@ class ContentReviewDecision(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
 
 
+class AgentRevisionRequest(BaseModel):
+    content_asset_id: int = Field(ge=1)
+
+
 class DistributionRunCreate(BaseModel):
     content_asset_id: int = Field(ge=1)
     platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(min_length=1)
@@ -1227,6 +1233,26 @@ class DistributionRunRead(BaseModel):
     status: str
     targets: list[DistributionTargetRead] = Field(default_factory=list)
     model_config = ConfigDict(from_attributes=True)
+
+
+class ContentLibraryItemRead(BaseModel):
+    asset: ContentAssetRead
+    action_id: int
+    action_title: str
+    action_stage: str
+    question_plan_id: int | None
+    variants: list[PlatformVariantRead] = Field(default_factory=list)
+    pending_claim_count: int = 0
+    approved_platform_keys: list[str] = Field(default_factory=list)
+    latest_review_verdict: str | None = None
+    latest_review_note: str | None = None
+    agent_run_id: int | None = None
+    agent_run_status: str | None = None
+    distribution_run_id: int | None = None
+    distribution_status: str | None = None
+    saved_draft_count: int = 0
+    total_draft_targets: int = 0
+    draft_targets: list[DistributionTargetRead] = Field(default_factory=list)
 
 
 class DistributionClientTargetResult(BaseModel):

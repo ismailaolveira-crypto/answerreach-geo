@@ -1460,6 +1460,7 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
 .pa-opportunity-list article.is-selected,.pa-progress-lanes>div.is-current{background:#f5f8ff!important}
 .pa-stage-card button,.pa-progress-footer button{min-height:38px!important}
 .pa-stage-card button:active,.pa-progress-footer button:active,.pa-review-dialog button:active,.pa-sync-dialog button:active{transform:scale(.98)}
+.pa-stage-card.is-revision{background:#fff8ef!important;border-color:#f0c58f!important}.pa-stage-card.is-revision>b{color:#ad642d!important}
 .pa-review-overlay{align-items:flex-start;background:rgb(15 25 42 / 46%);display:flex;inset:0;justify-content:center;overflow:auto;padding:28px;position:fixed;z-index:82}
 .pa-review-dialog{background:#fff;border:1px solid #dbe3ee;border-radius:22px;box-shadow:0 30px 90px rgb(15 28 49 / 26%);margin:auto;overflow:hidden;width:min(1180px,100%)}
 .pa-review-dialog>header{align-items:flex-start;background:rgb(255 255 255 / 94%);border-bottom:1px solid #e5ebf3;display:flex;gap:24px;justify-content:space-between;padding:24px 28px 20px}

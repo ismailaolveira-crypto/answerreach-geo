@@ -61,6 +61,7 @@ from app.v1.schemas import (
     ActionUpdate,
     AgentArtifactRead,
     AgentEventRead,
+    AgentRevisionRequest,
     AgentRunCreate,
     AgentRunRead,
     AgentRuntimeRead,
@@ -82,6 +83,7 @@ from app.v1.schemas import (
     ContentBriefRead,
     ContentAssetRead,
     ContentReviewDecision,
+    ContentLibraryItemRead,
     ContentReviewPackageRead,
     ContentGenerateRequest,
     DistributionRunCreate,
@@ -3897,6 +3899,116 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
 
 
 @router.get(
+    "/workspaces/{workspace_id}/content-library",
+    response_model=list[ContentLibraryItemRead],
+)
+def read_content_library(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    assets = list(
+        db.scalars(
+            select(GeoContentAsset)
+            .where(GeoContentAsset.workspace_id == workspace_id)
+            .order_by(GeoContentAsset.updated_at.desc(), GeoContentAsset.id.desc())
+        )
+    )
+    if not assets:
+        return []
+    briefs = {
+        item.id: item
+        for item in db.scalars(
+            select(GeoContentBrief).where(
+                GeoContentBrief.id.in_([asset.brief_id for asset in assets])
+            )
+        )
+    }
+    actions = {
+        item.id: item
+        for item in db.scalars(
+            select(GeoOptimizationAction).where(
+                GeoOptimizationAction.workspace_id == workspace_id,
+                GeoOptimizationAction.id.in_([brief.action_id for brief in briefs.values()] or [-1]),
+            )
+        )
+    }
+    runs_by_asset: dict[int, GeoAgentRun] = {}
+    for run in db.scalars(
+        select(GeoAgentRun)
+        .where(GeoAgentRun.workspace_id == workspace_id)
+        .order_by(GeoAgentRun.id.desc())
+    ):
+        asset_id = int((run.result_snapshot or {}).get("asset_id") or 0)
+        if asset_id:
+            runs_by_asset.setdefault(asset_id, run)
+    distributions_by_asset: dict[int, GeoDistributionRun] = {}
+    for distribution in db.scalars(
+        select(GeoDistributionRun)
+        .where(GeoDistributionRun.workspace_id == workspace_id)
+        .order_by(GeoDistributionRun.id.desc())
+    ):
+        if distribution.content_asset_id:
+            distributions_by_asset.setdefault(distribution.content_asset_id, distribution)
+
+    items = []
+    for asset in assets:
+        brief = briefs.get(asset.brief_id)
+        action = actions.get(brief.action_id) if brief else None
+        if brief is None or action is None:
+            continue
+        package = _content_review_package(db, asset)
+        content_reviews = [
+            review
+            for review in package["reviews"]
+            if review.subject_type == "content_asset" and review.subject_id == asset.id
+        ]
+        latest_review = content_reviews[0] if content_reviews else None
+        latest_note = next(
+            (
+                str(issue.get("message") or "").strip()
+                for issue in (latest_review.issues or [])
+                if str(issue.get("message") or "").strip()
+            ),
+            None,
+        ) if latest_review else None
+        run = runs_by_asset.get(asset.id)
+        distribution = distributions_by_asset.get(asset.id)
+        targets = list(
+            db.scalars(
+                select(GeoDistributionTarget).where(
+                    GeoDistributionTarget.distribution_run_id == distribution.id
+                )
+            )
+        ) if distribution else []
+        items.append(
+            {
+                "asset": asset,
+                "action_id": action.id,
+                "action_title": action.title,
+                "action_stage": action.stage,
+                "question_plan_id": brief.question_plan_id,
+                "variants": package["variants"],
+                "pending_claim_count": package["pending_claim_count"],
+                "approved_platform_keys": package["approved_platform_keys"],
+                "latest_review_verdict": latest_review.verdict if latest_review else None,
+                "latest_review_note": latest_note,
+                "agent_run_id": run.id if run else None,
+                "agent_run_status": run.status if run else None,
+                "distribution_run_id": distribution.id if distribution else None,
+                "distribution_status": distribution.status if distribution else None,
+                "saved_draft_count": sum(
+                    target.draft_readback_status == "draft_saved" for target in targets
+                ),
+                "total_draft_targets": len(targets),
+                "draft_targets": targets,
+            }
+        )
+    return items
+
+
+@router.get(
     "/workspaces/{workspace_id}/content-assets/{asset_id}/review-package",
     response_model=ContentReviewPackageRead,
 )
@@ -3938,6 +4050,13 @@ def decide_content_review(
         )
     )
     variants_by_key = {variant.platform_key: variant for variant in variants}
+    if asset.status == "changes_requested":
+        raise HTTPException(
+            status_code=409,
+            detail="This version was already rejected; generate a revised version before reviewing again",
+        )
+    if asset.status == "approved":
+        raise HTTPException(status_code=409, detail="This content version was already approved")
     platform_keys = list(dict.fromkeys(payload.platform_keys))
     missing_platforms = [key for key in platform_keys if key not in variants_by_key]
     if missing_platforms:
@@ -4880,6 +4999,86 @@ def resume_agent_run(
         stage="queued",
         message="已使用原 Codex thread 恢复任务",
         detail={"job_id": job.id},
+    )
+    return run
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/revise",
+    response_model=AgentRunRead,
+    status_code=202,
+)
+def revise_agent_run(
+    workspace_id: int,
+    run_id: int,
+    payload: AgentRevisionRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = _agent_run_or_404(db, workspace_id, run_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, asset.brief_id)
+    if brief.action_id != run.action_id or int((run.result_snapshot or {}).get("asset_id") or 0) != asset.id:
+        raise HTTPException(status_code=409, detail="The rejected asset is not the current result of this Agent run")
+    if run.status != "awaiting_review" or asset.status != "changes_requested" or not run.codex_thread_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Only the current rejected draft with an existing Codex thread can be revised",
+        )
+    review = db.scalar(
+        select(GeoContentReview)
+        .where(
+            GeoContentReview.workspace_id == workspace_id,
+            GeoContentReview.subject_type == "content_asset",
+            GeoContentReview.subject_id == asset.id,
+            GeoContentReview.verdict == "changes_requested",
+        )
+        .order_by(GeoContentReview.id.desc())
+    )
+    feedback = [
+        str(issue.get("message") or "").strip()
+        for issue in (review.issues or [])
+        if str(issue.get("message") or "").strip()
+    ] if review else []
+    if not feedback:
+        raise HTTPException(status_code=409, detail="The rejected draft has no stored human feedback")
+    job = QueueJob(
+        job_type="geo_agent.run",
+        status="pending",
+        priority=20,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "action_id": run.action_id,
+            "agent_run_id": run.id,
+            "actor_user_id": user.id,
+            "resume": True,
+            "revision_of_asset_id": asset.id,
+        },
+    )
+    db.add(job)
+    db.flush()
+    run.job_id = job.id
+    run.status = "resuming"
+    run.stage = "queued"
+    run.cancel_requested_at = None
+    run.error_code = None
+    run.error_message = None
+    run.finished_at = None
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, run.action_id)
+    action.stage = "generating"
+    action.blocked_reason = None
+    db.commit()
+    append_agent_event(
+        db,
+        run,
+        event_type="revision_queued",
+        stage="queued",
+        message="已根据人工意见排队修订；旧版本保留可追溯",
+        detail={"job_id": job.id, "source_asset_id": asset.id, "feedback": feedback},
     )
     return run
 

@@ -17,6 +17,7 @@ import {
 	interruptCleanroomAgentRun,
 	recordCleanroomDistributionClientResults,
 	resumeCleanroomAgentRun,
+	reviseCleanroomAgentRun,
 } from "@/lib/cleanroom-v1-api";
 import { PriorityActionsWorkbench } from "./priority-actions-workbench";
 import { derivePriorityActionOpportunities, mapBackendPriorityActionOpportunities } from "./priority-action-opportunities";
@@ -92,6 +93,14 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 		return run;
 	}
 
+	async function reviseAgent(runId: number, contentAssetId: number) {
+		"use server";
+		const run = await reviseCleanroomAgentRun(workspaceId, runId, contentAssetId);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
+		return run;
+	}
+
 	async function readAgentProgress(actionId: number) {
 		"use server";
 		const runs = await getActionAgentRuns(workspaceId, actionId);
@@ -131,5 +140,5 @@ export default async function ActionsPage({ params }: { params: Promise<{ worksp
 		return result;
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} discoverActions={discoverActions} />;
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} actions={actions} agentRuntime={agentRuntime} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages.filter((item): item is NonNullable<typeof item> => item !== null)} initialDistributionRuns={distributionRuns} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} discoverActions={discoverActions} />;
 }

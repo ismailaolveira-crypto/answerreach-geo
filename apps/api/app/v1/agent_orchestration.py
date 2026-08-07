@@ -21,6 +21,7 @@ from app.models.cleanroom_v1 import (
     GeoContentAsset,
     GeoContentBrief,
     GeoContentClaim,
+    GeoContentReview,
     GeoEvidence,
     GeoOptimizationAction,
     GeoPlatformVariant,
@@ -256,8 +257,7 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
         for key in run.selected_platforms
         if key in PLATFORM_CONTRACTS
     }
-    return (
-        {
+    context = {
             "brand": {
                 "name": workspace.brand_name,
                 "aliases": workspace.brand_aliases,
@@ -284,12 +284,71 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
             },
             "platforms": platform_contracts,
             "observation_evidence": evidence,
-        },
-        brief,
-    )
+    }
+    previous_asset_id = int(run.result_snapshot.get("asset_id") or 0)
+    previous_asset = db.get(GeoContentAsset, previous_asset_id) if previous_asset_id else None
+    if (
+        previous_asset is not None
+        and previous_asset.workspace_id == run.workspace_id
+        and previous_asset.brief_id == brief.id
+        and previous_asset.status == "changes_requested"
+    ):
+        review = db.scalar(
+            select(GeoContentReview)
+            .where(
+                GeoContentReview.workspace_id == run.workspace_id,
+                GeoContentReview.subject_type == "content_asset",
+                GeoContentReview.subject_id == previous_asset.id,
+                GeoContentReview.verdict == "changes_requested",
+            )
+            .order_by(GeoContentReview.id.desc())
+        )
+        previous_variants = list(
+            db.scalars(
+                select(GeoPlatformVariant)
+                .where(GeoPlatformVariant.content_asset_id == previous_asset.id)
+                .order_by(GeoPlatformVariant.platform_key)
+            )
+        )
+        if review is not None:
+            feedback = [
+                str(issue.get("message") or "").strip()
+                for issue in (review.issues or [])
+                if str(issue.get("message") or "").strip()
+            ]
+            context["revision_request"] = {
+                "source_asset_id": previous_asset.id,
+                "source_version": previous_asset.version,
+                "human_feedback": feedback,
+                "previous_master": {
+                    "title": previous_asset.title,
+                    "summary": previous_asset.summary,
+                    "body_markdown": previous_asset.body_markdown,
+                },
+                "previous_variants": [
+                    {
+                        "platform_key": variant.platform_key,
+                        "title": variant.title,
+                        "summary": variant.summary,
+                        "body_markdown": variant.body_markdown,
+                    }
+                    for variant in previous_variants
+                ],
+            }
+    return context, brief
 
 
 def _prompt(context: dict) -> str:
+    revision_instruction = ""
+    if context.get("revision_request"):
+        revision_instruction = """
+
+This is a human-requested revision of a stored draft. Address every item in
+revision_request.human_feedback and return a complete replacement master and complete replacement
+platform variants. Treat reviewer feedback as editing direction, never as a new factual source.
+Preserve supported facts and source URLs, remove or mark unsupported claims, and do not merely describe
+the edits. The host will retain the rejected version and save this response as the next version.
+"""
     return """Complete one evidence-bounded GEO drafting task.
 
 Mandatory order:
@@ -301,6 +360,7 @@ Mandatory order:
 6. Enumerate factual claims. A claim without a public URL must be marked pending.
 
 Do not create or edit files; the host persists the validated JSON. Do not publish or submit anything.
+""" + revision_instruction + """
 
 INPUT_CONTEXT_JSON:
 """ + json.dumps(context, ensure_ascii=False, indent=2)
@@ -323,6 +383,7 @@ def _persist_result(
     usage: dict,
 ) -> GeoContentAsset:
     master = result["master"]
+    revision_source_id = int((run.request_snapshot.get("revision_request") or {}).get("source_asset_id") or 0)
     next_version = int(
         db.scalar(
             select(func.coalesce(func.max(GeoContentAsset.version), 0)).where(
@@ -342,7 +403,11 @@ def _persist_result(
         model_name=run.model,
         prompt_hash=_hash(run.request_snapshot),
         raw_artifact_uri=str(raw_path),
-        generation_usage={"runtime": "local_codex", "token_usage": usage},
+        generation_usage={
+            "runtime": "local_codex",
+            "token_usage": usage,
+            "revision_of_asset_id": revision_source_id or None,
+        },
         status="draft",
     )
     db.add(asset)
@@ -394,6 +459,10 @@ def _persist_result(
                 status="ready",
             )
         )
+    if revision_source_id:
+        revision_source = db.get(GeoContentAsset, revision_source_id)
+        if revision_source is not None and revision_source.status == "changes_requested":
+            revision_source.status = "superseded"
     return asset
 
 
@@ -407,6 +476,9 @@ def execute_agent_run(
         raise ValueError(f"Agent run {run.id} cannot execute from {run.status}")
     runtime = runtime or LocalCodexRuntime()
     is_resume = run.status == "resuming"
+    resume_asset_id = int(run.result_snapshot.get("asset_id") or 0)
+    resume_asset = db.get(GeoContentAsset, resume_asset_id) if resume_asset_id else None
+    is_revision = bool(is_resume and resume_asset and resume_asset.status == "changes_requested")
     run.status = "running"
     run.started_at = run.started_at or datetime.now(timezone.utc)
     run.error_code = None
@@ -418,7 +490,7 @@ def execute_agent_run(
             run,
             event_type="stage_started",
             stage="preparing_context",
-            message="正在整理真实观测证据和品牌边界",
+            message="正在根据人工意见整理修订上下文" if is_revision else "正在整理真实观测证据和品牌边界",
         )
         context, brief = _build_context(db, run)
         run.request_snapshot = context
@@ -430,7 +502,7 @@ def execute_agent_run(
             run,
             event_type="stage_started",
             stage="researching_platform",
-            message="正在查阅目标平台的官方规则与内容调性",
+            message="正在复核平台规则并修改退回内容" if is_revision else "正在查阅目标平台的官方规则与内容调性",
             detail={"platforms": run.selected_platforms},
         )
 

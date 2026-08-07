@@ -27,6 +27,7 @@ type Props = {
 	startAgent: (actionId: number, platforms: string[]) => Promise<CleanroomAgentRun>;
 	interruptAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
+	reviseAgent: (runId: number, contentAssetId: number) => Promise<CleanroomAgentRun>;
 	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; events: CleanroomAgentEvent[] }>;
 	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
@@ -206,7 +207,7 @@ const platformOptions = [
 	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
 ] as const;
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, createAction, startAgent, interruptAgent, resumeAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, initialReviewPackages, initialDistributionRuns, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
 	const [selectedModel, setSelectedModel] = useState("all");
@@ -253,6 +254,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const runActive = Boolean(currentRun && ["queued", "resuming", "running", "cancelling"].includes(currentRun.status));
 	const currentAssetId = Number(currentRun?.result_snapshot.asset_id) || null;
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
+	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status)) ?? [];
 	const currentDistribution = distributionRuns
@@ -341,6 +343,22 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 				setAgentRuns((current) => current.map((item) => item.id === run.id ? run : item));
 			} catch (error) {
 				setAgentFeedback(error instanceof Error ? error.message : "恢复请求失败");
+			}
+		});
+	}
+
+	function requestRevision() {
+		if (!currentRun || !currentReviewPackage || !reviewNeedsRevision) return;
+		setReviewFeedback("");
+		startSaving(async () => {
+			try {
+				const run = await reviseAgent(currentRun.id, currentReviewPackage.asset.id);
+				setAgentRuns((current) => current.map((item) => item.id === run.id ? run : item));
+				setReviewOpen(false);
+				setAgentFeedback("已将人工修改意见交给原 Codex 任务；旧版本会保留。");
+				router.refresh();
+			} catch (error) {
+				setReviewFeedback(error instanceof Error ? error.message : "无法启动内容修订");
 			}
 		});
 	}
@@ -485,12 +503,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 					<header><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)}>{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
 					{!isTimelineCollapsed && selected ? <ol>
 						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={`下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} /><input type="hidden" name="question_plan_id" value={selected.questionId} /><input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} />{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">已关联当前问题的真实证据与行动记录。</p>}</ActionStage>
-						<ActionStage index={2} label="Agent 调研与生成" state={currentReviewPackage ? "done" : currentRun ? "active" : stage === 1 ? "active" : "idle"}>
+						<ActionStage index={2} label="Agent 调研与生成" state={runActive ? "active" : currentReviewPackage ? "done" : currentRun ? "active" : stage === 1 ? "active" : "idle"}>
 							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。</p><div className="pa-platform-picker">{platformOptions.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={`${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentRuntime?.ready} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : agentRuntime?.ready ? "启动本机 Codex Agent" : "Codex 未就绪，请先去设置"}</button></div> : null}
 							{currentRun ? <div className="pa-agent-run"><div className="pa-agent-runtime"><span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span><div><b>{currentRun.model || "Local Codex"}</b><small>Run #{currentRun.id} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div></div><p>{agentEvents.at(-1)?.message || (currentRun.status === "queued" ? "已入队，等待 worker 接受。" : "正在读取持久化进度…")}</p>{currentRun.error_message ? <p className="is-error">{currentRun.error_message}</p> : null}<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving}>恢复原任务</button> : null}</div></div> : null}
 							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
 						</ActionStage>
-						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage ? "active" : "idle"}>{currentReviewPackage ? <div className="pa-stage-card"><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张需人工确认。</p><button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : "审阅内容与事实"}</button></div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
+						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张需人工确认。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
 						<ActionStage index={4} label="写入平台草稿" state={allDraftsSaved ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p>}</ActionStage>
 						<ActionStage index={5} label="下轮复测" state={stage >= 4 ? "active" : "idle"}>{stage >= 4 ? <p className="pa-stage-note">请使用相同问题与模型集合创建复测批次。</p> : null}</ActionStage>
 					</ol> : !isTimelineCollapsed ? <p className="pa-empty-copy">调整筛选条件后，选择一个机会开始。</p> : null}
@@ -500,7 +518,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
 				<div className="pa-progress-lanes"><div className={agentRuns.some((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "is-current" : ""}><b>Agent 生成</b><span>{agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length}</span><p>{agentRuns.find((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "正在调研与生成" : "已生成内容进入后续流程"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步"}</p></div><div className={approvedPlatformKeys.length && !allDraftsSaved ? "is-current" : ""}><b>写入草稿</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待审核通过后人工触发"}</p></div><div><b>人工发布 / 复测</b><span>{actions.filter((item) => ["verified", "closed"].includes(item.status)).length}</span><p>平台发布始终由人工确认</p></div></div>
-				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!approvedPlatformKeys.length} title={approvedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个平台稿"}>打开同步助手 <Icon name="arrow" /></button></div></footer>
+				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、草稿回读、发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={!approvedPlatformKeys.length} title={approvedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个平台稿"}>打开同步助手 <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>
@@ -532,7 +550,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>通过审核不会写入草稿，也不会发布。</span><div><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || confirmedClaimIds.length < pendingClaims.length || approvedPlatformKeys.length > 0}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : "通过审核不会写入草稿，也不会发布。"}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || confirmedClaimIds.length < pendingClaims.length || approvedPlatformKeys.length > 0}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

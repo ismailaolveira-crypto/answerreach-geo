@@ -1,4 +1,6 @@
 from collections.abc import Generator
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -14,6 +16,7 @@ from app.main import create_app
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
     GeoContentAsset,
+    GeoAgentRun,
     GeoContentBrief,
     GeoContentClaim,
     GeoOptimizationAction,
@@ -21,6 +24,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.v1 import agent_orchestration
 
 
 @pytest.fixture
@@ -141,6 +145,22 @@ def review_client() -> Generator[TestClient, None, None]:
                 ),
             ]
         )
+        db.add(
+            GeoAgentRun(
+                id=1,
+                workspace_id=1,
+                action_id=1,
+                runtime_key="local_codex",
+                model="gpt-5-codex",
+                codex_thread_id="thread-review-1",
+                codex_turn_id="turn-review-1",
+                status="awaiting_review",
+                stage="awaiting_review",
+                selected_platforms=["zhihu", "wechat"],
+                request_snapshot={},
+                result_snapshot={"asset_id": 1, "brief_id": 1},
+            )
+        )
         db.commit()
 
     app = create_app()
@@ -153,7 +173,9 @@ def review_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
         id=1, company_id=1, role="company_admin"
     )
-    yield TestClient(app)
+    client = TestClient(app)
+    client.app.state.review_session_factory = session_factory
+    yield client
     app.dependency_overrides.clear()
 
 
@@ -219,3 +241,117 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert persisted.json()["targets"][0]["draft_readback_status"] == "draft_saved"
     assert persisted.json()["targets"][0]["final_action_clicked"] is False
 
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    assert len(library.json()) == 1
+    assert library.json()[0]["approved_platform_keys"] == ["zhihu"]
+    assert library.json()[0]["saved_draft_count"] == 1
+    assert library.json()[0]["draft_targets"][0]["draft_url"].startswith("https://www.zhihu.com/")
+
+
+def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    rejected = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "changes_requested",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["zhihu", "wechat"],
+            "note": "删除没有来源的客户数量，并补充私有化部署的适用边界。",
+        },
+    )
+    assert rejected.status_code == 201
+    assert rejected.json()["asset"]["status"] == "changes_requested"
+
+    blocked_reapproval = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+        },
+    )
+    assert blocked_reapproval.status_code == 409
+
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    assert library.json()[0]["latest_review_verdict"] == "changes_requested"
+    assert "私有化部署" in library.json()[0]["latest_review_note"]
+
+    revision = review_client.post(
+        "/api/v1/workspaces/1/agent-runs/1/revise",
+        json={"content_asset_id": 1},
+    )
+    assert revision.status_code == 202
+    assert revision.json()["status"] == "resuming"
+    assert revision.json()["stage"] == "queued"
+
+    class RevisionRuntime:
+        def run_structured(self, **kwargs):
+            assert "删除没有来源的客户数量" in kwargs["prompt"]
+            assert kwargs["thread_id"] == "thread-review-1"
+            kwargs["on_started"]("thread-review-1", "turn-review-2")
+            result = {
+                "platform_research": [
+                    {
+                        "platform_key": key,
+                        "tone": "理性、可核验",
+                        "restrictions": ["不使用无来源数据"],
+                        "source_urls": ["https://example.com/rules"],
+                    }
+                    for key in ["zhihu", "wechat"]
+                ],
+                "brand_research": {"verified_facts": [], "unknowns": ["客户数量"]},
+                "master": {
+                    "title": "平台选型稿（修订版）",
+                    "summary": "删除了无来源数据，补充适用边界。",
+                    "body_markdown": "# 修订版\n\n本文仅说明可核验边界。",
+                    "claims": [
+                        {
+                            "text": "当前无公开客户数量可供核验。",
+                            "source_url": None,
+                            "verification_status": "pending",
+                        }
+                    ],
+                },
+                "variants": [
+                    {
+                        "platform_key": key,
+                        "title": f"{key} 修订版",
+                        "summary": "平台适配后的修订内容",
+                        "body_markdown": f"# {key}\n\n修订后的完整内容。",
+                        "tags": ["私有化"],
+                        "adaptation_notes": ["已按人工意见删除无来源数据"],
+                    }
+                    for key in ["zhihu", "wechat"]
+                ],
+            }
+            return SimpleNamespace(
+                final_response=json.dumps(result, ensure_ascii=False),
+                usage={"input_tokens": 120, "output_tokens": 80},
+                runtime_events=[],
+                thread_id="thread-review-1",
+                turn_id="turn-review-2",
+            )
+
+    monkeypatch.setattr(agent_orchestration, "ARTIFACT_ROOT", tmp_path / "agent-runs")
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        completed = agent_orchestration.execute_agent_run(db, run, runtime=RevisionRuntime())
+        assert completed.status == "awaiting_review"
+        assert completed.result_snapshot["asset_id"] != 1
+        old_asset = db.get(GeoContentAsset, 1)
+        new_asset = db.get(GeoContentAsset, completed.result_snapshot["asset_id"])
+        assert old_asset.status == "superseded"
+        assert new_asset.version == 2
+        assert new_asset.generation_usage["revision_of_asset_id"] == 1
+
+    duplicate = review_client.post(
+        "/api/v1/workspaces/1/agent-runs/1/revise",
+        json={"content_asset_id": 1},
+    )
+    assert duplicate.status_code == 409

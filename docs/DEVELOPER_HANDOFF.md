@@ -122,5 +122,7 @@ pnpm run verify
 - P1 已增加内容审核包、逐条事实确认、逐平台批准、浏览器文章同步助手触发与客户端结果归档。
 - 同步门禁：未审核的资产或平台稿无法建立同步任务；没有草稿 URL 或外部草稿 ID 不能记为 `draft_saved`。
 - 文章同步使用当前浏览器扩展的 `$syncer`，逐平台传入已审核的差异稿；不使用行动摘要代替正文。
+- 人工退回后可以沿用原 Codex thread 和已持久化的修改意见生成下一版；旧版标记为历史版本，不允许绕过修订直接改为通过。
+- 工作区级内容库位于 `/geo/{workspaceId}/content`，可按审核状态和平台筛选，展开母稿/平台稿，并只在有真实回读时显示草稿链接。
 - 任何同步结果都保持 `final_action_clicked=false`；最终发布、发布 URL 归档和复测仍属于 P2。
-- 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读和禁止冒充发布。
+- 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读、退回意见传入、v2 生成和禁止冒充发布。

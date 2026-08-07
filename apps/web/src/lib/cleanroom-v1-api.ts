@@ -698,6 +698,8 @@ export type CleanroomContentAsset = {
 	raw_artifact_uri?: string | null;
 	generation_usage: Record<string, unknown>;
 	status: string;
+	created_at: string;
+	updated_at: string;
 };
 
 export type CleanroomContentClaim = {
@@ -753,6 +755,26 @@ export type CleanroomContentReviewPackage = {
 	reviews: CleanroomContentReview[];
 	pending_claim_count: number;
 	approved_platform_keys: string[];
+};
+
+export type CleanroomContentLibraryItem = {
+	asset: CleanroomContentAsset;
+	action_id: number;
+	action_title: string;
+	action_stage: string;
+	question_plan_id?: number | null;
+	variants: CleanroomPlatformVariant[];
+	pending_claim_count: number;
+	approved_platform_keys: string[];
+	latest_review_verdict?: string | null;
+	latest_review_note?: string | null;
+	agent_run_id?: number | null;
+	agent_run_status?: string | null;
+	distribution_run_id?: number | null;
+	distribution_status?: string | null;
+	saved_draft_count: number;
+	total_draft_targets: number;
+	draft_targets: CleanroomDistributionTarget[];
 };
 
 export type CleanroomDistributionTarget = {
@@ -1284,6 +1306,13 @@ export function resumeCleanroomAgentRun(workspaceId: string | number, runId: num
 	});
 }
 
+export function reviseCleanroomAgentRun(workspaceId: string | number, runId: number, contentAssetId: number) {
+	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/agent-runs/${runId}/revise`, {
+		method: "POST",
+		body: JSON.stringify({ content_asset_id: contentAssetId }),
+	});
+}
+
 export function getCleanroomActionOpportunities(workspaceId: string | number) {
 	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities`);
 }
@@ -1321,6 +1350,10 @@ export function getCleanroomContentAssets(workspaceId: string | number, actionId
 
 export function getCleanroomContentReviewPackage(workspaceId: string | number, assetId: number) {
 	return apiRequest<CleanroomContentReviewPackage>(`/workspaces/${workspaceId}/content-assets/${assetId}/review-package`);
+}
+
+export function getCleanroomContentLibrary(workspaceId: string | number) {
+	return apiRequest<CleanroomContentLibraryItem[]>(`/workspaces/${workspaceId}/content-library`);
 }
 
 export function decideCleanroomContentReview(
