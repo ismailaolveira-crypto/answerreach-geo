@@ -61,12 +61,15 @@ export function CompetitorInsightReport({
 
         <section className={styles.section} aria-labelledby="analysis-body">
           <div className={styles.sectionHeading}><span>02</span><div><p>主体分析内容</p><h2 id="analysis-body">当前范围下的关键观察</h2></div></div>
-          <div className={styles.analysisNarrative}>
-            {insight.analysis.findings.map((finding, index) => <article key={`${finding.title}-${index}`}>
-              <span>{String(index + 1).padStart(2, "0")}</span><div><h3>{finding.title}</h3><p>{finding.detail}</p>
-                {finding.evidence_ids.length ? <div className={styles.inlineEvidence}>对应证据：{finding.evidence_ids.map((id) => <Link key={id} href={`/geo/${workspaceId}/evidence/${id}`}>#{id}</Link>)}</div> : <small>本段未引用单条证据</small>}
-              </div>
-            </article>)}
+          <div className={styles.analysisReader}>
+            <header><span aria-hidden="true">✦</span><div><b>分析正文</b><small>可滚动阅读 · 已绑定当前筛选范围</small></div></header>
+            <div className={styles.analysisNarrative}>
+              {insight.analysis.findings.map((finding, index) => <article key={`${finding.title}-${index}`}>
+                <span>{String(index + 1).padStart(2, "0")}</span><div><h3>{finding.title}</h3><p>{finding.detail}</p>
+                  {finding.evidence_ids.length ? <div className={styles.inlineEvidence}>对应证据：{finding.evidence_ids.map((id) => <Link key={id} href={`/geo/${workspaceId}/evidence/${id}`}>#{id}</Link>)}</div> : <small>本段未引用单条证据</small>}
+                </div>
+              </article>)}
+            </div>
           </div>
           <div className={styles.recommendations}><h3>建议行动</h3><ol>{insight.analysis.recommended_actions.map((action) => <li key={action}>{action}</li>)}</ol></div>
         </section>

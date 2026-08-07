@@ -514,7 +514,7 @@
   gap: 16px;
   grid-template-rows: 144px auto minmax(0, 1fr);
   height: 764px;
-  overflow: auto;
+  overflow: hidden;
   padding-right: 2px;
 }
 
@@ -580,7 +580,10 @@
 
 .diagnosticPanel {
   min-height: 0;
+  overflow: auto;
   padding: 21px;
+  scrollbar-color: #c9d9ef transparent;
+  scrollbar-width: thin;
 }
 
 .diagnosticPanel > header {
@@ -613,6 +616,7 @@
   display: grid;
   gap: 8px;
   margin-top: 14px;
+  padding-bottom: 4px;
 }
 
 .overallDiagnosticList > article {
