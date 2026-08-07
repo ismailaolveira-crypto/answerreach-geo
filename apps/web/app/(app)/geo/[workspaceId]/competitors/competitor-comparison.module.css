@@ -264,7 +264,7 @@
   display: grid;
   gap: 18px;
   grid-template-columns: minmax(0, 2.1fr) minmax(270px, .9fr);
-  height: 764px;
+  align-items: start;
 }
 
 .ranking,
@@ -278,7 +278,6 @@
 }
 
 .ranking {
-  height: 764px;
   overflow: hidden;
 }
 
@@ -512,9 +511,9 @@
 .side {
   display: grid;
   gap: 16px;
-  grid-template-rows: 144px auto minmax(0, 1fr);
-  height: 764px;
-  overflow: hidden;
+  grid-template-rows: 144px auto auto;
+  height: auto;
+  overflow: visible;
   padding-right: 2px;
 }
 
@@ -580,10 +579,8 @@
 
 .diagnosticPanel {
   min-height: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 21px;
-  scrollbar-color: #c9d9ef transparent;
-  scrollbar-width: thin;
 }
 
 .diagnosticPanel > header {
@@ -679,7 +676,8 @@
   border-radius: 0 12px 12px 0;
   box-shadow: none;
   margin: 9px 0 0;
-  max-height: 240px;
+  max-height: none;
+  overflow: visible;
   padding: 15px 16px;
   width: 100%;
 }
