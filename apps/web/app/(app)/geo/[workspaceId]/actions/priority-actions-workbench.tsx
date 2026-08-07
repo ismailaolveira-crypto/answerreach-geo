@@ -1,17 +1,23 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { BrandLogo } from "@/components/brand-logo";
-import type { CleanroomAction } from "@/lib/cleanroom-v1-api";
+import type { AgentRuntime, CleanroomAction, CleanroomAgentEvent, CleanroomAgentRun } from "@/lib/cleanroom-v1-api";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
 
 type Props = {
 	workspaceId: string;
 	opportunities: PriorityActionOpportunity[];
 	actions: CleanroomAction[];
+	agentRuntime: AgentRuntime | null;
+	initialAgentRuns: CleanroomAgentRun[];
 	createAction: (formData: FormData) => Promise<void>;
-	updateActionStatus: (formData: FormData) => Promise<void>;
+	startAgent: (actionId: number, platforms: string[]) => Promise<CleanroomAgentRun>;
+	interruptAgent: (runId: number) => Promise<CleanroomAgentRun>;
+	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
+	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; events: CleanroomAgentEvent[] }>;
 	discoverActions: () => Promise<void>;
 };
 
@@ -104,7 +110,8 @@ function Icon({ name }: { name: "warning" | "trend" | "draft" | "check" | "chevr
 function actionStage(action?: CleanroomAction) {
 	if (!action) return 0;
 	if (["verified", "closed"].includes(action.status)) return 4;
-	if (action.status === "in_progress") return 2;
+	// Legacy actions marked in_progress only prove that an action was selected.
+	// Agent generation is driven exclusively by persisted GeoAgentRun records.
 	return 1;
 }
 
@@ -115,7 +122,24 @@ function ActionStage({ index, label, state, children }: { index: number; label: 
 	</li>;
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, createAction, updateActionStatus, discoverActions }: Props) {
+const agentStageLabels: Record<string, string> = {
+	queued: "等待本机 worker",
+	preparing_context: "整理真实证据",
+	researching_platform: "查阅平台规则",
+	researching_brand: "核对品牌事实",
+	adapting_platforms: "生成平台差异稿",
+	awaiting_review: "等待人工审核",
+	cancelled: "已中止",
+	failed: "运行失败",
+};
+
+const platformOptions = [
+	{ key: "zhihu", label: "知乎", logo: "/brand/zhihu.svg" },
+	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
+] as const;
+
+export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, agentRuntime, initialAgentRuns, createAction, startAgent, interruptAgent, resumeAgent, readAgentProgress, discoverActions }: Props) {
+	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(opportunities.find((item) => item.existingAction)?.id ?? opportunities[0]?.id ?? "");
 	const [selectedModel, setSelectedModel] = useState("all");
 	const [selectedQuestion, setSelectedQuestion] = useState("all");
@@ -126,6 +150,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const [syncAccounts, setSyncAccounts] = useState<SyncAccount[]>([]);
 	const [selectedSyncAccounts, setSelectedSyncAccounts] = useState<string[]>([]);
 	const [syncMessage, setSyncMessage] = useState("");
+	const [agentRuns, setAgentRuns] = useState(initialAgentRuns);
+	const [agentEvents, setAgentEvents] = useState<CleanroomAgentEvent[]>([]);
+	const [agentFeedback, setAgentFeedback] = useState("");
+	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "wechat"]);
 	const [isSaving, startSaving] = useTransition();
 
 	const models = useMemo(() => [...new Set(opportunities.flatMap((item) => item.modelLabels))], [opportunities]);
@@ -135,10 +163,95 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 	const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0];
 	const actionable = opportunities.filter((item) => !item.existingAction);
 	const high = actionable.filter((item) => item.priority === "high").length;
-	const pendingActions = actions.filter((item) => ["proposed", "in_progress"].includes(item.status)).length;
+	const pendingActions = agentRuns.filter((run) => run.status === "awaiting_review").length;
 	const retestReady = actions.filter((item) => ["verified", "closed"].includes(item.status)).length;
 	const stage = actionStage(selected?.existingAction);
 	const syncAction = selected?.existingAction ?? actions[0];
+	const currentRun = useMemo(() => agentRuns
+		.filter((run) => run.action_id === selected?.existingAction?.id)
+		.sort((a, b) => b.id - a.id)[0], [agentRuns, selected?.existingAction?.id]);
+	const runActive = Boolean(currentRun && ["queued", "resuming", "running", "cancelling"].includes(currentRun.status));
+
+	useEffect(() => {
+		const actionId = selected?.existingAction?.id;
+		if (!actionId) {
+			setAgentEvents([]);
+			return;
+		}
+		const activeActionId = actionId;
+		let cancelled = false;
+		async function refresh() {
+			try {
+				const result = await readAgentProgress(activeActionId);
+				if (!cancelled) {
+					setAgentRuns((current) => [...current.filter((run) => run.action_id !== activeActionId), ...result.runs]);
+					setAgentEvents(result.events);
+				}
+			} catch (error) {
+				if (!cancelled) setAgentFeedback(error instanceof Error ? error.message : "无法读取 Agent 进度");
+			}
+		}
+		void refresh();
+		const timer = window.setInterval(() => { if (runActive) void refresh(); }, 1500);
+		return () => { cancelled = true; window.clearInterval(timer); };
+	}, [readAgentProgress, runActive, selected?.existingAction?.id]);
+
+	useEffect(() => {
+		if (!currentRun || !["queued", "resuming", "running", "cancelling"].includes(currentRun.status)) return;
+		const after = agentEvents.at(-1)?.sequence ?? 0;
+		const source = new EventSource(`/api/geo/${workspaceId}/agent-runs/${currentRun.id}/events?after=${after}`);
+		source.addEventListener("agent_event", (raw) => {
+			const event = JSON.parse((raw as MessageEvent<string>).data) as CleanroomAgentEvent;
+			setAgentEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
+			setAgentRuns((current) => current.map((run) => run.id === currentRun.id ? {
+				...run,
+				stage: event.stage,
+				status: event.event_type === "awaiting_human_review" ? "awaiting_review" : event.event_type === "run_cancelled" ? "cancelled" : event.event_type === "run_failed" ? "failed" : run.status === "queued" ? "running" : run.status,
+			} : run));
+		});
+		source.addEventListener("end", () => { source.close(); router.refresh(); });
+		source.onerror = () => source.close();
+		return () => source.close();
+	}, [agentEvents, currentRun, router, workspaceId]);
+
+	function beginAgent() {
+		if (!selected?.existingAction || !targetPlatforms.length) return;
+		setAgentFeedback("");
+		startSaving(async () => {
+			try {
+				const run = await startAgent(selected.existingAction!.id, targetPlatforms);
+				setAgentRuns((current) => [run, ...current]);
+				setAgentEvents([]);
+				router.refresh();
+			} catch (error) {
+				setAgentFeedback(error instanceof Error ? error.message : "Agent 启动失败");
+			}
+		});
+	}
+
+	function requestInterrupt() {
+		if (!currentRun) return;
+		startSaving(async () => {
+			try {
+				const run = await interruptAgent(currentRun.id);
+				setAgentRuns((current) => current.map((item) => item.id === run.id ? run : item));
+			} catch (error) {
+				setAgentFeedback(error instanceof Error ? error.message : "中止请求失败");
+			}
+		});
+	}
+
+	function requestResume() {
+		if (!currentRun) return;
+		startSaving(async () => {
+			try {
+				const run = await resumeAgent(currentRun.id);
+				setAgentRuns((current) => current.map((item) => item.id === run.id ? run : item));
+			} catch (error) {
+				setAgentFeedback(error instanceof Error ? error.message : "恢复请求失败");
+			}
+		});
+	}
 
 	async function openSyncAssistant() {
 		if (!syncAction) {
@@ -237,8 +350,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 					<header><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)}>{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
 					{!isTimelineCollapsed && selected ? <ol>
 						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={`下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} /><input type="hidden" name="question_plan_id" value={selected.questionId} /><input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} />{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">已关联当前问题的真实证据与行动记录。</p>}</ActionStage>
-						<ActionStage index={2} label="生成内容" state={stage === 2 ? "active" : stage > 2 ? "done" : "idle"}>{stage === 1 && selected.existingAction ? <form className="pa-stage-card" action={(formData) => startSaving(() => updateActionStatus(formData))}><b>关联证据</b><p>批次：当前归档　问题：{selected.questionText}<br />模型：{selected.modelLabels.slice(0, 3).join("、")}</p><input type="hidden" name="action_id" value={selected.existingAction.id} /><button disabled={isSaving} type="submit"><Icon name="spark" />{isSaving ? "正在准备…" : "生成真实内容"}</button></form> : stage >= 2 ? <p className="pa-stage-note">行动已开始；内容资产接入后会在这里显示草稿。</p> : null}</ActionStage>
-						<ActionStage index={3} label="人工审核" state="idle"><p className="pa-stage-note">内容审核将在已接入内容资产台账后开放。</p></ActionStage>
+						<ActionStage index={2} label="Agent 调研与生成" state={currentRun?.status === "awaiting_review" ? "done" : currentRun ? "active" : stage === 1 ? "active" : "idle"}>
+							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。</p><div className="pa-platform-picker">{platformOptions.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={`${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentRuntime?.ready} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : agentRuntime?.ready ? "启动本机 Codex Agent" : "Codex 未就绪，请先去设置"}</button></div> : null}
+							{currentRun ? <div className="pa-agent-run"><div className="pa-agent-runtime"><span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span><div><b>{currentRun.model || "Local Codex"}</b><small>Run #{currentRun.id} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div></div><p>{agentEvents.at(-1)?.message || (currentRun.status === "queued" ? "已入队，等待 worker 接受。" : "正在读取持久化进度…")}</p>{currentRun.error_message ? <p className="is-error">{currentRun.error_message}</p> : null}<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving}>恢复原任务</button> : null}</div></div> : null}
+							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
+						</ActionStage>
+						<ActionStage index={3} label="人工审核" state={currentRun?.status === "awaiting_review" ? "active" : "idle"}>{currentRun?.status === "awaiting_review" ? <div className="pa-stage-card"><b>草稿已入库</b><p>内容资产 #{String(currentRun.result_snapshot.asset_id ?? "—")} · {currentRun.selected_platforms.length} 个平台版本。事实主张和来源已保留，当前仍是待审草稿。</p><button type="button" disabled>审核工作台将在下一阶段接入</button></div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
 						<ActionStage index={4} label="写入平台草稿" state="idle"><p className="pa-stage-note">只允许写入草稿，最终发布仍由人工确认。</p></ActionStage>
 						<ActionStage index={5} label="下轮复测" state={stage >= 4 ? "active" : "idle"}>{stage >= 4 ? <p className="pa-stage-note">请使用相同问题与模型集合创建复测批次。</p> : null}</ActionStage>
 					</ol> : !isTimelineCollapsed ? <p className="pa-empty-copy">调整筛选条件后，选择一个机会开始。</p> : null}
@@ -246,9 +363,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, actions, 
 			</section>
 
 			{actions.length > 0 ? <section className="pa-progress">
-				<header><div><h2>内容与发布进度</h2><p>只显示数据库已保存的行动；内容、草稿与发布将在对应接口接入后逐格推进。</p></div></header>
-				<div className="pa-progress-lanes"><div className="is-current"><b>内容草稿</b><span>{actions.filter((item) => item.status === "proposed").length}</span>{actions.filter((item) => item.status === "proposed").slice(0, 1).map((item) => <p key={item.id}>{item.title}</p>)}</div><div><b>事实校验</b><span>0</span><p>暂无待核验内容</p></div><div><b>平台适配</b><span>0</span><p>暂无待适配内容</p></div><div><b>写入草稿</b><span>{actions.filter((item) => item.status === "in_progress").length}</span>{actions.filter((item) => item.status === "in_progress").slice(0, 1).map((item) => <p key={item.id}>{item.title}</p>)}</div><div><b>人工发布</b><span>0</span><p>始终由人工确认</p></div><div><b>等待复测</b><span>{actions.filter((item) => ["verified", "closed"].includes(item.status)).length}</span><p>完成后回到同题复测</p></div></div>
-				<footer className="pa-progress-footer"><span><Icon name="eye" />系统只写入草稿，最终发布由人工确认</span><div><button type="button" onClick={() => setPreviewMessage("当前同步内容来自已保存的行动记录；正式平台适配稿仍需在内容生成阶段补齐。")}>预览说明</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant}>打开同步助手 <Icon name="arrow" /></button></div></footer>
+				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
+				<div className="pa-progress-lanes"><div className={agentRuns.some((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "is-current" : ""}><b>Agent 生成</b><span>{agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length}</span><p>{agentRuns.find((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)) ? "正在调研与生成" : "暂无运行中任务"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{agentRuns.filter((run) => run.stage === "researching_brand").length}</span><p>只保留可追溯主张，未知项不补写</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{agentRuns.filter((run) => run.stage === "adapting_platforms").length}</span><p>按官方规则生成差异化版本</p></div><div className={currentRun?.status === "awaiting_review" ? "is-current" : ""}><b>人工审核</b><span>{agentRuns.filter((run) => run.status === "awaiting_review").length}</span><p>审核前不会触发同步</p></div><div><b>写入草稿</b><span>0</span><p>当前未接入审核通过信号</p></div><div><b>人工发布 / 复测</b><span>{actions.filter((item) => ["verified", "closed"].includes(item.status)).length}</span><p>平台发布始终由人工确认</p></div></div>
+				<footer className="pa-progress-footer"><span><Icon name="eye" />Agent 只生成待审内容；审核、写入草稿和发布是独立人工边界</span><div><button type="button" onClick={() => setPreviewMessage(currentRun?.status === "awaiting_review" ? `内容资产 #${String(currentRun.result_snapshot.asset_id ?? "—")} 已生成，但尚未人工审核。` : "请先完成 Agent 调研与生成。")}>预览状态</button><button className="pa-sync-button" type="button" onClick={openSyncAssistant} disabled={true} title="待人工审核接入后开放">审核后打开同步助手 <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

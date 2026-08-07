@@ -14,6 +14,9 @@ from app.models.content import (
 from app.models.geo_config import Competitor, Keyword, TargetQuestion
 from app.models.geo_v1 import BrandClaim, ObservationReview, OptimizationAction
 from app.models.cleanroom_v1 import (
+    GeoAgentArtifact,
+    GeoAgentEvent,
+    GeoAgentRun,
     GeoBrandFact,
     GeoActionEvent,
     GeoActionOpportunity,
@@ -65,6 +68,9 @@ __all__ = [
     "ArticleReview",
     "AuditLog",
     "BrandClaim",
+    "GeoAgentArtifact",
+    "GeoAgentEvent",
+    "GeoAgentRun",
     "GeoBrandFact",
     "GeoActionEvent",
     "GeoActionOpportunity",

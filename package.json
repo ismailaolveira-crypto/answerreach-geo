@@ -33,6 +33,7 @@
     "verify:local": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_local_acceptance_suite.py",
     "verify:geo-v1": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_geo_v1.py",
     "verify:cleanroom-v1": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_cleanroom_v1.py",
+    "verify:codex-agent": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_codex_agent_runtime.py",
     "verify:deepseek-account-pool-v1": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_deepseek_account_pool_v1.py",
     "verify:deepseek-profile-worker": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_deepseek_profile_worker.py",
     "verify:deepseek-web-search": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_deepseek_web_search_provider.py",

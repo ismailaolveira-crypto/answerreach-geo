@@ -2,11 +2,14 @@
 
 import { revalidatePath } from "next/cache";
 import {
+	getAgentRuntime,
 	getWorkspaceIntegrations,
 	testWorkspaceIntegration,
+	testAgentRuntime,
 	updateCleanroomWorkspace,
 	updateWorkspaceIntegrations,
 	type WorkspaceIntegrationSettings,
+	type AgentRuntime,
 } from "@/lib/cleanroom-v1-api";
 
 export type SettingsActionState = { status: "idle" | "success" | "error"; message?: string };
@@ -17,6 +20,18 @@ export async function readWorkspaceIntegrations(workspaceId: number): Promise<Wo
 	} catch {
 		return null;
 	}
+}
+
+export async function readAgentRuntime(workspaceId: number): Promise<AgentRuntime | null> {
+	try {
+		return await getAgentRuntime(workspaceId);
+	} catch {
+		return null;
+	}
+}
+
+export async function runAgentRuntimeTest(workspaceId: number) {
+	return testAgentRuntime(workspaceId);
 }
 
 export async function saveWorkspaceIntegrations(

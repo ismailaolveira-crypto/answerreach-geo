@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import hmac
@@ -8,6 +9,7 @@ from time import perf_counter
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -20,6 +22,9 @@ from app.models.cleanroom_v1 import (
     GeoActionEvent,
     GeoActionOpportunity,
     GeoActionOpportunityEvidence,
+    GeoAgentArtifact,
+    GeoAgentEvent,
+    GeoAgentRun,
     GeoBrandFact,
     GeoBrowserAccount,
     GeoContentAudit,
@@ -52,6 +57,12 @@ from app.v1.schemas import (
     ActionRead,
     ActionStageUpdate,
     ActionUpdate,
+    AgentArtifactRead,
+    AgentEventRead,
+    AgentRunCreate,
+    AgentRunRead,
+    AgentRuntimeRead,
+    AgentRuntimeTestRead,
     BrandFactCreate,
     BrandFactRead,
     ContentAuditCreate,
@@ -125,6 +136,9 @@ from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import discover_opportunities
 from app.v1.platform_adaptation import adapt_asset
 from app.services.article_sync_adapter import get_article_sync_adapter
+from app.services.codex_agent_runtime import LocalCodexRuntime, diagnose_local_codex
+from app.db.session import SessionLocal
+from app.v1.agent_orchestration import append_agent_event
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
     ARTICLE_SYNC_MCP_SERVER_PATH,
@@ -4174,6 +4188,379 @@ def enqueue_content_generation(
     db.commit()
     db.refresh(job)
     return job
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runtime",
+    response_model=AgentRuntimeRead,
+)
+def read_agent_runtime(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    return diagnose_local_codex()
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agent-runtime/test",
+    response_model=AgentRuntimeTestRead,
+)
+def test_agent_runtime(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    diagnostic = diagnose_local_codex()
+    started = perf_counter()
+    if not diagnostic.get("ready"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": diagnostic.get("error") or "Codex login is required",
+        }
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="cqyq-codex-runtime-test-") as directory:
+            result = LocalCodexRuntime().run_structured(
+                task_directory=Path(directory),
+                prompt="Return JSON confirming that this local Codex runtime can complete a structured turn.",
+                output_schema={
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                developer_instructions="Do not read or write files. Return only the requested JSON.",
+                model=diagnostic.get("default_model"),
+            )
+        parsed = json.loads(result.final_response)
+        return {
+            "ok": parsed.get("ok") is True,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "thread_id": result.thread_id,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": str(exc)[:500],
+        }
+
+
+def _default_agent_platforms(db: Session, action: GeoOptimizationAction) -> list[str]:
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    requested = list(opportunity.recommended_platforms or []) if opportunity else []
+    supported = [key for key in requested if key in {"zhihu", "wechat", "official_site", "xiaohongshu"}]
+    preferred = [key for key in supported if key != "official_site"]
+    return (preferred or supported or ["zhihu", "wechat"])[:2]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/agent-runs",
+    response_model=AgentRunRead,
+    status_code=202,
+)
+def create_agent_run(
+    workspace_id: int,
+    action_id: int,
+    payload: AgentRunCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    diagnostic = diagnose_local_codex()
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Local Codex Agent is not ready; sign in with ChatGPT first",
+        )
+    active = db.scalar(
+        select(GeoAgentRun)
+        .where(
+            GeoAgentRun.workspace_id == workspace_id,
+            GeoAgentRun.action_id == action_id,
+            GeoAgentRun.status.in_(["queued", "resuming", "running", "cancelling"]),
+        )
+        .order_by(GeoAgentRun.id.desc())
+    )
+    if active:
+        raise HTTPException(status_code=409, detail=f"Agent run {active.id} is already active")
+    platforms = list(dict.fromkeys(payload.selected_platforms or _default_agent_platforms(db, action)))
+    if not platforms:
+        raise HTTPException(status_code=422, detail="Select at least one target platform")
+    model = payload.model or diagnostic.get("default_model")
+    if model and model not in diagnostic.get("available_models", []):
+        raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
+    run = GeoAgentRun(
+        workspace_id=workspace_id,
+        action_id=action_id,
+        requested_by_user_id=user.id,
+        runtime_key="local_codex",
+        model=model,
+        status="queued",
+        stage="queued",
+        selected_platforms=platforms,
+        request_snapshot={"action_id": action_id, "selected_platforms": platforms},
+    )
+    db.add(run)
+    db.flush()
+    job = QueueJob(
+        job_type="geo_agent.run",
+        status="pending",
+        priority=20,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "action_id": action_id,
+            "agent_run_id": run.id,
+            "actor_user_id": user.id,
+        },
+    )
+    db.add(job)
+    db.flush()
+    run.job_id = job.id
+    previous_stage = action.stage
+    action.stage = "generating"
+    action.status = "in_progress"
+    action.blocked_reason = None
+    db.commit()
+    append_agent_event(
+        db,
+        run,
+        event_type="run_queued",
+        stage="queued",
+        message="Agent 任务已入队，等待本机 worker 执行",
+        detail={"job_id": job.id, "platforms": platforms, "from_action_stage": previous_stage},
+    )
+    db.refresh(run)
+    return run
+
+
+@router.get(
+    "/workspaces/{workspace_id}/actions/{action_id}/agent-runs",
+    response_model=list[AgentRunRead],
+)
+def list_action_agent_runs(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    return list(
+        db.scalars(
+            select(GeoAgentRun)
+            .where(GeoAgentRun.workspace_id == workspace_id, GeoAgentRun.action_id == action_id)
+            .order_by(GeoAgentRun.id.desc())
+        )
+    )
+
+
+def _agent_run_or_404(db: Session, workspace_id: int, run_id: int) -> GeoAgentRun:
+    run = db.get(GeoAgentRun, run_id)
+    if run is None or run.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Agent run not found")
+    return run
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}",
+    response_model=AgentRunRead,
+)
+def read_agent_run(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    return _agent_run_or_404(db, workspace_id, run_id)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/events",
+    response_model=list[AgentEventRead],
+)
+def list_agent_events(
+    workspace_id: int,
+    run_id: int,
+    after: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    _agent_run_or_404(db, workspace_id, run_id)
+    return list(
+        db.scalars(
+            select(GeoAgentEvent)
+            .where(GeoAgentEvent.agent_run_id == run_id, GeoAgentEvent.sequence > after)
+            .order_by(GeoAgentEvent.sequence)
+        )
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/events/stream",
+)
+def stream_agent_events(
+    workspace_id: int,
+    run_id: int,
+    after: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    _agent_run_or_404(db, workspace_id, run_id)
+
+    async def event_stream():
+        cursor = after
+        idle_terminal_polls = 0
+        while True:
+            with SessionLocal() as stream_db:
+                run = stream_db.get(GeoAgentRun, run_id)
+                events = list(
+                    stream_db.scalars(
+                        select(GeoAgentEvent)
+                        .where(
+                            GeoAgentEvent.agent_run_id == run_id,
+                            GeoAgentEvent.sequence > cursor,
+                        )
+                        .order_by(GeoAgentEvent.sequence)
+                    )
+                )
+                for event in events:
+                    cursor = event.sequence
+                    payload = AgentEventRead.model_validate(event).model_dump(mode="json")
+                    yield f"id: {cursor}\nevent: agent_event\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                terminal = run is None or run.status in {"awaiting_review", "cancelled", "failed", "blocked"}
+            if terminal and not events:
+                idle_terminal_polls += 1
+                if idle_terminal_polls >= 2:
+                    yield "event: end\ndata: {}\n\n"
+                    break
+            else:
+                idle_terminal_polls = 0
+            if not events:
+                yield ": keepalive\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/artifacts",
+    response_model=list[AgentArtifactRead],
+)
+def list_agent_artifacts(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    _agent_run_or_404(db, workspace_id, run_id)
+    return list(
+        db.scalars(
+            select(GeoAgentArtifact)
+            .where(GeoAgentArtifact.agent_run_id == run_id)
+            .order_by(GeoAgentArtifact.id)
+        )
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/interrupt",
+    response_model=AgentRunRead,
+)
+def interrupt_agent_run(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = _agent_run_or_404(db, workspace_id, run_id)
+    if run.status not in {"queued", "resuming", "running", "cancelling"}:
+        raise HTTPException(status_code=409, detail=f"Cannot interrupt Agent run in {run.status}")
+    if run.cancel_requested_at is None:
+        run.cancel_requested_at = datetime.now(timezone.utc)
+    run.status = "cancelling"
+    db.commit()
+    append_agent_event(
+        db,
+        run,
+        event_type="interrupt_requested",
+        stage=run.stage,
+        message="已请求中止；worker 将在下一个 SDK 事件点发送真实 interrupt",
+        detail={"requested_by_user_id": user.id},
+    )
+    return run
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/resume",
+    response_model=AgentRunRead,
+    status_code=202,
+)
+def resume_agent_run(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = _agent_run_or_404(db, workspace_id, run_id)
+    if run.status not in {"cancelled", "failed"} or not run.codex_thread_id:
+        raise HTTPException(status_code=409, detail="Only an interrupted/failed run with a Codex thread can resume")
+    job = QueueJob(
+        job_type="geo_agent.run",
+        status="pending",
+        priority=20,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "action_id": run.action_id,
+            "agent_run_id": run.id,
+            "actor_user_id": user.id,
+            "resume": True,
+        },
+    )
+    db.add(job)
+    db.flush()
+    run.job_id = job.id
+    run.status = "resuming"
+    run.cancel_requested_at = None
+    run.error_code = None
+    run.error_message = None
+    run.finished_at = None
+    db.commit()
+    append_agent_event(
+        db,
+        run,
+        event_type="resume_queued",
+        stage="queued",
+        message="已使用原 Codex thread 恢复任务",
+        detail={"job_id": job.id},
+    )
+    return run
 
 
 @router.get("/workspaces/{workspace_id}/actions", response_model=list[ActionRead])

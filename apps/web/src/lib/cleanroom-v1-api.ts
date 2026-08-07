@@ -572,6 +572,61 @@ export type CleanroomAction = {
 	completed_at?: string | null;
 };
 
+export type AgentRuntime = {
+	runtime_key: "local_codex";
+	sdk_installed: boolean;
+	sdk_version?: string | null;
+	runtime_version?: string | null;
+	ready: boolean;
+	login_status: string;
+	default_model?: string | null;
+	available_models: string[];
+	error?: string | null;
+};
+
+export type AgentRuntimeTest = {
+	ok: boolean;
+	runtime: AgentRuntime;
+	latency_ms: number;
+	thread_id?: string | null;
+	error?: string | null;
+};
+
+export type CleanroomAgentRun = {
+	id: number;
+	workspace_id: number;
+	action_id: number;
+	job_id?: number | null;
+	requested_by_user_id?: number | null;
+	runtime_key: string;
+	model?: string | null;
+	codex_thread_id?: string | null;
+	codex_turn_id?: string | null;
+	status: string;
+	stage: string;
+	selected_platforms: string[];
+	result_snapshot: Record<string, unknown>;
+	error_code?: string | null;
+	error_message?: string | null;
+	cancel_requested_at?: string | null;
+	started_at?: string | null;
+	finished_at?: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type CleanroomAgentEvent = {
+	id: number;
+	workspace_id: number;
+	agent_run_id: number;
+	sequence: number;
+	event_type: string;
+	stage: string;
+	message: string;
+	detail: Record<string, unknown>;
+	created_at: string;
+};
+
 export type CleanroomActionOpportunityEvidence = {
 	id: number;
 	opportunity_id: number;
@@ -1100,6 +1155,47 @@ export function createSamplingBatch(workspaceId: string | number) {
 
 export function getCleanroomActions(workspaceId: string | number) {
 	return apiRequest<CleanroomAction[]>(`/workspaces/${workspaceId}/actions`);
+}
+
+export function getAgentRuntime(workspaceId: string | number) {
+	return apiRequest<AgentRuntime>(`/workspaces/${workspaceId}/agent-runtime`);
+}
+
+export function testAgentRuntime(workspaceId: string | number) {
+	return apiRequest<AgentRuntimeTest>(`/workspaces/${workspaceId}/agent-runtime/test`, {
+		method: "POST",
+	});
+}
+
+export function createCleanroomAgentRun(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { selected_platforms?: string[]; model?: string | null } = {},
+) {
+	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/actions/${actionId}/agent-runs`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function getActionAgentRuns(workspaceId: string | number, actionId: number) {
+	return apiRequest<CleanroomAgentRun[]>(`/workspaces/${workspaceId}/actions/${actionId}/agent-runs`);
+}
+
+export function getAgentRunEvents(workspaceId: string | number, runId: number, after = 0) {
+	return apiRequest<CleanroomAgentEvent[]>(`/workspaces/${workspaceId}/agent-runs/${runId}/events?after=${after}`);
+}
+
+export function interruptCleanroomAgentRun(workspaceId: string | number, runId: number) {
+	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/agent-runs/${runId}/interrupt`, {
+		method: "POST",
+	});
+}
+
+export function resumeCleanroomAgentRun(workspaceId: string | number, runId: number) {
+	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/agent-runs/${runId}/resume`, {
+		method: "POST",
+	});
 }
 
 export function getCleanroomActionOpportunities(workspaceId: string | number) {

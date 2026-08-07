@@ -986,6 +986,83 @@ class ActionEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AgentRuntimeRead(BaseModel):
+    runtime_key: str = "local_codex"
+    sdk_installed: bool
+    sdk_version: str | None = None
+    runtime_version: str | None = None
+    ready: bool
+    login_status: str
+    default_model: str | None = None
+    available_models: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class AgentRuntimeTestRead(BaseModel):
+    ok: bool
+    runtime: AgentRuntimeRead
+    latency_ms: int
+    thread_id: str | None = None
+    error: str | None = None
+
+
+class AgentRunCreate(BaseModel):
+    selected_platforms: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
+        default_factory=list, max_length=4
+    )
+    model: str | None = Field(default=None, max_length=120)
+
+
+class AgentRunRead(BaseModel):
+    id: int
+    workspace_id: int
+    action_id: int
+    job_id: int | None
+    requested_by_user_id: int | None
+    runtime_key: str
+    model: str | None
+    codex_thread_id: str | None
+    codex_turn_id: str | None
+    status: str
+    stage: str
+    selected_platforms: list[str] = Field(default_factory=list)
+    result_snapshot: dict = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
+    cancel_requested_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgentEventRead(BaseModel):
+    id: int
+    workspace_id: int
+    agent_run_id: int
+    sequence: int
+    event_type: str
+    stage: str
+    message: str
+    detail: dict = Field(default_factory=dict)
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AgentArtifactRead(BaseModel):
+    id: int
+    workspace_id: int
+    agent_run_id: int
+    artifact_kind: str
+    uri: str
+    sha256: str
+    size_bytes: int
+    metadata_json: dict = Field(default_factory=dict)
+    created_at: datetime
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ContentBriefCreate(BaseModel):
     audience: str | None = Field(default=None, max_length=160)
     intent: str | None = Field(default=None, max_length=80)

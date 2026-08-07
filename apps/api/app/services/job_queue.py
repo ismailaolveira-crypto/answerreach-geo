@@ -282,6 +282,23 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             }
             job.status = "success"
             job.error_message = None
+        elif job.job_type == "geo_agent.run":
+            from app.models.cleanroom_v1 import GeoAgentRun
+            from app.v1.agent_orchestration import execute_agent_run
+
+            payload_json = dict(job.payload_json or {})
+            run = db.get(GeoAgentRun, int(payload_json["agent_run_id"]))
+            if run is None:
+                raise ValueError("Agent run not found")
+            result = execute_agent_run(db, run)
+            job.payload_json = {
+                **payload_json,
+                "stage": result.stage,
+                "agent_status": result.status,
+                "asset_id": (result.result_snapshot or {}).get("asset_id"),
+            }
+            job.status = "success" if result.status in {"awaiting_review", "cancelled"} else "failed"
+            job.error_message = result.error_message
         elif job.job_type == "geo_content.generate":
             from app.models import LLMProvider
             from app.models.cleanroom_v1 import GeoActionEvent, GeoContentBrief, GeoOptimizationAction, GeoWorkspace

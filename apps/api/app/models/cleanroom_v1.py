@@ -369,6 +369,72 @@ class GeoActionEvent(CleanRoomTimestamp, Base):
     detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class GeoAgentRun(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_runs_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
+    )
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("queue_jobs.id"), index=True)
+    requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    runtime_key: Mapped[str] = mapped_column(String(50), nullable=False, default="local_codex")
+    model: Mapped[str | None] = mapped_column(String(120))
+    codex_thread_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    codex_turn_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False, default="queued", index=True)
+    selected_platforms: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    request_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    task_directory: Mapped[str | None] = mapped_column(String(1500))
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeoAgentEvent(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_events_v1"
+    __table_args__ = (
+        UniqueConstraint("agent_run_id", "sequence", name="uq_geo_agent_event_sequence_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    agent_run_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_agent_runs_v1.id"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class GeoAgentArtifact(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_artifacts_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    agent_run_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_agent_runs_v1.id"), nullable=False, index=True
+    )
+    artifact_kind: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    uri: Mapped[str] = mapped_column(String(1500), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
 class GeoPromptTemplate(CleanRoomTimestamp, Base):
     __tablename__ = "geo_prompt_templates_v1"
     __table_args__ = (
