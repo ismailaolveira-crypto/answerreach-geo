@@ -3,7 +3,7 @@
 	min-height: 100vh;
 }
 .sy-analysis-selector-main { margin: 0 auto; max-width: 1120px; padding: 52px clamp(20px, 4vw, 58px) 74px; }
-.sy-analysis-selector-hero { align-items: end; display: flex; gap: 24px; justify-content: space-between; margin-bottom: 28px; }
+.sy-analysis-selector-hero { align-items: flex-end; display: flex; gap: 24px; justify-content: space-between; margin-bottom: 28px; }
 .sy-analysis-selector-hero p,.sy-analysis-selector-panel header p { color: #4776d1; font-size: 10px; font-weight: 820; letter-spacing: .1em; margin: 0; text-transform: uppercase; }
 .sy-analysis-selector-hero h1 { font-size: 36px; letter-spacing: -.06em; line-height: 1; margin: 8px 0 11px; }
 .sy-analysis-selector-hero > div:first-child > span { color: #77869b; font-size: 13px; line-height: 1.65; }

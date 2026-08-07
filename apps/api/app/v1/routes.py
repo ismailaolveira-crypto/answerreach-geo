@@ -4640,6 +4640,19 @@ def record_human_publication(
     if target.draft_readback_status != "draft_saved":
         raise HTTPException(status_code=409, detail="只有已回读的真实平台草稿可以记录发布结果")
     public_url = _validated_publication_url(workspace, target.platform_key, payload.public_url)
+    if target.human_publish_status == "published" and target.public_url == public_url:
+        return _distribution_read(db, run)
+    retest = db.scalar(
+        select(GeoReobservation).where(
+            GeoReobservation.action_id == run.action_id,
+            GeoReobservation.retest_batch_id.is_not(None),
+        )
+    ) if run.action_id else None
+    if target.public_url and target.public_url != public_url and retest is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="同口径复测已建立，发布 URL 已锁定；如需更正，请保留本次记录并创建新的发布行动",
+        )
     previous_url = target.public_url
     now = datetime.now(timezone.utc)
     target.human_publish_status = "published"

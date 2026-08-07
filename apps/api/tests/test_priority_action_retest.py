@@ -334,6 +334,19 @@ def test_retest_reuses_exact_scope_and_completes_from_real_evidence(
         "repeat_count": 2,
     }
 
+    idempotent_publication = retest_client.post(
+        "/api/v1/workspaces/1/distribution-runs/1/targets/1/human-publication",
+        json={"public_url": "https://zhuanlan.zhihu.com/p/123"},
+    )
+    assert idempotent_publication.status_code == 200
+
+    locked_publication = retest_client.post(
+        "/api/v1/workspaces/1/distribution-runs/1/targets/1/human-publication",
+        json={"public_url": "https://www.zhihu.com/question/123/answer/456"},
+    )
+    assert locked_publication.status_code == 409
+    assert "已锁定" in locked_publication.json()["detail"]
+
     session_factory = retest_client.app.state.retest_session_factory
     with session_factory() as db:
         row = db.scalar(select(models.GeoReobservation).where(models.GeoReobservation.action_id == 1))

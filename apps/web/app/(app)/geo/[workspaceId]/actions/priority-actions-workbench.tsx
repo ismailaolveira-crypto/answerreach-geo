@@ -290,6 +290,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status)) ?? [];
+	const confirmedPendingClaimCount = pendingClaims.filter((claim) => confirmedClaimIds.includes(claim.id)).length;
+	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - confirmedPendingClaimCount);
 	const currentDistribution = distributionRuns
 		.filter((run) => run.action_id === selected?.existingAction?.id)
 		.sort((a, b) => b.id - a.id)[0];
@@ -298,6 +300,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const publishedTargetCount = currentDistribution?.targets.filter((target) => target.human_publish_status === "published" && target.public_url).length ?? 0;
 	const allTargetsPublished = Boolean(currentDistribution?.targets.length && publishedTargetCount === currentDistribution.targets.length);
 	const currentRetest = retests.find((item) => item.action_id === selected?.existingAction?.id);
+	const publicationRecordsLocked = Boolean(currentRetest?.retest_batch_id);
 	const retestActive = Boolean(currentRetest && ["preparing", "queued", "running"].includes(currentRetest.status));
 	const retestComplete = currentRetest?.status === "completed";
 	const comparableRetestComplete = Boolean(retestComplete && currentRetest?.measured_delta.comparable);
@@ -320,6 +323,24 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
 	useEffect(() => setRetests(initialRetests), [initialRetests]);
+	useEffect(() => {
+		if (!reviewOpen && !syncOpen) return;
+		const previousOverflow = document.body.style.overflow;
+		document.body.style.overflow = "hidden";
+		function closeModal(event: KeyboardEvent) {
+			if (event.key !== "Escape" || isSaving) return;
+			if (syncOpen) {
+				if (syncPhase !== "syncing") setSyncOpen(false);
+				return;
+			}
+			setReviewOpen(false);
+		}
+		document.addEventListener("keydown", closeModal);
+		return () => {
+			document.body.style.overflow = previousOverflow;
+			document.removeEventListener("keydown", closeModal);
+		};
+	}, [isSaving, reviewOpen, syncOpen, syncPhase]);
 
 	useEffect(() => {
 		const actionId = selected?.existingAction?.id;
@@ -579,6 +600,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 
 	function savePublication(targetId: number) {
 		if (!currentDistribution) return;
+		if (publicationRecordsLocked) {
+			setPublicationMessage("同口径复测已建立，公开 URL 已锁定，避免复测依据发生漂移。");
+			return;
+		}
 		const target = currentDistribution.targets.find((item) => item.id === targetId);
 		const publicUrl = (publicationUrls[targetId] ?? target?.public_url ?? "").trim();
 		if (!target || !publicUrl) {
@@ -670,7 +695,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							{allDraftsSaved && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
 								const platform = platformOptions.find((item) => item.key === target.platform_key);
 								const published = target.human_publish_status === "published" && Boolean(target.public_url);
-								return <section key={target.id} className={published ? "is-published" : ""}><header><span>{platform ? <img src={platform.logo} alt="" /> : null}<b>{platform?.label || target.platform_key}</b></span><small>{published ? "人工已记录" : "等待人工发布"}</small></header><div><input type="url" aria-label={`${platform?.label || target.platform_key}公开文章 URL`} placeholder="粘贴具体公开文章 URL" value={publicationUrls[target.id] ?? target.public_url ?? ""} onChange={(event) => setPublicationUrls((current) => ({ ...current, [target.id]: event.target.value }))} /><button type="button" disabled={isSaving || !((publicationUrls[target.id] ?? target.public_url ?? "").trim())} onClick={() => savePublication(target.id)}>{published ? "更正记录" : "记录发布"}</button></div>{target.draft_url ? <a href={target.draft_url} target="_blank" rel="noreferrer">打开平台草稿</a> : null}{target.public_url ? <a href={target.public_url} target="_blank" rel="noreferrer">查看公开文章</a> : null}</section>;
+								return <section key={target.id} className={published ? "is-published" : ""}><header><span>{platform ? <img src={platform.logo} alt="" /> : null}<b>{platform?.label || target.platform_key}</b></span><small>{publicationRecordsLocked ? "复测已开始，记录已锁定" : published ? "人工已记录" : "等待人工发布"}</small></header><div><input type="url" aria-label={`${platform?.label || target.platform_key}公开文章 URL`} placeholder="粘贴具体公开文章 URL" value={publicationUrls[target.id] ?? target.public_url ?? ""} disabled={publicationRecordsLocked} onChange={(event) => setPublicationUrls((current) => ({ ...current, [target.id]: event.target.value }))} /><button type="button" disabled={publicationRecordsLocked || isSaving || !((publicationUrls[target.id] ?? target.public_url ?? "").trim())} onClick={() => savePublication(target.id)}>{publicationRecordsLocked ? "已锁定" : published ? "更正记录" : "记录发布"}</button></div>{target.draft_url ? <a href={target.draft_url} target="_blank" rel="noreferrer">打开平台草稿</a> : null}{target.public_url ? <a href={target.public_url} target="_blank" rel="noreferrer">查看公开文章</a> : null}</section>;
 							})}{publicationMessage ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <p className="pa-stage-note">草稿真实回读后，才可记录人工发布结果。</p>}
 						</ActionStage>
 						<ActionStage index={6} label="同口径复测" state={comparableRetestComplete ? "done" : retestActive || allTargetsPublished ? "active" : "idle"}>
@@ -715,7 +740,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : "通过审核不会写入草稿，也不会发布。"}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || confirmedClaimIds.length < pendingClaims.length || approvedPlatformKeys.length > 0}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : `已确认 ${confirmedPendingClaimCount}/${pendingClaims.length} 条待确认事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。通过后仍不会写入草稿或发布。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : remainingPendingClaimCount > 0 ? `还需确认 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>
