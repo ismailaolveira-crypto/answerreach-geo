@@ -372,6 +372,165 @@
   font-size: 11px;
 }
 
+.signalTrigger {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  margin: -6px;
+  padding: 6px;
+  text-align: left;
+}
+
+.signalTrigger strong {
+  color: #175dcc;
+  display: block;
+  font-size: 11px;
+}
+
+.signalTrigger small {
+  color: #596779;
+  display: block;
+  font-size: 8px;
+  margin-top: 4px;
+  white-space: nowrap;
+}
+
+.signalTrigger i {
+  display: inline-block;
+  font-size: 11px;
+  font-style: normal;
+  margin-left: 3px;
+  transition: transform .18s ease;
+}
+
+.signalTrigger[aria-expanded="true"] i {
+  transform: rotate(180deg);
+}
+
+.rankingTable tr[data-signal-open] > * {
+  background: #fbfdff;
+}
+
+.rankingSignalRow > td {
+  background: #fbfdff;
+  border-top: 0;
+  padding: 0 24px 22px !important;
+}
+
+.rankingSignalDrawer {
+  background: linear-gradient(90deg, #f4f8ff, #fbfdff 68%);
+  border-bottom: 1px solid #dce7f5;
+  border-top: 1px solid #dce7f5;
+  padding: 17px 20px 19px 24px;
+  position: relative;
+}
+
+.rankingSignalDrawer::before {
+  background: #4a82e1;
+  border-radius: 999px;
+  bottom: 17px;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: 17px;
+  width: 3px;
+}
+
+.rankingSignalDrawer > header {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+}
+
+.rankingSignalDrawer > header > span {
+  background: #e6f0ff;
+  border-radius: 999px;
+  color: #2f6ed4;
+  flex: 0 0 auto;
+  font-size: 9px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+.rankingSignalDrawer h3 {
+  color: #2d415e;
+  font-size: 13px;
+  letter-spacing: -.02em;
+  margin: 1px 0 0;
+}
+
+.rankingSignalDrawer > header p {
+  color: #74859a;
+  font-size: 9px;
+  line-height: 1.5;
+  margin: 5px 0 0;
+}
+
+.signalTimeline {
+  display: grid;
+  margin: 16px 0 0 49px;
+  max-width: 760px;
+}
+
+.signalTimeline > article {
+  border-top: 1px solid #dfe9f6;
+  padding: 14px 0 0;
+}
+
+.signalTimelineHead {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+.signalTimelineHead b {
+  color: #354a67;
+  font-size: 10px;
+}
+
+.signalTimelineHead span {
+  background: #edf4ff;
+  border-radius: 999px;
+  color: #2d68cb;
+  font-size: 9px;
+  font-weight: 740;
+  padding: 4px 6px;
+}
+
+.signalTimeline dl {
+  display: grid;
+  gap: 7px;
+  margin: 11px 0 10px;
+}
+
+.signalTimeline dl div {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: 59px minmax(0, 1fr);
+}
+
+.signalTimeline dt {
+  color: #7d8da2;
+  font-size: 9px;
+  font-weight: 740;
+}
+
+.signalTimeline dd {
+  color: #4c5f79;
+  font-size: 10px;
+  line-height: 1.58;
+  margin: 0;
+}
+
+.signalTimeline a {
+  color: #1f62cb;
+  font-size: 10px;
+  font-weight: 760;
+}
+
 .rankingTable tr[data-baseline] {
   background: #fbfcff;
 }
@@ -872,6 +1031,7 @@
 .brand:focus-visible,
 .scopeCard a:focus-visible,
 .evidenceDisclosure summary:focus-visible,
+.signalTrigger:focus-visible,
 .diagnosticItem summary:focus-visible,
 .diagnosticItem a:focus-visible {
   outline: 3px solid rgb(40 102 233 / 28%);

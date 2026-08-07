@@ -6,17 +6,15 @@ import {
   type CleanroomCompetitorComparison,
   type CompetitorBrandStat,
   type CompetitorBreakdown,
-  type CompetitorEvidenceSnippet,
 } from "@/lib/cleanroom-v1-api";
 import { CompetitorAiInsight } from "./competitor-ai-insight";
+import { CompetitorRanking } from "./competitor-ranking";
 import styles from "./competitor-comparison.module.css";
 
 type Props = {
   params: Promise<{ workspaceId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
-
-type ActionDiagnostic = CleanroomCompetitorComparison["action_diagnostics"][number];
 
 const PERIODS = new Set(["7", "30", "90", "3650"]);
 const VIEWS = new Set(["overall", "model", "question"]);
@@ -25,195 +23,8 @@ function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function formatNumber(value: number) {
-  return value.toLocaleString("zh-CN");
-}
-
 function explicitPositionLabel(brand: CompetitorBrandStat) {
   return brand.explicit_average_position == null ? "—" : String(brand.explicit_average_position);
-}
-
-function evidenceLabel(row: CompetitorEvidenceSnippet) {
-  if (row.win_reason_type === "explicit_rank_ahead") return "明确排序在前";
-  if (row.win_reason_type === "selected_baseline_absent") return "竞品入选、我们缺席";
-  if (row.status === "recommended") return "明确推荐";
-  if (row.status === "shortlisted") return "进入候选";
-  if (row.status === "negative") return "负面语境";
-  return "普通提及";
-}
-
-function evidenceRows(brand: CompetitorBrandStat) {
-  // This column supports the appearance rate, so it must reveal every archived
-  // answer counted in that rate, not only the smaller subset of win signals.
-  return brand.evidence;
-}
-
-function cleanEvidenceExcerpt(value?: string) {
-  if (!value) return "原回答中已命中该品牌，查看原回答与关联引用。";
-  const cleaned = value
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
-    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
-    .replace(/#{1,6}/g, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/[>*_`~|]/g, " ")
-    .replace(/-{2,}/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.length > 180 ? `${cleaned.slice(0, 180)}…` : cleaned;
-}
-
-function EvidenceDisclosure({
-  workspaceId,
-  rows,
-}: {
-  workspaceId: string;
-  rows: CompetitorEvidenceSnippet[];
-}) {
-  if (!rows.length) return <span className={styles.zeroEvidence}>真实 0</span>;
-
-  return <details className={styles.evidenceDisclosure}>
-    <summary>查看 {Math.min(rows.length, 8)} 条对应证据</summary>
-    <div>
-      {rows.slice(0, 8).map((row) => <article key={`${row.brand_key}-${row.evidence_id}`}>
-        <header><b>{row.model_label}</b><span>{evidenceLabel(row)}</span></header>
-        <dl>
-          <div><dt>对应问题</dt><dd>{row.question}</dd></div>
-          <div><dt>命中摘要</dt><dd>{cleanEvidenceExcerpt(row.context_snippet)}</dd></div>
-        </dl>
-        <Link href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}>查看原回答和关联引用 <span aria-hidden="true">↗</span></Link>
-      </article>)}
-    </div>
-  </details>;
-}
-
-function BrandRanking({
-  workspaceId,
-  brands,
-}: {
-  workspaceId: string;
-  brands: CompetitorBrandStat[];
-}) {
-  const baseline = brands.find((brand) => brand.is_baseline);
-  const competitors = brands
-    .filter((brand) => !brand.is_baseline)
-    .sort((left, right) =>
-      right.mention_rate - left.mention_rate
-      || right.hit_answer_count - left.hit_answer_count
-      || right.wins_over_baseline - left.wins_over_baseline
-      || left.canonical_name.localeCompare(right.canonical_name, "zh-CN")
-    );
-  const rows = baseline ? [baseline, ...competitors] : competitors;
-
-  return <>
-    <div className={styles.tableWrap}>
-      <table className={styles.rankingTable}>
-        <thead><tr>
-          <th>排名</th><th>竞品</th><th>出现率</th><th>对比信号</th>
-          <th>Top 3</th><th>平均位置</th><th>覆盖模型</th><th>证据</th>
-        </tr></thead>
-        <tbody>{rows.map((brand) => {
-          const brandEvidence = evidenceRows(brand);
-          const rank = brand.is_baseline ? "我" : competitors.indexOf(brand) + 1;
-          return <tr key={brand.key} data-baseline={brand.is_baseline || undefined}>
-            <td><i className={styles.rankNumber}>{rank}</i></td>
-            <th><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌" : `固定追踪 · ${brand.hit_answer_count} 条`}</small></th>
-            <td><strong>{brand.mention_rate}%</strong><small>{brand.hit_answer_count}/{brand.sample_answer_count} 条回答</small></td>
-            <td><strong>{brand.is_baseline ? "—" : `${formatNumber(brand.wins_over_baseline)} 次`}</strong><small>{brand.is_baseline ? "作为比较基准" : `${brand.comparable_answers} 条可比较`}</small></td>
-            <td>{brand.top3_rate}%</td>
-            <td>{explicitPositionLabel(brand)}<small>{brand.explicit_rank_observation_count} 条有排名</small></td>
-            <td>{brand.model_count}</td>
-            <td><EvidenceDisclosure workspaceId={workspaceId} rows={brandEvidence} /></td>
-          </tr>;
-        })}</tbody>
-      </table>
-    </div>
-
-    <div className={styles.mobileRanking} aria-label="竞品真实回答排行榜">
-      {rows.map((brand) => {
-        const brandEvidence = evidenceRows(brand);
-        const rank = brand.is_baseline ? "我" : competitors.indexOf(brand) + 1;
-        return <article key={brand.key} data-baseline={brand.is_baseline || undefined}>
-          <header><i className={styles.rankNumber}>{rank}</i><span><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌（我们）" : "固定追踪竞品"}</small></span><strong>{brand.mention_rate}%<small>{brand.hit_answer_count}/{brand.sample_answer_count} 条</small></strong></header>
-          <dl>
-            <div><dt>对比信号</dt><dd>{brand.is_baseline ? "—" : `${brand.wins_over_baseline} 次`}</dd></div>
-            <div><dt>Top 3</dt><dd>{brand.top3_rate}%</dd></div>
-            <div><dt>平均位置</dt><dd>{explicitPositionLabel(brand)}</dd></div>
-            <div><dt>覆盖</dt><dd>{brand.model_count} 模型</dd></div>
-          </dl>
-          <EvidenceDisclosure workspaceId={workspaceId} rows={brandEvidence} />
-        </article>;
-      })}
-    </div>
-  </>;
-}
-
-function DiagnosticPanel({
-  workspaceId,
-  items,
-  selectedQuestionId,
-}: {
-  workspaceId: string;
-  items: ActionDiagnostic[];
-  selectedQuestionId?: number;
-}) {
-  const grouped = [...items.reduce((groups, item) => {
-    const current = groups.get(item.competitor_key) ?? {
-      name: item.competitor_name,
-      signalCount: 0,
-      questionIds: new Set<number>(),
-      modelKeys: new Set<string>(),
-      evidence: [] as CompetitorEvidenceSnippet[],
-    };
-    current.signalCount += item.wins_over_baseline;
-    current.questionIds.add(item.question_plan_id);
-    current.modelKeys.add(item.model_key);
-    current.evidence.push(...item.evidence);
-    groups.set(item.competitor_key, current);
-    return groups;
-  }, new Map<string, { name: string; signalCount: number; questionIds: Set<number>; modelKeys: Set<string>; evidence: CompetitorEvidenceSnippet[] }>()).values()]
-    .sort((left, right) => right.signalCount - left.signalCount || left.name.localeCompare(right.name, "zh-CN"));
-  const isSingleQuestion = selectedQuestionId != null;
-  return <section className={styles.diagnosticPanel} id="action-diagnostics">
-    <header><div><h2>{isSingleQuestion ? "这个问题的对比反馈" : "全部问题对比信号"}</h2><p>{isSingleQuestion ? "只针对当前问题，可回看模型、量化差值和原回答。" : "按全部选中问题汇总，不用单个问题代表整体结论。"}</p></div><b>{items.length}</b></header>
-    {!isSingleQuestion && items.length ? <div className={styles.overallDiagnosticList}>
-      {grouped.map((item) => <article key={item.name}>
-        <div><b>{item.name}</b><span>{item.signalCount} 条信号 · 覆盖 {item.questionIds.size} 个问题 · {item.modelKeys.size} 个模型</span></div>
-        <EvidenceDisclosure workspaceId={workspaceId} rows={item.evidence} />
-      </article>)}
-    </div> : null}
-    {isSingleQuestion && items.length ? <div className={styles.diagnosticList}>
-      {items.slice(0, 3).map((item, index) => {
-        const signedGap = item.mention_gap > 0 ? `+${item.mention_gap}` : String(item.mention_gap);
-        return <details
-          className={styles.diagnosticItem}
-          key={`${item.competitor_key}-${item.model_key}-${item.question_plan_id}`}
-          open={index === 0}
-        >
-          <summary>
-            <span><b>{item.competitor_name}</b><small>{item.model_label} · 差值 {signedGap}</small></span>
-            <em>{item.wins_over_baseline} 条信号</em><i aria-hidden="true">⌄</i>
-          </summary>
-          <div>
-            <dl>
-              <div><dt>问题</dt><dd>{item.question}</dd></div>
-              <div><dt>量化差值</dt><dd>竞品 {item.competitor_hit_count} 次，春秋元泉 {item.baseline_hit_count} 次，差值 {signedGap}。</dd></div>
-              <div><dt>明确判定</dt><dd>{item.reason_label}；来自 {item.comparable_answers} 条可比较回答。</dd></div>
-              <div><dt>下一步</dt><dd>{item.suggestion.replace(/^建议：/, "")}</dd></div>
-            </dl>
-            {item.evidence.slice(0, 3).map((row) => <Link key={row.evidence_id} href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}>
-              {row.model_label} · {evidenceLabel(row)} <span aria-hidden="true">↗</span>
-            </Link>)}
-          </div>
-        </details>;
-      })}
-    </div> : null}
-    {!items.length ? <div className={styles.diagnosticEmpty}>
-      <span>◎</span><h3>当前没有可确认的竞品胜出</h3>
-      <p>真实 0 保持可见；扩大问题或模型采样后再判断，不补写虚构原因。</p>
-    </div> : null}
-  </section>;
 }
 
 function BreakdownSections({
@@ -226,7 +37,7 @@ function BreakdownSections({
   return <section className={styles.breakdowns} aria-label="分组竞品排行榜">
     {groups.map((group) => <article key={group.key ?? group.id}>
       <header><div><h2>{group.label}</h2><p>{group.answer_count} 条真实回答</p></div></header>
-      <BrandRanking workspaceId={workspaceId} brands={group.brands} />
+      <CompetitorRanking workspaceId={workspaceId} brands={group.brands} />
     </article>)}
   </section>;
 }
@@ -317,13 +128,13 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
           <div><dt>平均位置</dt><dd>{explicitPositionLabel(baseline)}</dd><small>{baseline.explicit_rank_observation_count} 条有明确排序</small></div>
           <div><dt>对比信号</dt><dd>{comparison.summary.answers_where_competitor_wins}</dd><small>仅用于回看同一回答</small></div>
         </dl>
-        <div className={styles.gap}><span>最高竞品出现率</span><b>{topAppearingCompetitor ? `${topAppearingCompetitor.canonical_name} · ${topAppearingCompetitor.hit_answer_count}/${topAppearingCompetitor.sample_answer_count} 条（${topAppearingCompetitor.mention_rate}%）` : "当前没有追踪竞品"}</b><a href="#action-diagnostics">查看对比信号 →</a></div>
+        <div className={styles.gap}><span>最高竞品出现率</span><b>{topAppearingCompetitor ? `${topAppearingCompetitor.canonical_name} · ${topAppearingCompetitor.hit_answer_count}/${topAppearingCompetitor.sample_answer_count} 条（${topAppearingCompetitor.mention_rate}%）` : "当前没有追踪竞品"}</b><a href="#competitor-leaderboard">查看行内信号 →</a></div>
       </section>
 
       <div className={styles.comparisonGrid}>
         <section className={styles.ranking} id="competitor-leaderboard">
           <header><div><h2>品牌出现率排行榜</h2><p>出现率 = 品牌出现的回答数 ÷ 当前筛选的有效回答总数；真实 0 保留。</p></div><span>{scopeLabel}</span></header>
-          <BrandRanking workspaceId={workspaceId} brands={comparison.brands} />
+          <CompetitorRanking workspaceId={workspaceId} brands={comparison.brands} actionDiagnostics={comparison.action_diagnostics} />
         </section>
 
         <aside className={styles.side}>
@@ -341,7 +152,6 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
             modelKey={model}
             questionPlanId={question > 0 ? question : undefined}
           />
-          <DiagnosticPanel workspaceId={workspaceId} items={comparison.action_diagnostics} selectedQuestionId={question > 0 ? question : undefined} />
         </aside>
       </div>
 
