@@ -718,6 +718,27 @@ export type CleanroomActionOpportunityScope = {
 	evidence_gate: string;
 };
 
+export type CleanroomOpportunityAnalysisRun = {
+	job_id: number;
+	workspace_id: number;
+	batch_id: number;
+	model_keys: string[];
+	question_plan_ids: number[];
+	status: "queued" | "running" | "succeeded" | "failed";
+	stage: "queued" | "preparing" | "analyzing" | "complete" | "failed";
+	evidence_count: number;
+	result_count: number;
+	no_action_count: number;
+	input_fingerprint: string;
+	codex_thread_id?: string | null;
+	codex_turn_id?: string | null;
+	analysis_summary?: string | null;
+	error_message?: string | null;
+	created_at: string;
+	started_at?: string | null;
+	finished_at?: string | null;
+};
+
 export type CleanroomContentBrief = {
 	id: number;
 	workspace_id: number;
@@ -1527,12 +1548,13 @@ export function getCleanroomActionOpportunityScope(workspaceId: string | number)
 
 export function getCleanroomActionOpportunities(
 	workspaceId: string | number,
-	options: { batch_id?: number | null; model_key?: string | null; question_plan_id?: number | null } = {},
+	options: { batch_id?: number | null; model_key?: string | null; question_plan_id?: number | null; include_legacy?: boolean } = {},
 ) {
 	const params = new URLSearchParams();
 	if (options.batch_id) params.set("batch_id", String(options.batch_id));
 	if (options.model_key) params.set("model_key", options.model_key);
 	if (options.question_plan_id) params.set("question_plan_id", String(options.question_plan_id));
+	params.set("include_legacy", String(options.include_legacy ?? false));
 	const suffix = params.size ? `?${params.toString()}` : "";
 	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities${suffix}`);
 }
@@ -1541,10 +1563,24 @@ export function discoverCleanroomActionOpportunities(
 	workspaceId: string | number,
 	payload: { batch_id?: number | null; question_plan_ids?: number[]; model_keys?: string[]; max_items?: number } = {},
 ) {
-	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities/discover`, {
+	return apiRequest<CleanroomOpportunityAnalysisRun>(`/workspaces/${workspaceId}/action-opportunities/discover`, {
 		method: "POST",
 		body: JSON.stringify(payload),
 	});
+}
+
+export function getLatestCleanroomOpportunityAnalysis(
+	workspaceId: string | number,
+	options: { batch_id: number; model_key?: string | null; question_plan_id?: number | null },
+) {
+	const params = new URLSearchParams({ batch_id: String(options.batch_id) });
+	if (options.model_key) params.set("model_key", options.model_key);
+	if (options.question_plan_id) params.set("question_plan_id", String(options.question_plan_id));
+	return apiRequest<CleanroomOpportunityAnalysisRun | null>(`/workspaces/${workspaceId}/action-opportunities/analysis-runs/latest?${params.toString()}`);
+}
+
+export function getCleanroomOpportunityAnalysis(workspaceId: string | number, jobId: number) {
+	return apiRequest<CleanroomOpportunityAnalysisRun>(`/workspaces/${workspaceId}/action-opportunities/analysis-runs/${jobId}`);
 }
 
 export function selectCleanroomActionOpportunity(workspaceId: string | number, opportunityId: number) {

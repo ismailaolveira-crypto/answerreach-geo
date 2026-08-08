@@ -299,6 +299,17 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             }
             job.status = "success" if result.status in {"awaiting_review", "cancelled"} else "failed"
             job.error_message = result.error_message
+        elif job.job_type == "geo_opportunity.discover":
+            from app.v1.opportunity_agent import execute_opportunity_analysis
+
+            payload_json = dict(job.payload_json or {})
+            result = execute_opportunity_analysis(db, job)
+            job.payload_json = {
+                **dict(job.payload_json or payload_json),
+                **result,
+            }
+            job.status = "success"
+            job.error_message = None
         elif job.job_type == "geo_content.generate":
             from app.models import LLMProvider
             from app.models.cleanroom_v1 import GeoActionEvent, GeoContentBrief, GeoOptimizationAction, GeoWorkspace

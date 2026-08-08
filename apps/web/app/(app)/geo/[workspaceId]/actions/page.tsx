@@ -15,6 +15,8 @@ import {
 	getCleanroomBrandFacts,
 	getCleanroomActionOpportunityScope,
 	getCleanroomActionOpportunities,
+	getCleanroomOpportunityAnalysis,
+	getLatestCleanroomOpportunityAnalysis,
 	getCleanroomActions,
 	interruptCleanroomAgentRun,
 	recordCleanroomDistributionClientResults,
@@ -62,11 +64,16 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		model_key: modelKey,
 		question_plan_id: questionPlanId,
 	});
-	const [agentRuntime, workbenchState, websiteAuditOverview, brandFacts] = await Promise.all([
+	const [agentRuntime, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis] = await Promise.all([
 		getAgentRuntime(workspaceId).catch(() => null),
 		getCleanroomActionWorkbenchState(workspaceId),
 		getLatestWebsiteAudit(workspaceId).catch(() => ({ website_url: null, latest: null })),
 		getCleanroomBrandFacts(workspaceId).catch(() => []),
+		batchId ? getLatestCleanroomOpportunityAnalysis(workspaceId, {
+			batch_id: batchId,
+			model_key: modelKey,
+			question_plan_id: questionPlanId,
+		}).catch(() => null) : Promise.resolve(null),
 	]);
 	const { agent_runs: agentRuns, review_packages: reviewPackages, distribution_runs: distributionRuns, retests } = workbenchState;
 	const opportunities = mapBackendPriorityActionOpportunities(persistedOpportunities, actions);
@@ -75,13 +82,17 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 
 	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) {
 		"use server";
-		await discoverCleanroomActionOpportunities(workspaceId, {
+		return discoverCleanroomActionOpportunities(workspaceId, {
 			batch_id: scope.batchId,
 			model_keys: scope.modelKey ? [scope.modelKey] : [],
 			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
 			max_items: 50,
 		});
-		revalidatePath(`/geo/${workspaceId}/actions`);
+	}
+
+	async function readOpportunityAnalysis(jobId: number) {
+		"use server";
+		return getCleanroomOpportunityAnalysis(workspaceId, jobId);
 	}
 
 	async function createAction(formData: FormData) {
@@ -232,5 +243,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
 		fact.status === "active"
 		&& fact.source_verification?.status === "source_and_statement_verified"
-	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
+	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} />;
 }

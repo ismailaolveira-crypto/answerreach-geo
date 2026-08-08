@@ -992,6 +992,27 @@ class ActionOpportunityDiscoverRequest(BaseModel):
     max_items: int = Field(default=50, ge=1, le=100)
 
 
+class OpportunityAnalysisRunRead(BaseModel):
+    job_id: int
+    workspace_id: int
+    batch_id: int
+    model_keys: list[str] = Field(default_factory=list)
+    question_plan_ids: list[int] = Field(default_factory=list)
+    status: Literal["queued", "running", "succeeded", "failed"]
+    stage: Literal["queued", "preparing", "analyzing", "complete", "failed"]
+    evidence_count: int = 0
+    result_count: int = 0
+    no_action_count: int = 0
+    input_fingerprint: str
+    codex_thread_id: str | None = None
+    codex_turn_id: str | None = None
+    analysis_summary: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class ActionOpportunityScopeBatchRead(BaseModel):
     id: int
     status: str

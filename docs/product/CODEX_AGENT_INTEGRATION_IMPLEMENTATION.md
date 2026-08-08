@@ -1,6 +1,6 @@
 # 春秋元泉 GEO × 本机 Codex Agent 技术实现说明
 
-> 版本：1.1 · 更新：2026-08-08
+> 版本：1.2 · 更新：2026-08-09
 > 状态：P0 已实现；P1 的人工审核、浏览器同步触发和结果归档已实现，真实外部平台草稿验收待用户操作。
 
 ## 先说结论
@@ -41,7 +41,8 @@ flowchart LR
 
 当前仓库已有：
 
-- 确定性机会发现：`app/v1/action_opportunities.py`；
+- 完整观测证据门禁：`app/v1/action_opportunities.py`；
+- 用户启动的 Codex 机会判断：`app/v1/opportunity_agent.py`；
 - 机会、行动、事件、Brief、母稿、Claim、平台稿、审核、分发和复测数据表；
 - 真实观测证据门禁；
 - 内容生成队列与私有工件归档；
@@ -54,7 +55,7 @@ flowchart LR
 - 没有 Codex thread ID、run ID、有序事件和可中断/恢复的状态；
 - 设置页的 DeepSeek/MCP 配置把「内容生成」和「文章同步」混在一起，用户必须理解不必要的底层路径。
 
-因此实施原则是：**保留全部业务表和真实性门禁，新增 `AgentRuntimeAdapter`，用 Codex 替换单次生成执行器，不替换业务系统。**
+因此实施原则是：**保留全部业务表和真实性门禁；规则只准备证据包，不生成最终机会；机会判断和内容起草都复用本机 Codex，但使用两个独立结构化任务。**
 
 ## 3. 实现分层
 
@@ -141,6 +142,9 @@ apps/api/private_artifacts/agent-runs/{workspace_id}/{run_id}/
 |---|---|---|
 | `GET` | `/api/v1/workspaces/{id}/agent-runtime` | 版本、登录、可用模型、当前健康；不返回 token |
 | `POST` | `/api/v1/workspaces/{id}/agent-runtime/test` | 运行一个无写入的结构化自检 |
+| `POST` | `/api/v1/workspaces/{id}/action-opportunities/discover` | 按用户选定批次创建持久化 Codex 机会判断任务，不直接返回规则机会 |
+| `GET` | `/api/v1/workspaces/{id}/action-opportunities/analysis-runs/{job_id}` | 读取机会判断的排队、执行、成功或失败状态 |
+| `GET` | `/api/v1/workspaces/{id}/action-opportunities` | 默认只返回已校验的 `codex-opportunity.v1` 机会 |
 | `POST` | `/api/v1/workspaces/{id}/actions/{action_id}/agent-runs` | 从已选机会和 Brief 启动生成 |
 | `GET` | `/api/v1/workspaces/{id}/agent-runs/{run_id}` | 读取权威运行状态 |
 | `GET` | `/api/v1/workspaces/{id}/agent-runs/{run_id}/events?after=17` | SSE 事件流，支持续传 |
@@ -154,6 +158,21 @@ apps/api/private_artifacts/agent-runs/{workspace_id}/{run_id}/
 启动 Agent run 必须有幂等键。同一行动已有 `queued/running/waiting_human` run 时，不得再建第二个并行 run。
 
 ## 6. 业务状态机
+
+机会发现必须先经过：
+
+```text
+选定已完成批次
+→ 用户点击「让 Codex 分析当前批次」
+→ queued / running
+→ Codex 返回结构化判断
+→ 后端校验证据 ID、问题、URL 和平台
+→ 成功后才持久化并显示机会
+```
+
+连接成功、创建队列任务、Codex 开始运行或返回非法输出，都不会生成机会卡。历史规则行保留审计，但不再进入默认机会列表。
+
+内容 Agent 状态与发布状态仍必须分开：
 
 Agent 状态与发布状态必须分开：
 

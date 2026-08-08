@@ -14,6 +14,7 @@ import type {
 	CleanroomAgentRunProgress,
 	CleanroomContentReviewPackage,
 	CleanroomDistributionRun,
+	CleanroomOpportunityAnalysisRun,
 	CleanroomPlatformVariant,
 	WebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
@@ -40,6 +41,7 @@ type Props = {
 	activeSourcedBrandFactCount: number;
 	websiteUrl: string | null;
 	initialWebsiteAudit: WebsiteAudit | null;
+	initialOpportunityAnalysis: CleanroomOpportunityAnalysisRun | null;
 	initialAgentRuns: CleanroomAgentRun[];
 	initialReviewPackages: CleanroomContentReviewPackage[];
 	initialDistributionRuns: CleanroomDistributionRun[];
@@ -60,7 +62,8 @@ type Props = {
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	runWebsiteAudit: () => Promise<WebsiteAudit>;
-	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<void>;
+	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<CleanroomOpportunityAnalysisRun>;
+	readOpportunityAnalysis: (jobId: number) => Promise<CleanroomOpportunityAnalysisRun>;
 };
 
 function syncVariant(
@@ -300,7 +303,7 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialOpportunityAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions, readOpportunityAnalysis }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -309,6 +312,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
 	const [discoveryFeedback, setDiscoveryFeedback] = useState("");
+	const [opportunityAnalysis, setOpportunityAnalysis] = useState(initialOpportunityAnalysis);
+	const [expandedOpportunityId, setExpandedOpportunityId] = useState<string | null>(null);
 	const [runtimeExpanded, setRuntimeExpanded] = useState(false);
 	const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
 	const timelineHeaderRef = useRef<HTMLElement>(null);
@@ -365,6 +370,17 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			});
 		});
 	}
+	function collapseOpportunityDetails(itemId: string) {
+		setExpandedOpportunityId(null);
+		window.requestAnimationFrame(() => {
+			const card = document.getElementById(`opportunity-card-${itemId}`);
+			card?.focus({ preventScroll: true });
+			card?.scrollIntoView({
+				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+				block: "center",
+			});
+		});
+	}
 	const [websiteAudit, setWebsiteAudit] = useState(initialWebsiteAudit);
 	const [websiteAuditFeedback, setWebsiteAuditFeedback] = useState("");
 	const [isSaving, startSaving] = useTransition();
@@ -380,6 +396,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	// The server has already applied the exact batch/model/question scope. Do not
 	// compare model keys with user-facing model labels a second time in the client.
 	const filtered = opportunities;
+	const opportunityAnalysisActive = Boolean(opportunityAnalysis && ["queued", "running"].includes(opportunityAnalysis.status));
 	useEffect(() => { if (!filtered.some((item) => item.id === selectedId)) setSelectedId(filtered[0]?.id ?? ""); }, [filtered, selectedId]);
 	const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0];
 	const unresolved = filtered.filter((item) => !item.existingAction || !["verified", "closed"].includes(item.existingAction.status));
@@ -408,7 +425,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		.sort((a, b) => b.id - a.id)[0], [agentRuns, selected?.existingAction?.id]);
 	const activeAgentRunCount = agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length;
 	const agentCapacityLimit = Math.max(1, agentRuntime?.max_concurrent_runs ?? 1);
-	const agentCapacityUsed = activeAgentRunCount;
+	const agentCapacityUsed = Math.max(agentRuntime?.active_run_count ?? 0, activeAgentRunCount + (opportunityAnalysisActive ? 1 : 0));
 	const agentCapacityAvailable = agentCapacityUsed < agentCapacityLimit;
 	const agentCanStart = Boolean(agentRuntime?.ready && agentCapacityAvailable);
 	const agentTimeoutMinutes = Math.max(1, Math.round((agentRuntime?.run_timeout_seconds ?? 900) / 60));
@@ -544,6 +561,34 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setSelectedModel(initialScope.modelKey ?? "all");
 		setSelectedQuestion(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
 	}, [initialScope.batchId, initialScope.modelKey, initialScope.questionPlanId]);
+	useEffect(() => setOpportunityAnalysis(initialOpportunityAnalysis), [initialOpportunityAnalysis]);
+	useEffect(() => {
+		if (!opportunityAnalysisActive || !opportunityAnalysis) return;
+		let cancelled = false;
+		async function refreshAnalysis() {
+			try {
+				const result = await readOpportunityAnalysis(opportunityAnalysis!.job_id);
+				if (cancelled) return;
+				setOpportunityAnalysis(result);
+				if (result.status === "succeeded") {
+					setDiscoveryFeedback(result.result_count > 0
+						? `Codex 已完成判断，找到 ${result.result_count} 个优先机会。`
+						: "Codex 已完成判断，当前证据不足以形成优先机会。");
+					router.refresh();
+				} else if (result.status === "failed") {
+					setDiscoveryFeedback(result.error_message || "Codex 未完成机会判断，没有产生新机会。");
+				}
+			} catch (error) {
+				if (!cancelled) setDiscoveryFeedback(error instanceof Error ? error.message : "无法读取 Codex 判断进度");
+			}
+		}
+		void refreshAnalysis();
+		const timer = window.setInterval(refreshAnalysis, 1800);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [opportunityAnalysis?.job_id, opportunityAnalysisActive, readOpportunityAnalysis, router]);
 
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
@@ -712,15 +757,15 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setDiscoveryFeedback("");
 		startSaving(async () => {
 			try {
-				await discoverActions({
+				const run = await discoverActions({
 					batchId: selectedBatchId,
 					modelKey: selectedModel === "all" ? null : selectedModel,
 					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
 				});
-				setDiscoveryFeedback("已按当前批次、模型和问题重新分析真实证据。");
-				router.refresh();
+				setOpportunityAnalysis(run);
+				setDiscoveryFeedback(`Codex 已接收批次 #${run.batch_id} 的 ${run.evidence_count} 条真实证据，完成前不会显示新机会。`);
 			} catch (error) {
-				setDiscoveryFeedback(error instanceof Error ? error.message : "无法刷新行动机会");
+				setDiscoveryFeedback(error instanceof Error ? error.message : "无法启动 Codex 机会判断");
 			}
 		});
 	}
@@ -1153,7 +1198,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						<label><Icon name="filter" /><select aria-label="模型范围" value={selectedModel} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ modelKey: event.target.value })}><option value="all">全部模型</option>{models.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select><Icon name="chevron" /></label>
 						<label><Icon name="spark" /><select aria-label="问题范围" value={selectedQuestion} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ questionPlanId: event.target.value === "all" ? null : Number(event.target.value) })}><option value="all">全部问题</option>{questions.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}</select><Icon name="chevron" /></label>
 					</div>
-					<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || !selectedBatchId}>{isSaving ? "正在分析真实证据…" : "按当前范围刷新机会"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (selectedBatch ? `当前范围来自批次 #${selectedBatch.id}` : "需要先完成一次真实联网观测")}</span></div>
+					<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Codex Run #${opportunityAnalysis.job_id} 已分析批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Codex 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
 				</div>
 			</header>
 
@@ -1188,15 +1233,24 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			<footer><span>{websiteAuditFeedback || "这里只评估公开页面是否便于抓取、理解与引用，不等于模型已经引用春秋元泉。"}</span>{websiteAudit?.raw_html_sha256 ? <code title={websiteAudit.raw_html_sha256}>证据 {websiteAudit.raw_html_sha256.slice(0, 12)}</code> : null}</footer>
 		</section>
 
-			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>当前范围没有达到门槛的机会</h2><p>{selectedBatch ? "这里只接受完整回答、真实搜索事件、来源 URL 和原始工件都齐全的证据。可以刷新当前范围，或返回决策地图发起新观测。" : "完成一次真实联网观测并归档完整证据后，系统才会识别行动机会。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || !selectedBatchId}>{isSaving ? "正在分析…" : "刷新当前范围"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
+			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>{opportunityAnalysisActive ? "Codex 正在判断优先机会" : opportunityAnalysis?.status === "succeeded" ? "Codex 未发现足够可靠的优先机会" : "尚未让 Codex 分析这个批次"}</h2><p>{opportunityAnalysisActive ? `正在阅读批次 #${opportunityAnalysis?.batch_id} 的 ${opportunityAnalysis?.evidence_count ?? 0} 条真实证据；完成并通过证据校验前，这里保持为空。` : opportunityAnalysis?.status === "succeeded" ? opportunityAnalysis.analysis_summary || "Codex 已完成分析，但当前数据不足以支持具体行动。" : selectedBatch ? `已选定批次 #${selectedBatch.id}。只有你点击后，Codex 才会阅读该批次的回答、信源和竞品内容并给出判断。` : "请先完成一次真实联网观测。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
 					<header><div><h2>系统发现的优先机会</h2><p>来自完整模型观测或官网原始响应；两类证据分开标记。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
 					<div className="pa-opportunity-list">
-						{filtered.map((item) => <article key={item.id} className={selected?.id === item.id ? "is-selected" : ""}>
+						{filtered.map((item) => <article id={`opportunity-card-${item.id}`} key={item.id} tabIndex={0} aria-expanded={expandedOpportunityId === item.id} aria-label={`${item.title}，点击查看详细判断`} className={selected?.id === item.id ? "is-selected" : ""} onClick={() => { setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return; event.preventDefault(); setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }}>
 							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3><p>{item.summary}</p>{item.sourceType === "website_audit" ? <div className="pa-opportunity-source"><img src="/icon.svg" alt="春秋元泉 GEO 标志" /><span><b>官网原始响应</b><small>审计 #{item.websiteAuditId} · 不计为模型观测</small></span></div> : <div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div>}<small className="pa-opportunity-proof">{item.proof}</small></div>
 							<div className="pa-gap"><small>{item.type === "website" ? "开发团队待补齐" : item.sourceStrategy === "direct_operable_source" ? "可直接运营的信源" : item.sourceStrategy === "build_controlled_alternative" ? "外部参考 → 建立可控信源" : "建议补齐的信源"}</small><div className="pa-source-tags">{item.sourceTargetLabel ? <span>{item.sourceTargetLabel}</span> : suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}{item.type !== "website" ? item.recommendedPlatforms.slice(0, 3).map((platformKey) => <span key={platformKey}>{platformDisplayName(platformKey)}</span>) : null}</div><em>{item.sourceTargetDetail || `建议载体 · ${suggestedCarrier(item.type)}`}</em></div>
-							<div className="pa-opportunity-actions"><span className={item.existingAction ? "pa-action-current" : item.generationReady ? "pa-evidence-ok" : "pa-action-blocked"}><Icon name={item.existingAction ? "arrow" : item.generationReady ? "check" : "warning"} />{item.existingAction ? "行动进行中" : item.generationReady ? "证据充分" : "检查受阻"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button>{item.websiteAuditId ? <a href="#website-audit">查看官网证据 <Icon name="arrow" /></a> : item.evidenceIds[0] ? <Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link> : null}</div>
+							<div className="pa-opportunity-actions" onClick={(event) => event.stopPropagation()}><span className={item.existingAction ? "pa-action-current" : item.generationReady ? "pa-evidence-ok" : "pa-action-blocked"}><Icon name={item.existingAction ? "arrow" : item.generationReady ? "check" : "warning"} />{item.existingAction ? "行动进行中" : item.generationReady ? "证据充分" : "检查受阻"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button>{item.websiteAuditId ? <a href="#website-audit">查看官网证据 <Icon name="arrow" /></a> : item.evidenceIds[0] ? <Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link> : null}</div>
+							{expandedOpportunityId === item.id ? <section className="pa-opportunity-details" aria-label="Codex 机会判断详情" onClick={(event) => event.stopPropagation()}>
+								<header><div><small>Codex 判断依据</small><h4>{item.agentRationale || item.summary}</h4></div>{typeof item.agentConfidence === "number" ? <span>信心 {Math.round(item.agentConfidence * 100)}%</span> : null}</header>
+								<div className="pa-opportunity-detail-grid">
+									<div><b>建议补齐的内容</b>{item.missingContent.length ? <ul>{item.missingContent.map((value) => <li key={value}>{value}</li>)}</ul> : <p>当前判断未拆分更细的内容项。</p>}</div>
+									<div><b>同信源竞品内容规律</b>{item.competitorContentPatterns.length ? <ul>{item.competitorContentPatterns.map((value) => <li key={value}>{value}</li>)}</ul> : <p>未发现足够稳定的竞品内容规律。</p>}</div>
+									<div><b>边界与待确认项</b>{item.uncertainties.length ? <ul>{item.uncertainties.map((value) => <li key={value}>{value}</li>)}</ul> : <p>本轮没有额外的待确认项。</p>}</div>
+								</div>
+								<footer><span>{item.proof}{item.codexThreadId ? ` · Thread ${item.codexThreadId.slice(0, 8)}` : ""}</span><button type="button" onClick={() => collapseOpportunityDetails(item.id)}>收起详情 <Icon name="chevron" /></button></footer>
+							</section> : null}
 						</article>)}
 					</div>
 				</div>

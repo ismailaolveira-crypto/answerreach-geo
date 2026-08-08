@@ -60,6 +60,7 @@ from app.v1.schemas import (
     ActionOpportunityDiscoverRequest,
     ActionOpportunityRead,
     ActionOpportunityScopeRead,
+    OpportunityAnalysisRunRead,
     ActionRead,
     ActionStageUpdate,
     ActionUpdate,
@@ -159,9 +160,12 @@ from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import (
-    discover_opportunities,
     materialize_website_opportunity,
     valid_action_evidence,
+)
+from app.v1.opportunity_agent import (
+    AGENT_RULE_VERSION,
+    build_opportunity_context,
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.brand_facts import (
@@ -3712,6 +3716,41 @@ def _opportunity_read(db: Session, opportunity: GeoActionOpportunity) -> dict:
     return {"id": opportunity.id, "evidence": evidence, **opportunity.__dict__}
 
 
+def _opportunity_analysis_read(job: QueueJob) -> dict:
+    payload = dict(job.payload_json or {})
+    status = {
+        "pending": "queued",
+        "running": "running",
+        "success": "succeeded",
+        "failed": "failed",
+    }.get(job.status, "failed")
+    stage = str(payload.get("stage") or ("failed" if status == "failed" else "queued"))
+    if stage not in {"queued", "preparing", "analyzing", "complete", "failed"}:
+        stage = "failed" if status == "failed" else "queued"
+    if status == "failed":
+        stage = "failed"
+    return {
+        "job_id": job.id,
+        "workspace_id": int(payload.get("workspace_id") or 0),
+        "batch_id": int(payload.get("batch_id") or 0),
+        "model_keys": list(payload.get("model_keys") or []),
+        "question_plan_ids": list(payload.get("question_plan_ids") or []),
+        "status": status,
+        "stage": stage,
+        "evidence_count": int(payload.get("evidence_count") or 0),
+        "result_count": int(payload.get("result_count") or 0),
+        "no_action_count": int(payload.get("no_action_count") or 0),
+        "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "codex_thread_id": payload.get("codex_thread_id"),
+        "codex_turn_id": payload.get("codex_turn_id"),
+        "analysis_summary": payload.get("analysis_summary"),
+        "error_message": job.error_message,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+
+
 @router.get(
     "/workspaces/{workspace_id}/action-opportunities/scope",
     response_model=ActionOpportunityScopeRead,
@@ -3814,7 +3853,8 @@ def get_action_opportunity_scope(
 
 @router.post(
     "/workspaces/{workspace_id}/action-opportunities/discover",
-    response_model=list[ActionOpportunityRead],
+    response_model=OpportunityAnalysisRunRead,
+    status_code=202,
 )
 def discover_action_opportunities(
     workspace_id: int,
@@ -3822,7 +3862,7 @@ def discover_action_opportunities(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace = workspace_or_404(db, user, workspace_id)
+    workspace_or_404(db, user, workspace_id)
     effective_batch_id = payload.batch_id or db.scalar(
         select(GeoObservationBatch.id)
         .where(
@@ -3861,25 +3901,86 @@ def discover_action_opportunities(
                 status_code=422,
                 detail=f"所选批次不包含模型：{', '.join(unavailable)}",
             )
-    opportunities = discover_opportunities(
-        db,
-        workspace,
-        batch_id=effective_batch_id,
-        question_plan_ids=payload.question_plan_ids or None,
-        model_keys=selected_model_keys or None,
-        max_items=payload.max_items,
+    if not effective_batch_id:
+        raise HTTPException(status_code=422, detail="请先选择一个已完成的真实观测批次")
+    try:
+        context = build_opportunity_context(
+            db,
+            workspace_id,
+            batch_id=int(effective_batch_id),
+            question_plan_ids=payload.question_plan_ids,
+            model_keys=selected_model_keys,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    active_jobs = [
+        job
+        for job in db.scalars(
+            select(QueueJob)
+            .where(
+                QueueJob.job_type == "geo_opportunity.discover",
+                QueueJob.status.in_(("pending", "running")),
+            )
+            .order_by(QueueJob.id.desc())
+        )
+        if int((job.payload_json or {}).get("workspace_id") or 0) == workspace_id
+    ]
+    same_scope = next(
+        (
+            job
+            for job in active_jobs
+            if (job.payload_json or {}).get("input_fingerprint")
+            == context["input_fingerprint"]
+        ),
+        None,
     )
+    if same_scope is not None:
+        return _opportunity_analysis_read(same_scope)
+
+    invalidate_local_codex_diagnostic_cache()
+    diagnostic = diagnose_local_codex()
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+        )
+    _assert_agent_capacity(db, workspace_id)
+    job = QueueJob(
+        job_type="geo_opportunity.discover",
+        status="pending",
+        priority=25,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "batch_id": int(effective_batch_id),
+            "model_keys": selected_model_keys,
+            "question_plan_ids": payload.question_plan_ids,
+            "max_items": payload.max_items,
+            "input_fingerprint": context["input_fingerprint"],
+            "evidence_count": len(context["evidence"]),
+            "model": diagnostic.get("default_model"),
+            "actor_user_id": user.id,
+            "stage": "queued",
+        },
+    )
+    db.add(job)
+    db.flush()
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
-            event_type="opportunities_discovered",
+            job_id=job.id,
+            event_type="opportunity_analysis_queued",
             actor_type="user",
             actor_user_id=user.id,
             detail={
                 "batch_id": effective_batch_id,
                 "model_keys": selected_model_keys,
                 "question_plan_ids": payload.question_plan_ids,
-                "opportunity_count": len(opportunities),
+                "input_fingerprint": context["input_fingerprint"],
+                "evidence_count": len(context["evidence"]),
                 "evidence_gate": (
                     "completed_task+real_answer+search_event+source_url+raw_artifact"
                 ),
@@ -3887,7 +3988,67 @@ def discover_action_opportunities(
         )
     )
     db.commit()
-    return [_opportunity_read(db, opportunity) for opportunity in opportunities]
+    db.refresh(job)
+    return _opportunity_analysis_read(job)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/action-opportunities/analysis-runs/latest",
+    response_model=OpportunityAnalysisRunRead | None,
+)
+def get_latest_opportunity_analysis(
+    workspace_id: int,
+    batch_id: int = Query(ge=1),
+    model_key: str | None = Query(default=None, min_length=1, max_length=120),
+    question_plan_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    expected_models = [model_key] if model_key else []
+    expected_questions = [question_plan_id] if question_plan_id else []
+    jobs = list(
+        db.scalars(
+            select(QueueJob)
+            .where(QueueJob.job_type == "geo_opportunity.discover")
+            .order_by(QueueJob.id.desc())
+            .limit(200)
+        )
+    )
+    job = next(
+        (
+            row
+            for row in jobs
+            if int((row.payload_json or {}).get("workspace_id") or 0) == workspace_id
+            and int((row.payload_json or {}).get("batch_id") or 0) == batch_id
+            and list((row.payload_json or {}).get("model_keys") or []) == expected_models
+            and list((row.payload_json or {}).get("question_plan_ids") or [])
+            == expected_questions
+        ),
+        None,
+    )
+    return _opportunity_analysis_read(job) if job else None
+
+
+@router.get(
+    "/workspaces/{workspace_id}/action-opportunities/analysis-runs/{job_id}",
+    response_model=OpportunityAnalysisRunRead,
+)
+def get_opportunity_analysis(
+    workspace_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    job = db.get(QueueJob, job_id)
+    if (
+        job is None
+        or job.job_type != "geo_opportunity.discover"
+        or int((job.payload_json or {}).get("workspace_id") or 0) != workspace_id
+    ):
+        raise HTTPException(status_code=404, detail="Opportunity analysis run not found")
+    return _opportunity_analysis_read(job)
 
 
 @router.get(
@@ -3900,11 +4061,14 @@ def list_action_opportunities(
     batch_id: int | None = Query(default=None, ge=1),
     model_key: str | None = Query(default=None, min_length=1, max_length=120),
     question_plan_id: int | None = Query(default=None, ge=1),
+    include_legacy: bool = Query(default=True),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
     query = select(GeoActionOpportunity).where(GeoActionOpportunity.workspace_id == workspace_id)
+    if not include_legacy:
+        query = query.where(GeoActionOpportunity.rule_version == AGENT_RULE_VERSION)
     if status:
         query = query.where(GeoActionOpportunity.status == status)
     else:
@@ -5827,7 +5991,7 @@ def _agent_capacity(
     workspace_id: int,
     *,
     exclude_run_id: int | None = None,
-) -> tuple[int, list[GeoAgentRun]]:
+) -> tuple[int, list[object]]:
     limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 4))
     query = select(GeoAgentRun).where(
         GeoAgentRun.workspace_id == workspace_id,
@@ -5835,8 +5999,18 @@ def _agent_capacity(
     )
     if exclude_run_id is not None:
         query = query.where(GeoAgentRun.id != exclude_run_id)
-    active_runs = list(db.scalars(query.order_by(GeoAgentRun.id.desc())))
-    return limit, active_runs
+    active_runs: list[object] = list(db.scalars(query.order_by(GeoAgentRun.id.desc())))
+    active_discovery_jobs = [
+        job
+        for job in db.scalars(
+            select(QueueJob).where(
+                QueueJob.job_type == "geo_opportunity.discover",
+                QueueJob.status.in_(("pending", "running")),
+            )
+        )
+        if int((job.payload_json or {}).get("workspace_id") or 0) == workspace_id
+    ]
+    return limit, [*active_runs, *active_discovery_jobs]
 
 
 def _agent_runtime_diagnostic(db: Session, workspace_id: int) -> dict:

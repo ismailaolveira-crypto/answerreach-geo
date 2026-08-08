@@ -18,6 +18,13 @@ export type PriorityActionOpportunity = {
 	sourceStrategy?: "direct_operable_source" | "official_site_handoff" | "build_controlled_alternative";
 	sourceTargetLabel?: string;
 	sourceTargetDetail?: string;
+	discoveryJobId?: number;
+	codexThreadId?: string;
+	agentRationale?: string;
+	agentConfidence?: number;
+	missingContent: string[];
+	competitorContentPatterns: string[];
+	uncertainties: string[];
 	generationReady: boolean;
 	requiresSourcedBrandFacts: boolean;
 	proof: string;
@@ -40,6 +47,11 @@ export function mapBackendPriorityActionOpportunities(
 		const findingCodes = Array.isArray(row.scope_snapshot.finding_codes)
 			? row.scope_snapshot.finding_codes.map(String)
 			: [];
+		const stringList = (value: unknown) => Array.isArray(value) ? value.map(String).filter(Boolean) : [];
+		const discoveryJobId = Number(row.scope_snapshot.discovery_job_id ?? 0) || undefined;
+		const codexThreadId = typeof row.scope_snapshot.codex_thread_id === "string"
+			? row.scope_snapshot.codex_thread_id
+			: undefined;
 		const sourceStrategy = typeof row.scope_snapshot.source_strategy === "string"
 			? row.scope_snapshot.source_strategy as PriorityActionOpportunity["sourceStrategy"]
 			: undefined;
@@ -89,6 +101,13 @@ export function mapBackendPriorityActionOpportunities(
 					: sourceStrategy === "build_controlled_alternative"
 						? `${primaryHost || "第三方页面"}只用作参考，改在可运营平台建立我们的信源`
 						: undefined,
+			discoveryJobId,
+			codexThreadId,
+			agentRationale: typeof row.scope_snapshot.agent_rationale === "string" ? row.scope_snapshot.agent_rationale : undefined,
+			agentConfidence: typeof row.scope_snapshot.agent_confidence === "number" ? row.scope_snapshot.agent_confidence : undefined,
+			missingContent: stringList(row.scope_snapshot.missing_content),
+			competitorContentPatterns: stringList(row.scope_snapshot.competitor_content_patterns),
+			uncertainties: stringList(row.scope_snapshot.uncertainties),
 			generationReady: sourceType !== "website_audit"
 				|| (row.scope_snapshot.website_audit_status !== "blocked" && Boolean(websiteAuditHash)),
 			requiresSourcedBrandFacts: sourceType === "website_audit" && findingCodes.some((code) => [
@@ -100,7 +119,9 @@ export function mapBackendPriorityActionOpportunities(
 				? websiteAuditHash
 					? `依据官网审计 #${websiteAuditId ?? "—"} · 原始证据 ${websiteAuditHash.slice(0, 12)}`
 					: `依据官网审计 #${websiteAuditId ?? "—"} · 公网访问阻塞记录`
-				: `依据 ${evidenceIds.length} 条真实证据 · 规则 ${row.rule_version}`,
+				: discoveryJobId
+					? `Codex Run #${discoveryJobId} · 批次 #${row.latest_seen_batch_id ?? "—"} · ${evidenceIds.length} 条真实证据`
+					: `依据 ${evidenceIds.length} 条真实证据 · ${row.rule_version}`,
 			existingAction: actionByOpportunity.get(row.id),
 		};
 	});
@@ -164,6 +185,7 @@ export function derivePriorityActionOpportunities({
 				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "juejin", "csdn", "51cto"],
 				generationReady: true,
 				requiresSourcedBrandFacts: false,
+				missingContent: [], competitorContentPatterns: [], uncertainties: [],
 				title: "补齐采购决策入口", recommendedAsset: "采购选型 FAQ + 对比页",
 				summary: `在 ${absentRows.length}/${rows.length} 条真实回答中，春秋元泉未进入候选；同题已出现 ${competitors.slice(0, 2).join("、")} 等竞品。`,
 				proof: `依据 ${evidenceIds.length} 条已归档回答 · 覆盖 ${modelLabels.join("、")}`,
@@ -179,6 +201,7 @@ export function derivePriorityActionOpportunities({
 				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "juejin", "csdn", "51cto"],
 				generationReady: true,
 				requiresSourcedBrandFacts: false,
+				missingContent: [], competitorContentPatterns: [], uncertainties: [],
 				title: "补齐可被引用的依据", recommendedAsset: "可引用的数据说明 / FAQ",
 				summary: `模型在该问题中引用了 ${uniqueSources.slice(0, 2).join("、")} 等来源，但尚未引用春秋元泉的可控内容。`,
 				proof: `依据 ${uniqueSources.length} 个真实引用来源 · ${rows.length} 条回答`,
