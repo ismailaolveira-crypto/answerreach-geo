@@ -184,7 +184,7 @@ export default async function OperationsPage({ params }: Props) {
                 ? { tone: "failed", label: run.status === "timed_out" ? "运行超时" : "运行失败" }
                 : { tone: "neutral", label: run.status };
           const sourcedClaims = reviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0;
-          return <Link className={`sy-action-run-row is-${status.tone}`} href={`/geo/${workspaceId}/actions`} key={run.id}>
+          return <Link className={`sy-action-run-row is-${status.tone}`} href={`/geo/${workspaceId}/actions?action_id=${run.action_id}`} key={run.id}>
             <div><small>Run #{run.id} · {formatOperationTime(run.updated_at)}</small><b>{action?.title || `行动 #${run.action_id}`}</b><span>{reviewPackage ? `内容资产 #${reviewPackage.asset.id} · ${reviewPackage.variants.length} 个平台稿 · ${sourcedClaims} 条有来源主张 · ${reviewPackage.pending_claim_count} 条待判断` : run.error_message || "尚未产生可审核内容资产"}</span></div>
             <em>{status.label}</em><i>查看行动 →</i>
           </Link>;

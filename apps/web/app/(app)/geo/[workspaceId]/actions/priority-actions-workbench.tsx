@@ -25,6 +25,7 @@ type Props = {
 	opportunities: PriorityActionOpportunity[];
 	opportunityScope: CleanroomActionOpportunityScope;
 	initialScope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null };
+	initialSelectedId?: string;
 	actions: CleanroomAction[];
 	agentRuntime: AgentRuntime | null;
 	activeSourcedBrandFactCount: number;
@@ -285,9 +286,11 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
 	const router = useRouter();
-	const [selectedId, setSelectedId] = useState(() => initialSelectedOpportunityId(opportunities));
+	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
+		? initialSelectedId
+		: initialSelectedOpportunityId(opportunities));
 	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
 	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
@@ -1052,7 +1055,27 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							</div> : null}
 							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
 						</ActionStage>
-						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张待人工判断。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
+						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>
+							{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision || draftMissesAvailableBrandFacts ? " is-revision" : ""}`}>
+								<b>{approvedPlatformKeys.length
+									? `已通过 ${approvedPlatformKeys.length} 个平台稿`
+									: reviewNeedsRevision
+										? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本")
+										: draftMissesAvailableBrandFacts
+											? "品牌事实已更新，需要退回生成新版"
+											: "草稿已入库，等待你确认"}</b>
+								<p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张待人工判断。</p>
+								{reviewNeedsRevision && !runActive
+									? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button>
+									: <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length
+										? "查看审核记录"
+										: reviewNeedsRevision
+											? "查看退回意见"
+											: draftMissesAvailableBrandFacts
+												? "处理旧稿并填写修改意见"
+												: "审阅内容与事实"}</button>}
+							</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}
+						</ActionStage>
 						<ActionStage index={4} label={selected.type === "website" ? "交付官网稿" : "写入平台草稿"} state={deliveryComplete ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? <div className="pa-stage-card"><b>{websiteHandoffReady ? "官网交付记录已建立" : "官网稿已通过审核，可以交付"}</b><p>{websiteHandoffReady ? "稿件等待网站负责人部署。只有回填同域公开 URL 后，系统才会记录为已上线并开放复测。" : "先在内容库查看或导出已审核稿，再建立交付记录。建立记录不等于官网已经上线。"}</p><Link href={`/geo/${workspaceId}/content`}>查看并导出官网稿</Link>{!websiteHandoffReady ? <button type="button" onClick={beginWebsiteHandoff} disabled={isSaving}>{isSaving ? "正在建立…" : "建立官网交付记录"}</button> : null}{publicationMessage && !publicationReady ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved || !syncableApprovedPlatformKeys.length}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">{selected.type === "website" ? "只有官网稿通过人工审核后，才能建立交付记录；当前不会计为已上线。" : "只允许写入草稿，最终发布仍由人工确认。"}</p>}</ActionStage>
 						<ActionStage index={5} label={selected.type === "website" ? "人工上线" : "人工发布"} state={allTargetsPublished ? "done" : publicationReady ? "active" : "idle"}>
 							{publicationReady && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
