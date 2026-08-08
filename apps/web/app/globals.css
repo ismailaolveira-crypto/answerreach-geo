@@ -312,10 +312,13 @@ body.interaction-pending .interaction-toast {
 .geo-floating-mark { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 auto; color: #fff; background: linear-gradient(145deg,#3a7cf4,#2864dd); border-radius: 14px; box-shadow: 0 8px 18px rgb(47 107 237 / 24%); font-size: 25px; font-weight: 500; }
 .geo-floating-brand b { opacity: 0; transform: translateX(-6px); font-size: 17px; letter-spacing: -.035em; transition: opacity .14s ease, transform .24s ease; }
 .geo-floating-sidebar.is-expanded .geo-floating-brand b { opacity: 1; transform: translateX(0); }
-.geo-floating-toggle { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 auto; padding: 0; color: #8391a6; background: #f5f7fb; border: 1px solid #e3e9f2; border-radius: 10px; cursor: pointer; transition: background .15s ease,color .15s ease,transform .2s ease; }
+.geo-floating-toggle { display: grid; place-items: center; width: 44px; height: 44px; flex: 0 0 auto; padding: 0; color: #8391a6; background: #f5f7fb; border: 1px solid #e3e9f2; border-radius: 12px; cursor: pointer; transition: background .15s ease,color .15s ease,transform .2s ease; }
 .geo-floating-toggle svg { width: 18px; height: 18px; transition: transform .24s ease; }
-.geo-floating-sidebar:not(.is-expanded) .geo-floating-toggle svg { transform: rotate(180deg); }
 .geo-floating-toggle:hover { color: #2868e8; background: #edf4ff; border-color: #cfe0ff; }
+.geo-floating-collapsed-toggle { appearance: none; background: transparent; border: 0; border-radius: 14px; cursor: pointer; height: 44px; padding: 0; position: relative; width: 44px; }
+.geo-floating-collapsed-toggle:focus-visible,.geo-floating-toggle:focus-visible { outline: 3px solid rgb(47 107 237 / 24%); outline-offset: 3px; }
+.geo-floating-collapsed-chevron { align-items: center; background: #fff; border: 1px solid #dbe5f3; border-radius: 50%; bottom: -3px; box-shadow: 0 3px 8px rgb(34 63 106 / 18%); color: #2f6bed; display: flex; height: 20px; justify-content: center; position: absolute; right: -3px; width: 20px; }
+.geo-floating-collapsed-chevron svg { height: 12px; width: 12px; }
 .geo-floating-nav { display: flex; flex-direction: column; gap: 5px; }
 .geo-floating-nav-group { display: flex; flex-direction: column; gap: 2px; }
 .geo-floating-nav a,.geo-floating-bottom-nav a { display: flex; align-items: center; gap: 13px; min-height: 45px; padding: 0 11px; overflow: hidden; color: #7c8ba0; border-radius: 13px; font-size: 15px; font-weight: 680; white-space: nowrap; transition: background .16s ease,color .16s ease,transform .16s ease; }

@@ -70,12 +70,16 @@ export function GeoFloatingSidebar() {
 
 	return <aside className={`geo-floating-sidebar${expanded ? " is-expanded" : ""}`} aria-label="春秋元泉 GEO 功能导航">
 		<div className="geo-floating-head">
-			<Link className="geo-floating-brand" href={`/geo/${workspaceId}`} aria-label="返回决策地图">
-				<span className="geo-floating-mark">◇</span><b>春秋元泉 GEO</b>
-			</Link>
-			<button type="button" className="geo-floating-toggle" onClick={() => setSidebarExpanded(!expanded)} aria-expanded={expanded} aria-label={expanded ? "收起功能栏" : "展开功能栏"}>
-				<NavIcon name="chevron" />
-			</button>
+			{expanded ? <>
+				<Link className="geo-floating-brand" href={`/geo/${workspaceId}`} aria-label="返回决策地图">
+					<span className="geo-floating-mark">◇</span><b>春秋元泉 GEO</b>
+				</Link>
+				<button type="button" className="geo-floating-toggle" onClick={() => setSidebarExpanded(false)} aria-expanded="true" aria-label="收起功能栏">
+					<NavIcon name="chevron" />
+				</button>
+			</> : <button type="button" className="geo-floating-collapsed-toggle" onClick={() => setSidebarExpanded(true)} aria-expanded="false" aria-label="展开功能栏">
+				<span className="geo-floating-mark">◇</span><span className="geo-floating-collapsed-chevron"><NavIcon name="chevron" /></span>
+			</button>}
 		</div>
 		<nav className="geo-floating-nav">
 			{ITEMS.map((item) => <div key={item.key} className="geo-floating-nav-group">
