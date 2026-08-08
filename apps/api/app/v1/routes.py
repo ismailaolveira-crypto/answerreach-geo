@@ -7274,6 +7274,7 @@ def discover_brand_fact_candidates(
         result = discover_brand_fact_source_candidates(
             fact.source_url,
             brand_name=workspace.brand_name,
+            query_text=f"{fact.title} {fact.statement}",
         )
     except WebsiteAuditTargetError as exc:
         raise HTTPException(

@@ -306,6 +306,35 @@ def test_brand_fact_candidate_with_unicode_escapes_can_be_selected_and_verified(
     assert proof["verification_mode"] == "same_origin_public_javascript"
 
 
+def test_brand_fact_candidates_are_ranked_for_the_current_fact() -> None:
+    broad = "所有 AI 调用都通过春秋元泉实现统一接入、统一管理、统一统计和统一监控。"
+    targeted = "通过统一 Gateway、项目空间、Token 配额与成本报表，把调用、权限和预算纳入同一套治理体系。"
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text='<html><body><script src="/assets/copy.js"></script></body></html>',
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/javascript"},
+            text=f'const page={{desc:"{broad}",solution:"{targeted}"}};',
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        result = discover_brand_fact_source_candidates(
+            "https://brand.example/",
+            brand_name="春秋元泉",
+            query_text="统一治理范围 调用、权限、成本与运行保障纳入同一套治理体系",
+            resolver=public_resolver,
+            client=client,
+        )
+
+    assert result["candidates"][0]["statement"] == targeted
+
+
 def _transport(request: httpx.Request) -> httpx.Response:
     if request.url.path == "/robots.txt":
         return httpx.Response(200, text="User-agent: *\nAllow: /\nSitemap: https://brand.example/sitemap.xml")
@@ -655,7 +684,7 @@ def test_brand_fact_candidate_discovery_is_scoped_and_audited(
     monkeypatch.setattr(
         routes,
         "discover_brand_fact_source_candidates",
-        lambda _url, *, brand_name: {
+        lambda _url, *, brand_name, query_text: {
             "source_url": "https://brand.example/product",
             "checked_at": checked_at,
             "candidate_count": 1,

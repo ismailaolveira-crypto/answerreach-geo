@@ -566,7 +566,26 @@ def _same_origin_script_documents(
     return scripts
 
 
-def _candidate_score(text: str, *, brand_name: str, source_field: str, server_visible: bool) -> int:
+def _candidate_query_score(text: str, query_text: str) -> int:
+    def bigrams(value: str) -> set[str]:
+        normalized = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", value.lower())
+        return {normalized[index : index + 2] for index in range(max(0, len(normalized) - 1))}
+
+    query_bigrams = bigrams(query_text)
+    if not query_bigrams:
+        return 0
+    overlap = len(query_bigrams & bigrams(text))
+    return min(60, overlap * 5)
+
+
+def _candidate_score(
+    text: str,
+    *,
+    brand_name: str,
+    query_text: str,
+    source_field: str,
+    server_visible: bool,
+) -> int:
     score = 30 if server_visible else 10
     if brand_name and brand_name.lower() in text.lower():
         score += 35
@@ -577,13 +596,14 @@ def _candidate_score(text: str, *, brand_name: str, source_field: str, server_vi
         score += 5
     if re.search(r"[。！？；，]", text):
         score += 3
-    return score
+    return score + _candidate_query_score(text, query_text)
 
 
 def _brand_fact_candidate(
     text: str,
     *,
     brand_name: str,
+    query_text: str,
     source_url: str,
     evidence: dict[str, Any],
     source_page_sha256: str,
@@ -620,6 +640,7 @@ def _brand_fact_candidate(
         "score": _candidate_score(
             value,
             brand_name=brand_name,
+            query_text=query_text,
             source_field=source_field,
             server_visible=verification_mode == "server_rendered_html",
         ),
@@ -630,6 +651,7 @@ def discover_brand_fact_source_candidates(
     url: str,
     *,
     brand_name: str,
+    query_text: str = "",
     resolver: Resolver = _default_resolver,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
@@ -648,6 +670,7 @@ def discover_brand_fact_source_candidates(
             return discover_brand_fact_source_candidates(
                 url,
                 brand_name=brand_name,
+                query_text=query_text,
                 resolver=resolver,
                 client=owned_client,
             )
@@ -683,6 +706,7 @@ def discover_brand_fact_source_candidates(
         candidate = _brand_fact_candidate(
             value,
             brand_name=brand_name,
+            query_text=query_text,
             source_url=str(document["url"]),
             evidence=document,
             source_page_sha256=str(document["sha256"]),
@@ -704,6 +728,7 @@ def discover_brand_fact_source_candidates(
             candidate = _brand_fact_candidate(
                 value,
                 brand_name=brand_name,
+                query_text=query_text,
                 source_url=str(document["url"]),
                 evidence=script,
                 source_page_sha256=str(document["sha256"]),
