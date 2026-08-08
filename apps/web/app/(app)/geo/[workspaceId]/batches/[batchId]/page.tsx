@@ -19,9 +19,9 @@ function batchSourceLabel(sourceType: string) {
 
 function TaskCell({ task, workspaceId }: { task?: OfficialApiObservationTask; workspaceId: string }) {
   if (!task) return <span className="sy-task-cell is-missing"><b>未创建</b><small>后台无对应任务</small></span>;
-  const content = <><b>{TASK_LABELS[task.status]}</b><small>{task.duration_seconds == null ? `任务 #${task.job_id}` : `${task.duration_seconds}s · #${task.job_id}`}</small>{task.error_message ? <em title={task.error_message}>{task.error_message}</em> : null}</>;
+  const content = <><b>{TASK_LABELS[task.status]}</b><small>{task.duration_seconds == null ? `任务 #${task.job_id}` : `${task.duration_seconds}s · 任务 #${task.job_id}`}</small>{task.error_message ? <em title={task.error_message}>{task.error_message}</em> : null}</>;
   return task.evidence_id
-    ? <Link className={`sy-task-cell is-${task.status}`} href={`/geo/${workspaceId}/evidence/${task.evidence_id}`}>{content}<i>查看证据 →</i></Link>
+    ? <Link className={`sy-task-cell is-${task.status}`} href={`/geo/${workspaceId}/evidence/${task.evidence_id}`}>{content}<i>查看证据 #{task.evidence_id} →</i></Link>
     : <span className={`sy-task-cell is-${task.status}`}>{content}</span>;
 }
 

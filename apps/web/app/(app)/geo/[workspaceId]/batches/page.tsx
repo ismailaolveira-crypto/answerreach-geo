@@ -44,11 +44,11 @@ export default async function ObservationBatchesPage({ params, searchParams }: P
       <header><p>真实观测任务归档</p><h1>历史批次</h1><span>按创建时间倒序展示统一观测台账中的全部批次，覆盖 API、网页采样和授权导入。</span></header>
       {result.items.length ? <section className="sy-batch-list" aria-label="历史采样批次">
         <div className="sy-batch-list-head"><span>批次与创建时间</span><span>任务矩阵</span><span>执行结果</span><span>整体状态</span></div>
-        {result.items.map((batch) => <Link key={batch.batch_id} href={`/geo/${workspaceId}/batches/${batch.batch_id}`} className="sy-batch-list-row">
+        {result.items.map((batch) => <Link key={batch.batch_id} href={`/geo/${workspaceId}/batches/${batch.batch_id}`} className={`sy-batch-list-row is-${batch.status}`}>
           <div><b>批次 #{batch.batch_id}</b><small>{formatDate(batch.created_at)} · {batchSourceLabel(batch.source_type)}</small></div>
           <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条任务</small></div>
           <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
-          <div><em className={`is-${batch.status}`}>{STATUS_LABELS[batch.status]}</em><small>{batch.progress_percent}%</small></div>
+          <div><em className={`is-${batch.status}`}>{STATUS_LABELS[batch.status]}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}%</small></div>
         </Link>)}
       </section> : <section className="sy-batch-empty"><span>◇</span><h2>还没有采样批次</h2><p>从决策地图开始第一轮真实模型观测后，批次会自动出现在这里。</p><Link className="sy-primary" href={`/geo/${workspaceId}`}>返回决策地图</Link></section>}
       {pagination.total_pages > 1 ? <nav className="sy-batch-pagination" aria-label="批次列表分页">

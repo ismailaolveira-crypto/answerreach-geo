@@ -32,8 +32,6 @@ export default function ObservationBatchProgress({
   const refreshed = useRef(false);
   const lastSettled = useRef(initialBatch.succeeded + initialBatch.failed);
   const completed = batch.succeeded + batch.failed;
-  const tasks = batch.tasks ?? [];
-  const failedTasks = tasks.filter((task) => task.status === "failed");
   const isRunning = batch.running > 0;
   const isQueued = !isRunning && batch.pending > 0 && !SETTLED.has(batch.status);
   const statusPercentages = batch.status_percentages ?? {
@@ -75,13 +73,13 @@ export default function ObservationBatchProgress({
       <div><span>批次 #{batch.batch_id}</span><h2>{summary(batch)}</h2><p>{batch.provider_count} 个模型 × {batch.question_count} 个问题 × {batch.repeat_count} 次，共 {batch.total} 条</p></div>
       <div className="sy-batch-progress-actions"><strong>{batch.progress_percent}<small>%</small></strong></div>
     </header>
-    <div className="sy-batch-progress-bar"><i style={{ width: `${batch.progress_percent}%` }} /></div>
+    <div className="sy-batch-progress-bar" role="progressbar" aria-label={`批次 ${batch.batch_id} 整体完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></div>
     <div className="sy-batch-counters">
       <span><i className="is-success" />成功 <b>{batch.succeeded}</b><em>{statusPercentages.succeeded}%</em></span>
       <span><i className="is-running" />运行中 <b>{batch.running}</b><em>{statusPercentages.running}%</em></span>
       <span><i className="is-pending" />等待 <b>{batch.pending}</b><em>{statusPercentages.pending}%</em></span>
       <span><i className="is-failed" />失败 <b>{batch.failed}</b><em>{statusPercentages.failed}%</em></span>
-      <small>已完成 {completed}/{batch.total} · {SETTLED.has(batch.status) ? "结果已写入下方决策地图" : "可以离开此页，后台仍会继续执行"}</small>
+      <small>已完成 {completed}/{batch.total} · {SETTLED.has(batch.status) ? "结果已归档，可在下方任务矩阵打开逐条证据" : "可以离开此页，后台仍会继续执行"}</small>
     </div>
     {isRunning ? <section className="sy-batch-live-state is-running" aria-label={`正在检测 ${batch.running} 条任务`}>
       <i aria-hidden="true" />
@@ -99,12 +97,11 @@ export default function ObservationBatchProgress({
         const label = conciseProviderLabel(group.label);
         return <article key={group.id}>
           <BrandLogo brand={group.key} label={label} />
-          <div><b>{label}</b><span><i style={{ width: `${group.total ? Math.round(done / group.total * 100) : 0}%` }} /></span></div>
+          <div><b>{label}</b><span role="progressbar" aria-label={`${label} 完成进度`} aria-valuemin={0} aria-valuemax={group.total} aria-valuenow={done}><i style={{ width: `${group.total ? Math.round(done / group.total * 100) : 0}%` }} /></span></div>
           <small>{done}/{group.total}</small>
         </article>;
       })}
     </div>
-    {failedTasks.length ? <details className="sy-batch-errors"><summary>查看 {failedTasks.length} 条失败任务与原因</summary>{failedTasks.map((task) => <p key={task.job_id}><b>{task.provider_label} · 第 {task.repeat_index} 次</b><span>{task.question_label}</span><em>{task.error_message || "后台未记录错误详情"}</em></p>)}</details> : null}
     {pollError ? <p className="sy-batch-poll-warning">{pollError}，系统会自动重试，不影响后台任务。</p> : null}
   </section>;
 }
