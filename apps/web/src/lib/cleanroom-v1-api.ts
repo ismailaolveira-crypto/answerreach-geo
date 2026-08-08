@@ -936,6 +936,12 @@ export type CleanroomBrandFact = {
 		redirect_count: number;
 		verified_at: string;
 	} | null;
+	source_verification_failure?: {
+		status: "failed";
+		http_status: number;
+		detail: string;
+		attempted_at: string;
+	} | null;
 };
 
 export type CleanroomContentAudit = {

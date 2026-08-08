@@ -471,6 +471,56 @@ def test_needs_work_audit_becomes_deduplicated_selectable_website_action(
         assert set(context["platforms"]) == {"official_site"}
 
 
+def test_failed_brand_fact_reverification_is_audited_and_invalidates_old_proof(
+    website_audit_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client: TestClient = website_audit_api.client
+    created = client.post(
+        "/api/v1/workspaces/1/brand-facts",
+        json={
+            "title": "产品定位",
+            "statement": "春秋元泉面向企业提供 Token 统一管控能力。",
+            "source_url": "https://brand.example/product",
+        },
+    )
+    assert created.status_code == 201
+    fact_id = created.json()["id"]
+    assert created.json()["source_verification"]["status"] == "source_and_statement_verified"
+
+    def reject_changed_public_copy(_url: str, _statement: str) -> dict:
+        raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
+
+    monkeypatch.setattr(routes, "verify_brand_fact_source", reject_changed_public_copy)
+    failed = client.patch(
+        f"/api/v1/workspaces/1/brand-facts/{fact_id}",
+        json={"source_url": "https://brand.example/product"},
+    )
+    assert failed.status_code == 422
+    assert "没有找到这段完整陈述" in failed.json()["detail"]
+
+    listed = client.get("/api/v1/workspaces/1/brand-facts")
+    assert listed.status_code == 200
+    assert listed.json()[0]["source_verification"] is None
+    assert listed.json()[0]["source_verification_failure"]["status"] == "failed"
+    assert listed.json()[0]["source_verification_failure"]["http_status"] == 422
+    assert listed.json()[0]["source_verification_failure"]["attempted_at"]
+    with website_audit_api.session_factory() as db:
+        failure_log = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "workspace.brand_fact.source_verification_failed",
+                AuditLog.resource_id == fact_id,
+            )
+        )
+        assert failure_log is not None
+        assert failure_log.resource_type == "geo_brand_fact"
+        assert failure_log.detail_json["verification"]["status"] == "failed"
+        assert failure_log.detail_json["verification"]["http_status"] == 422
+        assert failure_log.detail_json["statement_sha256"] == sha256(
+            "春秋元泉面向企业提供 Token 统一管控能力。".encode("utf-8")
+        ).hexdigest()
+
+
 def test_website_draft_requires_active_sourced_brand_fact(
     website_audit_api: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,

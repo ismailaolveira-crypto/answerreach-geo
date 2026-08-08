@@ -1522,4 +1522,5 @@ class BrandFactRead(BrandFactCreate):
     status: str
     source_url: str | None = None
     source_verification: dict | None = None
+    source_verification_failure: dict | None = None
     model_config = ConfigDict(from_attributes=True)

@@ -164,6 +164,7 @@ from app.v1.action_opportunities import (
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.brand_facts import (
     BRAND_FACT_VERIFICATION_ACTION,
+    BRAND_FACT_VERIFICATION_FAILED_ACTION,
     brand_fact_read,
     statement_fingerprint,
     verified_active_brand_facts,
@@ -7199,6 +7200,36 @@ def _record_brand_fact_verification(
     )
 
 
+def _record_brand_fact_verification_failure(
+    db: Session,
+    *,
+    workspace: GeoWorkspace,
+    source_url: str,
+    statement: str,
+    error: HTTPException,
+    user: User,
+    fact: GeoBrandFact | None = None,
+) -> None:
+    record_audit_log(
+        db,
+        user=user,
+        action=BRAND_FACT_VERIFICATION_FAILED_ACTION,
+        resource_type="geo_brand_fact" if fact is not None else "geo_brand_fact_candidate",
+        resource_id=fact.id if fact is not None else None,
+        company_id=workspace.company_id,
+        detail={
+            "workspace_id": workspace.id,
+            "source_url": source_url,
+            "statement_sha256": statement_fingerprint(statement),
+            "verification": {
+                "status": "failed",
+                "http_status": error.status_code,
+                "detail": str(error.detail),
+            },
+        },
+    )
+
+
 @router.get("/workspaces/{workspace_id}/brand-facts", response_model=list[BrandFactRead])
 def list_brand_facts(
     workspace_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
@@ -7224,10 +7255,22 @@ def create_brand_fact(
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
     workspace = workspace_or_404(db, user, workspace_id)
-    verification = _verify_brand_fact_source_or_http_error(
-        payload.source_url,
-        payload.statement,
-    )
+    try:
+        verification = _verify_brand_fact_source_or_http_error(
+            payload.source_url,
+            payload.statement,
+        )
+    except HTTPException as exc:
+        _record_brand_fact_verification_failure(
+            db,
+            workspace=workspace,
+            source_url=payload.source_url,
+            statement=payload.statement,
+            error=exc,
+            user=user,
+        )
+        db.commit()
+        raise
     fact = GeoBrandFact(
         workspace_id=workspace_id,
         **{
@@ -7274,10 +7317,23 @@ def update_brand_fact(
     if next_status == "active" and (
         "source_url" in changes or "statement" in changes or changes.get("status") == "active"
     ):
-        verification = _verify_brand_fact_source_or_http_error(
-            str(next_source_url),
-            next_statement,
-        )
+        try:
+            verification = _verify_brand_fact_source_or_http_error(
+                str(next_source_url),
+                next_statement,
+            )
+        except HTTPException as exc:
+            _record_brand_fact_verification_failure(
+                db,
+                workspace=workspace,
+                fact=fact,
+                source_url=str(next_source_url),
+                statement=next_statement,
+                error=exc,
+                user=user,
+            )
+            db.commit()
+            raise
         changes["source_url"] = str(verification["verified_url"])
     for key, value in changes.items():
         setattr(fact, key, value)
