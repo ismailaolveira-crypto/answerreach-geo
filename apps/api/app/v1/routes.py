@@ -4362,6 +4362,14 @@ def _asset_sourced_brand_facts(
         if claim.verification_status not in {"source_linked", "verified", "human_confirmed"}:
             continue
         fact = facts_by_id.get(int(claim.support_id or 0))
+        if fact is not None and (
+            fact.statement.strip() != claim.claim_text.strip()
+            or _normalized_fact_source(fact.source_url)
+            != _normalized_fact_source(claim.source_url)
+        ):
+            # A fact row can be edited after an asset was generated. Its ID alone
+            # must never transfer a newer statement's proof onto an older claim.
+            fact = None
         if fact is None:
             fact = facts_by_value.get(
                 (claim.claim_text.strip(), _normalized_fact_source(claim.source_url))

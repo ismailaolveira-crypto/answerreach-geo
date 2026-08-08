@@ -968,6 +968,54 @@ def test_website_draft_requires_active_sourced_brand_fact(
     assert ready_package["sourced_brand_fact_count"] == 1
     assert ready_package["sourced_brand_fact_ids"] == [fact_id]
 
+    original_statement = "春秋元泉面向企业提供 Token 统一管控能力。"
+    changed_statement = "春秋元泉当前公开陈述已经发生变化。"
+    with website_audit_api.session_factory() as db:
+        fact = db.get(GeoBrandFact, fact_id)
+        assert fact is not None
+        fact.statement = changed_statement
+        routes.record_audit_log(
+            db,
+            user=db.get(User, 1),
+            action="workspace.brand_fact.source_verified",
+            resource_type="geo_brand_fact",
+            resource_id=fact_id,
+            company_id=1,
+            detail={
+                "workspace_id": 1,
+                "source_url": fact.source_url,
+                "statement_sha256": sha256(changed_statement.encode("utf-8")).hexdigest(),
+                "verification": {"status": "source_and_statement_verified"},
+            },
+        )
+        db.commit()
+
+    changed_fact_package = client.get(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/review-package"
+    ).json()
+    assert changed_fact_package["sourced_brand_fact_count"] == 0
+    assert changed_fact_package["sourced_brand_fact_ids"] == []
+
+    with website_audit_api.session_factory() as db:
+        fact = db.get(GeoBrandFact, fact_id)
+        assert fact is not None
+        fact.statement = original_statement
+        routes.record_audit_log(
+            db,
+            user=db.get(User, 1),
+            action="workspace.brand_fact.source_verified",
+            resource_type="geo_brand_fact",
+            resource_id=fact_id,
+            company_id=1,
+            detail={
+                "workspace_id": 1,
+                "source_url": fact.source_url,
+                "statement_sha256": sha256(original_statement.encode("utf-8")).hexdigest(),
+                "verification": {"status": "source_and_statement_verified"},
+            },
+        )
+        db.commit()
+
     approved = client.post(
         f"/api/v1/workspaces/1/content-assets/{asset_id}/reviews",
         json={
