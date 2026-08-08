@@ -4568,6 +4568,10 @@ def create_distribution_run(
     asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
     if asset.status != "approved":
         raise HTTPException(status_code=409, detail="Content asset must pass human review before sync")
+    platform_keys = list(dict.fromkeys(payload.platform_keys))
+    if "official_site" in platform_keys and platform_keys != ["official_site"]:
+        raise HTTPException(status_code=422, detail="官网人工交付必须建立独立任务")
+    is_website_handoff = platform_keys == ["official_site"]
     action = db.scalar(
         select(GeoOptimizationAction)
         .join(GeoContentBrief, GeoContentBrief.action_id == GeoOptimizationAction.id)
@@ -4586,14 +4590,14 @@ def create_distribution_run(
         for variant in db.scalars(
             select(GeoPlatformVariant).where(
                 GeoPlatformVariant.content_asset_id == asset.id,
-                GeoPlatformVariant.platform_key.in_(payload.platform_keys),
+                GeoPlatformVariant.platform_key.in_(platform_keys),
                 GeoPlatformVariant.version == 1,
             )
         )
     }
     unavailable = [
         platform_key
-        for platform_key in dict.fromkeys(payload.platform_keys)
+        for platform_key in platform_keys
         if platform_key not in variants or variants[platform_key].status != "approved"
     ]
     if unavailable:
@@ -4605,43 +4609,53 @@ def create_distribution_run(
         workspace_id=workspace_id,
         action_id=action.id if action else None,
         content_asset_id=asset.id,
-        requested_platforms=list(dict.fromkeys(payload.platform_keys)),
-        stage="ready_for_client",
+        requested_platforms=platform_keys,
+        stage="awaiting_publication" if is_website_handoff else "ready_for_client",
         idempotency_key=payload.idempotency_key,
-        status="pending",
+        status="awaiting_publication" if is_website_handoff else "pending",
         requested_by_user_id=user.id,
     )
     db.add(run)
     db.flush()
-    for platform_key in dict.fromkeys(payload.platform_keys):
+    for platform_key in platform_keys:
         variant = variants.get(platform_key)
         db.add(
             GeoDistributionTarget(
                 distribution_run_id=run.id,
                 platform_variant_id=variant.id if variant else None,
                 platform_key=platform_key,
-                adapter_version="browser-extension.v1",
-                request_status="not_started",
-                draft_readback_status="not_started",
-                waiting_human_reason="等待用户在当前浏览器中打开文章同步助手并确认写入。",
+                adapter_version="manual-website.v1" if is_website_handoff else "browser-extension.v1",
+                request_status="handoff_ready" if is_website_handoff else "not_started",
+                draft_readback_status="not_required" if is_website_handoff else "not_started",
+                human_publish_status="awaiting_publish" if is_website_handoff else "not_ready",
+                waiting_human_reason=(
+                    "官网稿已通过审核并建立交付记录；等待网站负责人部署后回填公开 URL。"
+                    if is_website_handoff
+                    else "等待用户在当前浏览器中打开文章同步助手并确认写入。"
+                ),
             )
         )
     if action:
         previous_stage = action.stage
-        action.stage = "sync_requested"
+        action.stage = "awaiting_publication" if is_website_handoff else "sync_requested"
         action.blocked_reason = None
         db.add(
             GeoActionEvent(
                 workspace_id=workspace_id,
                 action_id=action.id,
-                event_type="distribution_ready_for_client",
+                event_type=(
+                    "website_handoff_created"
+                    if is_website_handoff
+                    else "distribution_ready_for_client"
+                ),
                 from_stage=previous_stage,
-                to_stage="sync_requested",
+                to_stage=action.stage,
                 actor_type="user",
                 actor_user_id=user.id,
                 detail={
                     "distribution_run_id": run.id,
-                    "platform_keys": list(dict.fromkeys(payload.platform_keys)),
+                    "platform_keys": platform_keys,
+                    "delivery_mode": "manual_website" if is_website_handoff else "browser_extension",
                     "final_action_clicked": False,
                 },
             )
@@ -4680,6 +4694,8 @@ def record_distribution_client_results(
         target = by_platform.get(result.platform_key)
         if target is None:
             raise HTTPException(status_code=422, detail=f"Platform is not part of this sync run: {result.platform_key}")
+        if target.adapter_version == "manual-website.v1":
+            raise HTTPException(status_code=409, detail="官网人工交付不接受文章同步助手草稿结果")
         if result.request_status == "draft_saved":
             if not result.draft_url and not result.external_draft_id:
                 raise HTTPException(
@@ -4760,9 +4776,6 @@ def _validated_publication_url(
     host = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme != "https" or not host or parsed.username or parsed.password:
         raise HTTPException(status_code=422, detail="公开文章地址必须是完整的 HTTPS URL")
-    if not parsed.path or parsed.path == "/":
-        raise HTTPException(status_code=422, detail="请填写具体文章页面，而不是平台首页")
-
     def host_matches(expected: str) -> bool:
         return host == expected or host.endswith(f".{expected}")
 
@@ -4785,6 +4798,8 @@ def _validated_publication_url(
         raise HTTPException(status_code=422, detail="当前平台尚不支持发布结果归档")
     if not valid:
         raise HTTPException(status_code=422, detail=f"该地址不是{expected_label}的公开文章 URL")
+    if platform_key != "official_site" and (not parsed.path or parsed.path == "/"):
+        raise HTTPException(status_code=422, detail="请填写具体文章页面，而不是平台首页")
     return parsed.geturl()
 
 
@@ -4805,7 +4820,25 @@ def record_human_publication(
     target = db.get(GeoDistributionTarget, target_id)
     if target is None or target.distribution_run_id != run.id:
         raise HTTPException(status_code=404, detail="发布目标不存在")
-    if target.draft_readback_status != "draft_saved":
+    is_manual_website_handoff = (
+        target.platform_key == "official_site"
+        and target.adapter_version == "manual-website.v1"
+        and target.request_status == "handoff_ready"
+        and target.draft_readback_status == "not_required"
+    )
+    if is_manual_website_handoff:
+        asset = db.get(GeoContentAsset, run.content_asset_id) if run.content_asset_id else None
+        variant = db.get(GeoPlatformVariant, target.platform_variant_id) if target.platform_variant_id else None
+        if (
+            asset is None
+            or asset.workspace_id != workspace_id
+            or asset.status != "approved"
+            or variant is None
+            or variant.content_asset_id != asset.id
+            or variant.status != "approved"
+        ):
+            raise HTTPException(status_code=409, detail="官网稿必须保持人工审核通过后才能记录上线")
+    elif target.draft_readback_status != "draft_saved":
         raise HTTPException(status_code=409, detail="只有已回读的真实平台草稿可以记录发布结果")
     public_url = _validated_publication_url(workspace, target.platform_key, payload.public_url)
     if target.human_publish_status == "published" and target.public_url == public_url:

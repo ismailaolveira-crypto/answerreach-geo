@@ -27,6 +27,7 @@
 .state.review{background:#edf3ff;color:#2465d9}
 .state.revision{background:#fff1e8;color:#c8652f}
 .state.approved,.state.draft_saved{background:#e9f8ef;color:#21815d}
+.state.website_handoff{background:#edf3ff;color:#2865cf}
 .state.superseded{background:#f0f2f5;color:#778397}
 .platforms{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
 .platforms span{align-items:center;background:#f7f9fc;border:1px solid #e3e8ef;border-radius:7px;color:#5f6f84;display:inline-flex;font-size:9px;font-weight:720;gap:5px;padding:5px 7px}

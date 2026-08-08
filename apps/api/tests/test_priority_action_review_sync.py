@@ -51,6 +51,7 @@ def review_client() -> Generator[TestClient, None, None]:
                 slug="review-workspace",
                 brand_name="测试品牌",
                 brand_aliases=[],
+                website_url="https://brand.example.com/",
             )
         )
         db.add(
@@ -146,6 +147,22 @@ def review_client() -> Generator[TestClient, None, None]:
                     image_manifest=[],
                     adaptation_contract={},
                     content_fingerprint="d" * 64,
+                    status="ready",
+                ),
+                GeoPlatformVariant(
+                    id=3,
+                    workspace_id=1,
+                    content_asset_id=1,
+                    platform_key="official_site",
+                    version=1,
+                    policy_version="official-site.v1",
+                    title="官网版标题",
+                    summary="官网版摘要",
+                    body_markdown="官网版正文",
+                    tags=[],
+                    image_manifest=[],
+                    adaptation_contract={},
+                    content_fingerprint="e" * 64,
                     status="ready",
                 ),
             ]
@@ -255,6 +272,12 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     )
     assert wrong_platform.status_code == 422
 
+    platform_homepage = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://www.zhihu.com/"},
+    )
+    assert platform_homepage.status_code == 422
+
     published = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
         json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
@@ -358,6 +381,101 @@ def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
         and target["final_action_clicked"] is False
         for target in retry.json()["targets"]
     )
+
+
+def test_official_site_uses_manual_handoff_before_human_publication(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["official_site"],
+        },
+    )
+    assert approved.status_code == 201
+
+    mixed = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["official_site", "zhihu"],
+            "idempotency_key": "asset-1-mixed-website",
+        },
+    )
+    assert mixed.status_code == 422
+
+    created = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["official_site"],
+            "idempotency_key": "asset-1-official-site-handoff",
+        },
+    )
+    assert created.status_code == 201
+    payload = created.json()
+    assert payload["stage"] == "awaiting_publication"
+    assert payload["status"] == "awaiting_publication"
+    assert payload["targets"][0]["adapter_version"] == "manual-website.v1"
+    assert payload["targets"][0]["request_status"] == "handoff_ready"
+    assert payload["targets"][0]["draft_readback_status"] == "not_required"
+    assert payload["targets"][0]["human_publish_status"] == "awaiting_publish"
+    assert payload["targets"][0]["final_action_clicked"] is False
+
+    duplicate = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["official_site"],
+            "idempotency_key": "asset-1-official-site-handoff",
+        },
+    )
+    assert duplicate.status_code == 201
+    assert duplicate.json()["id"] == payload["id"]
+
+    rejected_sync_result = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{payload['id']}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "official_site",
+                    "request_status": "draft_saved",
+                    "draft_url": "https://brand.example.com/preview",
+                }
+            ]
+        },
+    )
+    assert rejected_sync_result.status_code == 409
+
+    target_id = payload["targets"][0]["id"]
+    wrong_domain = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{payload['id']}/targets/{target_id}/human-publication",
+        json={"public_url": "https://example.net/product"},
+    )
+    assert wrong_domain.status_code == 422
+
+    published = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{payload['id']}/targets/{target_id}/human-publication",
+        json={"public_url": "https://brand.example.com/"},
+    )
+    assert published.status_code == 200
+    assert published.json()["status"] == "published"
+    assert published.json()["targets"][0]["public_url"] == "https://brand.example.com/"
+    assert published.json()["targets"][0]["publication_verification_status"] == "human_confirmed"
+    assert published.json()["targets"][0]["final_action_clicked"] is False
+
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    assert library.json()[0]["saved_draft_count"] == 0
+    assert library.json()[0]["draft_targets"][0]["adapter_version"] == "manual-website.v1"
+
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        action = db.get(GeoOptimizationAction, 1)
+        assert action is not None
+        assert action.stage == "ready_for_retest"
 
 
 def test_agent_progress_is_derived_from_persisted_events_without_local_paths(

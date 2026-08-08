@@ -154,10 +154,13 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 
 	async function createDistribution(assetId: number, platformKeys: string[]) {
 		"use server";
+		const deliveryMode = platformKeys.length === 1 && platformKeys[0] === "official_site"
+			? "manual-website"
+			: "browser-client";
 		const result = await createCleanroomDistributionRun(workspaceId, {
 			content_asset_id: assetId,
 			platform_keys: platformKeys,
-			idempotency_key: `browser-client:${assetId}:${[...platformKeys].sort().join(",")}`,
+			idempotency_key: `${deliveryMode}:${assetId}:${[...platformKeys].sort().join(",")}`,
 		});
 		revalidatePath(`/geo/${workspaceId}/actions`);
 		return result;

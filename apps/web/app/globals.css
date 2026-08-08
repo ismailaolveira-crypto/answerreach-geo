@@ -1698,6 +1698,12 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
 .pa-action-blocked svg { height: 14px; width: 14px; }
 .pa-opportunity-proof { color: #8a97a9; display: block; font-size: 9px; line-height: 1.4; margin-top: 7px; overflow-wrap: anywhere; }
 .pa-stage-card > a { align-items: center; color: #1e5eea; display: inline-flex; font-size: 10px; font-weight: 760; min-height: 32px; }
+.pa-stage-card > a + button { margin-top: 8px; }
+.pa-publication-list input,.pa-publication-list button{min-height:44px!important}
+.pa-progress-lanes{grid-template-columns:repeat(7,minmax(0,1fr))!important}
+@media(max-width:1180px){.pa-progress-lanes{grid-template-columns:repeat(4,minmax(0,1fr))!important}}
+@media(max-width:760px){.pa-progress-lanes{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+@media(max-width:480px){.pa-progress-lanes{grid-template-columns:1fr!important}}
 @keyframes pa-site-audit-spin { to { transform: rotate(360deg); } }
 @media(max-width:900px) {
   .pa-site-audit-signals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
