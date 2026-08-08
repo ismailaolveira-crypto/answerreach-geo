@@ -1400,6 +1400,13 @@ class ActionRetestRead(BaseModel):
     completed_at: datetime | None = None
 
 
+class ActionWorkbenchStateRead(BaseModel):
+    agent_runs: list[AgentRunRead] = Field(default_factory=list)
+    review_packages: list[ContentReviewPackageRead] = Field(default_factory=list)
+    distribution_runs: list[DistributionRunRead] = Field(default_factory=list)
+    retests: list[ActionRetestRead] = Field(default_factory=list)
+
+
 class PromptTemplateRead(BaseModel):
     id: int
     prompt_key: str

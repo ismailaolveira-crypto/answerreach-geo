@@ -890,6 +890,13 @@ export type CleanroomActionRetest = {
 	completed_at?: string | null;
 };
 
+export type CleanroomActionWorkbenchState = {
+	agent_runs: CleanroomAgentRun[];
+	review_packages: CleanroomContentReviewPackage[];
+	distribution_runs: CleanroomDistributionRun[];
+	retests: CleanroomActionRetest[];
+};
+
 export type CleanroomContentGenerationJob = {
 	id: number;
 	job_type: string;
@@ -1398,6 +1405,10 @@ export function createSamplingBatch(workspaceId: string | number) {
 
 export function getCleanroomActions(workspaceId: string | number) {
 	return apiRequest<CleanroomAction[]>(`/workspaces/${workspaceId}/actions`);
+}
+
+export function getCleanroomActionWorkbenchState(workspaceId: string | number) {
+	return apiRequest<CleanroomActionWorkbenchState>(`/workspaces/${workspaceId}/action-workbench-state`);
 }
 
 export function getAgentRuntime(workspaceId: string | number) {

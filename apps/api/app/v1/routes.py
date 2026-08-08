@@ -118,6 +118,7 @@ from app.v1.schemas import (
     QueuedOfficialApiObservationResponse,
     ReobservationCreate,
     ActionRetestRead,
+    ActionWorkbenchStateRead,
     ScorecardRead,
     SourceMapRead,
     StandardObservationRequest,
@@ -6405,6 +6406,72 @@ def read_action_retest(
     if row is None:
         raise HTTPException(status_code=404, detail="该行动还没有复测任务")
     return _action_retest_read(db, row)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/action-workbench-state",
+    response_model=ActionWorkbenchStateRead,
+)
+def read_action_workbench_state(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Return the persisted action workflow ledger without per-action HTTP fan-out."""
+    workspace_or_404(db, user, workspace_id)
+    agent_runs = list(
+        db.scalars(
+            select(GeoAgentRun)
+            .where(GeoAgentRun.workspace_id == workspace_id)
+            .order_by(GeoAgentRun.id.desc())
+        )
+    )
+    asset_ids = list(
+        dict.fromkeys(
+            asset_id
+            for run in agent_runs
+            if isinstance(run.result_snapshot, dict)
+            and isinstance(asset_id := run.result_snapshot.get("asset_id"), int)
+            and asset_id > 0
+        )
+    )
+    assets_by_id = (
+        {
+            asset.id: asset
+            for asset in db.scalars(
+                select(GeoContentAsset).where(
+                    GeoContentAsset.workspace_id == workspace_id,
+                    GeoContentAsset.id.in_(asset_ids),
+                )
+            )
+        }
+        if asset_ids
+        else {}
+    )
+    distribution_runs = list(
+        db.scalars(
+            select(GeoDistributionRun)
+            .where(GeoDistributionRun.workspace_id == workspace_id)
+            .order_by(GeoDistributionRun.id.desc())
+        )
+    )
+    retest_rows = list(
+        db.scalars(
+            select(GeoReobservation)
+            .where(GeoReobservation.workspace_id == workspace_id)
+            .order_by(GeoReobservation.id.desc())
+        )
+    )
+    return {
+        "agent_runs": agent_runs,
+        "review_packages": [
+            _content_review_package(db, assets_by_id[asset_id])
+            for asset_id in asset_ids
+            if asset_id in assets_by_id
+        ],
+        "distribution_runs": [_distribution_read(db, run) for run in distribution_runs],
+        "retests": [_action_retest_read(db, row) for row in retest_rows],
+    }
 
 
 @router.post(

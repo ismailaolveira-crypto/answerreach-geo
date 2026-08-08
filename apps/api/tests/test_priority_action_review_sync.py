@@ -304,6 +304,20 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
 
 
+def test_action_workbench_state_returns_persisted_flow_without_empty_retest_errors(
+    review_client: TestClient,
+) -> None:
+    response = review_client.get("/api/v1/workspaces/1/action-workbench-state")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [run["id"] for run in payload["agent_runs"]] == [1]
+    assert [package["asset"]["id"] for package in payload["review_packages"]] == [1]
+    assert payload["review_packages"][0]["pending_claim_count"] == 1
+    assert payload["distribution_runs"] == []
+    assert payload["retests"] == []
+
+
 def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
     review_client: TestClient,
 ) -> None:

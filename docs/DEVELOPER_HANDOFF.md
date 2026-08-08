@@ -140,6 +140,7 @@ pnpm run verify
 - Agent 产品化门禁已实装：默认每工作区同时只运行 1 个任务，单次最长 15 分钟；容量已满时 API 拒绝第二个 run，页面显示真实容量和超时上限。排队中取消会立即释放容量；worker 交接竞态也会落为 `cancelled`，不留在虚假运行态。
 - SDK turn 超时会调用真实 `interrupt`，持久化为 `failed / timed_out / agent_timeout`，并保留原 Codex thread 恢复入口。尚未建立 thread 的取消/失败任务在界面显示“重新启动”，不再卡在无操作的终止态。
 - `GET /api/v1/workspaces/{workspaceId}/agent-runs/{runId}/progress` 统一从持久化事件计算五阶段状态、确定性百分比、耗时和超时余量；前端不再自行猜测阶段。该接口仅返回工件类型、大小和哈希，不暴露 `private_artifacts` 本机路径或元数据。
+- `GET /api/v1/workspaces/{workspaceId}/action-workbench-state` 一次返回已持久化的 Agent 运行、审核包、分发任务和已建立复测。优先行动首屏不再对每个行动逐一请求 Agent 与不存在的复测，空复测以空列表表示，不制造 404 错误流量。
 - 优先行动右栏已显示五阶段、真实耗时、事件连接/数据库回读状态和持久化结果。执行记录按时间排序；连续重复的公开检索事件在界面合并计数以避免页面过长，原始事件仍完整保留。SSE 不再因每条新事件重新连接，并识别 `run_timed_out` 终态。
 - 行动摘要与机会卡使用同一筛选范围的“未闭环机会”口径：已选择但尚未完成可比复测的机会仍计入，卡片显示“行动进行中”而非重复显示待选择。可比复测得出 `improved / unchanged / regressed` 后，关联机会才转为 `completed` 并移出默认列表；`insufficient_evidence` 不完成机会。模型键 `qianwen` 必须映射到通义千问真实 Logo，不使用“AI”占位。
 - 行动机会发现已移到后端持久化服务。页面通过真实完成批次、模型和问题筛选；只有完整回答、真实搜索事件、来源 URL 和原始工件同时存在的观测才具备行动资格。切换范围时旧机会不继续显示，已选行动不会被后续刷新误标为过期。
