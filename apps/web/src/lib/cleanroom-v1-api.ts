@@ -504,6 +504,7 @@ export type Pagination = {
 
 export type OfficialApiObservationBatchSummary = {
 	batch_id: number;
+	source_type: string;
 	status: "pending" | "running" | "success" | "partial" | "failed";
 	provider_count: number;
 	question_count: number;

@@ -1903,27 +1903,42 @@ def create_provider_web_search_batch(
                 child_job_ids.append(child.id)
     batch.payload_json = {**batch.payload_json, "child_job_ids": child_job_ids}
     db.commit()
-    db.refresh(batch)
-    return _official_api_batch_read(db, batch)
+    db.refresh(ledger_batch)
+    return _official_api_batch_read(db, ledger_batch)
 
 
-def _official_api_batch_state(
-    db: Session, batch: QueueJob
-) -> tuple[dict, list[QueueJob], dict[str, int], str, int, int]:
-    batch_payload = dict(batch.payload_json or {})
-    child_ids = [int(value) for value in batch_payload.get("child_job_ids") or []]
-    children = (
-        list(db.scalars(select(QueueJob).where(QueueJob.id.in_(child_ids)).order_by(QueueJob.id)))
-        if child_ids
-        else []
+def _observation_task_status(status: str) -> str:
+    return "success" if status in {"completed", "succeeded", "success"} else status
+
+
+def _official_api_batch_tasks(db: Session, batch: GeoObservationBatch) -> list[GeoObservationTask]:
+    return list(
+        db.scalars(
+            select(GeoObservationTask)
+            .where(
+                GeoObservationTask.workspace_id == batch.workspace_id,
+                GeoObservationTask.batch_id == batch.id,
+            )
+            .order_by(GeoObservationTask.id)
+        )
     )
+
+
+def _official_api_batch_summary(
+    db: Session,
+    batch: GeoObservationBatch,
+    *,
+    tasks: list[GeoObservationTask] | None = None,
+) -> dict:
+    task_rows = tasks if tasks is not None else _official_api_batch_tasks(db, batch)
+    normalized_statuses = [_observation_task_status(task.status) for task in task_rows]
     counts = {
-        status: sum(1 for job in children if job.status == status)
+        status: normalized_statuses.count(status)
         for status in ("pending", "running", "success", "failed")
     }
     settled = counts["success"] + counts["failed"]
-    total = len(children) or int(batch_payload.get("total") or 0)
-    if children and settled == len(children):
+    total = len(task_rows) or int(batch.total_tasks or 0)
+    if total and settled >= total:
         status = (
             "success"
             if counts["failed"] == 0
@@ -1933,62 +1948,17 @@ def _official_api_batch_state(
         )
     elif counts["running"] or settled:
         status = "running"
+    elif batch.status in {"failed", "partial"}:
+        status = batch.status
     else:
         status = "pending"
-
-    desired_parent_status = (
-        "success"
-        if status == "success"
-        else "failed"
-        if status in {"failed", "partial"}
-        else "running"
-    )
-    state_changed = batch.status != desired_parent_status or (
-        settled == len(children) and batch.finished_at is None
-    )
-    if state_changed:
-        batch.status = desired_parent_status
-        if settled == len(children):
-            batch.finished_at = datetime.now(timezone.utc)
-        db.add(batch)
-
-    ledger_batch = db.scalar(
-        select(GeoObservationBatch).where(GeoObservationBatch.queue_job_id == batch.id)
-    )
-    if ledger_batch is not None:
-        ledger_status = "completed" if status == "success" else status
-        ledger_changed = any(
-            (
-                ledger_batch.status != ledger_status,
-                ledger_batch.completed_tasks != counts["success"],
-                ledger_batch.failed_tasks != counts["failed"],
-                ledger_batch.total_tasks != total,
-            )
-        )
-        if ledger_changed:
-            ledger_batch.status = ledger_status
-            ledger_batch.completed_tasks = counts["success"]
-            ledger_batch.failed_tasks = counts["failed"]
-            ledger_batch.total_tasks = total
-            if settled == len(children):
-                ledger_batch.completed_at = batch.finished_at or datetime.now(timezone.utc)
-            db.add(ledger_batch)
-            state_changed = True
-
-    if state_changed:
-        db.commit()
-        db.refresh(batch)
-    return batch_payload, children, counts, status, settled, total
-
-
-def _official_api_batch_summary(db: Session, batch: QueueJob) -> dict:
-    batch_payload, _children, counts, status, settled, total = _official_api_batch_state(db, batch)
     return {
         "batch_id": batch.id,
+        "source_type": batch.source_type,
         "status": status,
-        "provider_count": int(batch_payload.get("provider_count") or 0),
-        "question_count": int(batch_payload.get("question_count") or 0),
-        "repeat_count": int(batch_payload.get("repeat_count") or 0),
+        "provider_count": batch.provider_count,
+        "question_count": batch.question_count,
+        "repeat_count": batch.repeat_count,
         "total": total,
         "pending": counts["pending"],
         "running": counts["running"],
@@ -2003,89 +1973,115 @@ def _official_api_batch_summary(db: Session, batch: QueueJob) -> dict:
         },
         "created_at": batch.created_at,
         "started_at": batch.started_at,
-        "finished_at": batch.finished_at,
+        "finished_at": batch.completed_at,
     }
 
 
 def _official_api_batch_read(
     db: Session,
-    batch: QueueJob,
+    batch: GeoObservationBatch,
     *,
     task_page: int = 1,
     task_page_size: int = 125,
 ) -> dict:
-    batch_payload, children, _counts, _status, _settled, _total = _official_api_batch_state(
-        db, batch
-    )
+    task_rows = _official_api_batch_tasks(db, batch)
 
-    def groups(snapshot_key: str, id_key: str) -> list[dict]:
-        result: list[dict] = []
-        for snapshot in batch_payload.get(snapshot_key) or []:
-            matching = [
-                job
-                for job in children
-                if int((job.payload_json or {}).get(id_key) or 0) == int(snapshot["id"])
-            ]
-            group_counts = {
-                item: sum(1 for job in matching if job.status == item)
-                for item in ("pending", "running", "success", "failed")
+    def group_counts(matching: list[GeoObservationTask]) -> dict[str, int]:
+        statuses = [_observation_task_status(task.status) for task in matching]
+        return {item: statuses.count(item) for item in ("pending", "running", "success", "failed")}
+
+    provider_groups: list[dict] = []
+    provider_keys: list[tuple[int | None, str, str]] = []
+    for task in task_rows:
+        identity = (task.provider_id, task.model_key, task.model_label)
+        if identity not in provider_keys:
+            provider_keys.append(identity)
+    for index, (provider_id, model_key, model_label) in enumerate(provider_keys):
+        matching = [
+            task
+            for task in task_rows
+            if (task.provider_id, task.model_key, task.model_label)
+            == (provider_id, model_key, model_label)
+        ]
+        counts = group_counts(matching)
+        provider_groups.append(
+            {
+                "id": provider_id if provider_id is not None else -(index + 1),
+                "key": model_key,
+                "label": model_label,
+                "total": len(matching),
+                "pending": counts["pending"],
+                "running": counts["running"],
+                "succeeded": counts["success"],
+                "failed": counts["failed"],
             }
-            result.append(
-                {
-                    "id": int(snapshot["id"]),
-                    "key": str(snapshot["key"]),
-                    "label": str(snapshot["label"]),
-                    "total": len(matching),
-                    "pending": group_counts["pending"],
-                    "running": group_counts["running"],
-                    "succeeded": group_counts["success"],
-                    "failed": group_counts["failed"],
-                }
-            )
-        return result
+        )
 
-    def duration_seconds(job: QueueJob) -> int | None:
-        if job.started_at is None:
+    question_groups: list[dict] = []
+    question_ids = list(dict.fromkeys(task.question_plan_id for task in task_rows))
+    for question_id in question_ids:
+        matching = [task for task in task_rows if task.question_plan_id == question_id]
+        counts = group_counts(matching)
+        question_groups.append(
+            {
+                "id": question_id,
+                "key": str(question_id),
+                "label": matching[0].question_text_snapshot,
+                "total": len(matching),
+                "pending": counts["pending"],
+                "running": counts["running"],
+                "succeeded": counts["success"],
+                "failed": counts["failed"],
+            }
+        )
+
+    def duration_seconds(task: GeoObservationTask) -> int | None:
+        if task.started_at is None:
             return None
-        endpoint = job.finished_at or (
-            datetime.now(timezone.utc) if job.status == "running" else None
+        endpoint = task.completed_at or (
+            datetime.now(timezone.utc) if task.status == "running" else None
         )
         if endpoint is None:
             return None
-        started_at = _as_utc(job.started_at)
+        started_at = _as_utc(task.started_at)
         finished_at = _as_utc(endpoint)
         return max(0, round((finished_at - started_at).total_seconds()))
 
-    task_total = len(children)
+    task_total = len(task_rows)
     task_start = (task_page - 1) * task_page_size
-    selected_children = children[task_start : task_start + task_page_size]
+    selected_tasks = task_rows[task_start : task_start + task_page_size]
     tasks = []
-    for job in selected_children:
-        payload = dict(job.payload_json or {})
+    for task in selected_tasks:
         tasks.append(
             {
-                "job_id": job.id,
-                "provider_id": int(payload.get("provider_id") or 0),
-                "provider_key": str(payload.get("provider_key") or "unknown"),
-                "provider_label": str(payload.get("provider_label") or "未知模型"),
-                "question_plan_id": int(payload.get("question_plan_id") or 0),
-                "question_label": str(payload.get("question_label") or "未知问题"),
-                "repeat_index": int(payload.get("repeat_index") or 1),
-                "status": job.status,
-                "evidence_id": int(payload["evidence_id"]) if payload.get("evidence_id") else None,
-                "error_message": job.error_message,
-                "started_at": job.started_at,
-                "finished_at": job.finished_at,
-                "duration_seconds": duration_seconds(job),
+                "job_id": task.id,
+                "provider_id": task.provider_id or 0,
+                "provider_key": task.model_key,
+                "provider_label": task.model_label,
+                "question_plan_id": task.question_plan_id,
+                "question_label": task.question_text_snapshot,
+                "repeat_index": task.repeat_index,
+                "status": _observation_task_status(task.status),
+                "evidence_id": task.evidence_id,
+                "error_message": task.error_detail or task.error_code,
+                "started_at": task.started_at,
+                "finished_at": task.completed_at,
+                "duration_seconds": duration_seconds(task),
             }
         )
 
-    evidence_ids = [task["evidence_id"] for task in tasks if task["evidence_id"] is not None]
-    errors = list(dict.fromkeys(job.error_message for job in children if job.error_message))
+    evidence_ids = [task.evidence_id for task in task_rows if task.evidence_id is not None]
+    errors = list(
+        dict.fromkeys(
+            task.error_detail or task.error_code
+            for task in task_rows
+            if task.error_detail or task.error_code
+        )
+    )
     return {
-        **_official_api_batch_summary(db, batch),
-        "provider_groups": groups("providers", "provider_id"),
-        "question_groups": groups("questions", "question_plan_id"),
+        **_official_api_batch_summary(db, batch, tasks=task_rows),
+        "provider_groups": provider_groups,
+        "question_groups": question_groups,
         "evidence_ids": evidence_ids,
         "errors": errors,
         "tasks": tasks,
@@ -2110,16 +2106,13 @@ def list_provider_web_search_batches(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    filters = (
-        QueueJob.job_type == "geo_observation.batch",
-        QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
-    )
-    total = int(db.scalar(select(func.count(QueueJob.id)).where(*filters)) or 0)
+    filters = (GeoObservationBatch.workspace_id == workspace_id,)
+    total = int(db.scalar(select(func.count(GeoObservationBatch.id)).where(*filters)) or 0)
     batches = list(
         db.scalars(
-            select(QueueJob)
+            select(GeoObservationBatch)
             .where(*filters)
-            .order_by(QueueJob.created_at.desc(), QueueJob.id.desc())
+            .order_by(GeoObservationBatch.created_at.desc(), GeoObservationBatch.id.desc())
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
@@ -2144,7 +2137,7 @@ def get_latest_provider_web_search_batch(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Return the most recent persisted observation batch for map restoration.
+    """Return the most recent canonical observation batch for map restoration.
 
     The decision map is allowed to be revisited without a batch id in the URL.
     Returning the latest batch keeps the last result visible after navigation,
@@ -2153,12 +2146,9 @@ def get_latest_provider_web_search_batch(
     """
     workspace_or_404(db, user, workspace_id)
     batch = db.scalar(
-        select(QueueJob)
-        .where(
-            QueueJob.job_type == "geo_observation.batch",
-            QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
-        )
-        .order_by(QueueJob.created_at.desc(), QueueJob.id.desc())
+        select(GeoObservationBatch)
+        .where(GeoObservationBatch.workspace_id == workspace_id)
+        .order_by(GeoObservationBatch.created_at.desc(), GeoObservationBatch.id.desc())
     )
     if batch is None:
         raise HTTPException(status_code=404, detail="Observation batch not found")
@@ -2178,12 +2168,8 @@ def get_provider_web_search_batch(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    batch = db.get(QueueJob, batch_id)
-    if (
-        batch is None
-        or batch.job_type != "geo_observation.batch"
-        or int((batch.payload_json or {}).get("workspace_id") or 0) != workspace_id
-    ):
+    batch = db.get(GeoObservationBatch, batch_id)
+    if batch is None or batch.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Observation batch not found")
     return _official_api_batch_read(db, batch, task_page=task_page, task_page_size=task_page_size)
 
@@ -3370,30 +3356,21 @@ def get_decision_map(
             .order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc())
         )
     )
-    measurement_batch: QueueJob | None = None
+    measurement_batch: GeoObservationBatch | None = None
     measurement_evidence_ids: set[int] | None = None
     if batch_id is not None:
-        measurement_batch = db.get(QueueJob, batch_id)
-        if (
-            measurement_batch is None
-            or measurement_batch.job_type != "geo_observation.batch"
-            or int((measurement_batch.payload_json or {}).get("workspace_id") or 0) != workspace_id
-        ):
+        measurement_batch = db.get(GeoObservationBatch, batch_id)
+        if measurement_batch is None or measurement_batch.workspace_id != workspace_id:
             raise HTTPException(status_code=404, detail="Observation batch not found")
-        child_ids = [
-            int(value)
-            for value in (measurement_batch.payload_json or {}).get("child_job_ids") or []
-        ]
-        children = (
-            list(db.scalars(select(QueueJob).where(QueueJob.id.in_(child_ids))))
-            if child_ids
-            else []
-        )
         measurement_evidence_ids = {
             int(value)
-            for child in children
-            for value in [(child.payload_json or {}).get("evidence_id")]
-            if value is not None
+            for value in db.scalars(
+                select(GeoObservationTask.evidence_id).where(
+                    GeoObservationTask.workspace_id == workspace_id,
+                    GeoObservationTask.batch_id == measurement_batch.id,
+                    GeoObservationTask.evidence_id.is_not(None),
+                )
+            )
         }
     cutoff = datetime.now(timezone.utc) - timedelta(days=period_days)
 
@@ -3465,7 +3442,7 @@ def get_decision_map(
             "period_days": period_days,
             "batch_id": measurement_batch.id if measurement_batch else None,
             "batch_created_at": measurement_batch.created_at if measurement_batch else None,
-            "batch_finished_at": measurement_batch.finished_at if measurement_batch else None,
+            "batch_finished_at": measurement_batch.completed_at if measurement_batch else None,
             "measurement_basis": "single_batch" if measurement_batch else "historical_period",
             "model_key": model_key,
             "scope": scope,
@@ -5966,15 +5943,23 @@ def create_reobservation(
 
 def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
     batch_summary = None
-    queue_job = db.get(QueueJob, row.retest_queue_job_id) if row.retest_queue_job_id else None
-    if queue_job is not None:
-        batch_summary = _official_api_batch_summary(db, queue_job)
+    retest_ledger_batch = (
+        db.get(GeoObservationBatch, row.retest_batch_id) if row.retest_batch_id else None
+    )
+    if retest_ledger_batch is None and row.retest_queue_job_id:
+        retest_ledger_batch = db.scalar(
+            select(GeoObservationBatch).where(
+                GeoObservationBatch.queue_job_id == row.retest_queue_job_id
+            )
+        )
+    if retest_ledger_batch is not None:
+        batch_summary = _official_api_batch_summary(db, retest_ledger_batch)
         if row.status not in {"completed", "failed"}:
             if batch_summary["status"] in {"pending", "running"}:
                 row.status = "queued" if batch_summary["status"] == "pending" else "running"
             else:
                 baseline_batch = db.get(GeoObservationBatch, row.baseline_batch_id)
-                retest_batch = db.get(GeoObservationBatch, row.retest_batch_id)
+                retest_batch = retest_ledger_batch
                 scope = row.scope_snapshot or {}
                 question_plan_id = int(scope.get("question_plan_id") or 0)
                 provider_ids = [int(value) for value in scope.get("provider_ids") or []]

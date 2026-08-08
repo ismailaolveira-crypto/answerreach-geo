@@ -626,6 +626,7 @@ class OfficialApiObservationBatchGroup(BaseModel):
 
 class OfficialApiObservationBatchSummary(BaseModel):
     batch_id: int
+    source_type: str
     status: Literal["pending", "running", "success", "partial", "failed"]
     provider_count: int
     question_count: int

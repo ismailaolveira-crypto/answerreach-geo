@@ -34,6 +34,15 @@ function formatOperationTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function batchSourceLabel(sourceType: string) {
+  if (sourceType === "official_api") return "官方 API";
+  if (sourceType === "official_api_single") return "单次 API";
+  if (sourceType === "browser_profile") return "网页采样";
+  if (sourceType === "legacy_import") return "历史迁移";
+  if (sourceType.startsWith("yao_")) return "授权导入";
+  return "统一台账";
+}
+
 function providerFor(definition: PlatformDefinition, providers: LLMProvider[]) {
   const matches = (item: LLMProvider) => {
     if (!definition.providerTypes.includes(item.provider_type)) return false;
@@ -134,7 +143,7 @@ export default async function OperationsPage({ params }: Props) {
 
       <section className="sy-runtime-section" aria-labelledby="recent-runtime-heading">
         <div className="sy-section-heading">
-          <div><h2 id="recent-runtime-heading">最近真实运行</h2><p>来自后台任务队列的持久化批次；进度、失败数与证据在刷新后仍可恢复。</p></div>
+          <div><h2 id="recent-runtime-heading">最近真实运行</h2><p>来自统一观测台账；API、采样与导入结果使用同一批次口径，刷新后仍可恢复。</p></div>
           <Link href={`/geo/${workspaceId}/batches`}>查看全部 {recentBatches.pagination.total} 个批次</Link>
         </div>
         {recentBatches.items.length ? <div className="sy-batch-list sy-runtime-list" aria-label="最近真实观测批次">
@@ -145,7 +154,7 @@ export default async function OperationsPage({ params }: Props) {
             href={`/geo/${workspaceId}/batches/${batch.batch_id}`}
             key={batch.batch_id}
           >
-            <div><b>批次 #{batch.batch_id}</b><small>{formatOperationTime(batch.created_at)}</small></div>
+            <div><b>批次 #{batch.batch_id}</b><small>{formatOperationTime(batch.created_at)} · {batchSourceLabel(batch.source_type)}</small></div>
             <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条真实任务</small></div>
             <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
             <div><em className={`is-${batch.status}`}>{BATCH_STATUS_LABELS[batch.status]}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}% · 查看任务详情</small></div>

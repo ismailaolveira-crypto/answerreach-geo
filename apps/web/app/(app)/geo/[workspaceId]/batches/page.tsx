@@ -18,6 +18,15 @@ function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function batchSourceLabel(sourceType: string) {
+  if (sourceType === "official_api") return "官方 API";
+  if (sourceType === "official_api_single") return "单次 API";
+  if (sourceType === "browser_profile") return "网页采样";
+  if (sourceType === "legacy_import") return "历史迁移";
+  if (sourceType.startsWith("yao_")) return "授权导入";
+  return "统一台账";
+}
+
 export default async function ObservationBatchesPage({ params, searchParams }: Props) {
   const { workspaceId } = await params;
   const query = await searchParams;
@@ -32,11 +41,11 @@ export default async function ObservationBatchesPage({ params, searchParams }: P
       <Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link>
     </header>
     <main className="sy-work-main sy-batches-main">
-      <header><p>真实观测任务归档</p><h1>历史批次</h1><span>按创建时间倒序展示全部采样批次。数据来自后台任务队列，刷新页面后仍可恢复。</span></header>
+      <header><p>真实观测任务归档</p><h1>历史批次</h1><span>按创建时间倒序展示统一观测台账中的全部批次，覆盖 API、网页采样和授权导入。</span></header>
       {result.items.length ? <section className="sy-batch-list" aria-label="历史采样批次">
         <div className="sy-batch-list-head"><span>批次与创建时间</span><span>任务矩阵</span><span>执行结果</span><span>整体状态</span></div>
         {result.items.map((batch) => <Link key={batch.batch_id} href={`/geo/${workspaceId}/batches/${batch.batch_id}`} className="sy-batch-list-row">
-          <div><b>批次 #{batch.batch_id}</b><small>{formatDate(batch.created_at)}</small></div>
+          <div><b>批次 #{batch.batch_id}</b><small>{formatDate(batch.created_at)} · {batchSourceLabel(batch.source_type)}</small></div>
           <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条任务</small></div>
           <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
           <div><em className={`is-${batch.status}`}>{STATUS_LABELS[batch.status]}</em><small>{batch.progress_percent}%</small></div>
