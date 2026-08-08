@@ -379,10 +379,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const unverifiedPendingClaimCount = pendingClaims.filter((claim) => unverifiedClaimIds.includes(claim.id)).length;
 	const reviewedPendingClaimCount = confirmedPendingClaimCount + unverifiedPendingClaimCount;
 	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - reviewedPendingClaimCount);
-	const currentDistribution = distributionRuns
-		.filter((run) => run.action_id === selected?.existingAction?.id)
-		.sort((a, b) => b.id - a.id)[0];
-	const websiteHandoffTarget = currentDistribution?.content_asset_id === currentReviewPackage?.asset.id
+	const currentDistribution = currentAssetId ? distributionRuns
+		.filter((run) => run.action_id === selected?.existingAction?.id && run.content_asset_id === currentAssetId)
+		.sort((a, b) => b.id - a.id)[0] : undefined;
+	const websiteHandoffTarget = currentDistribution && currentDistribution.content_asset_id === currentReviewPackage?.asset.id
 		? currentDistribution.targets.find((target) => target.platform_key === "official_site" && target.adapter_version === "manual-website.v1")
 		: undefined;
 	const websiteHandoffReady = Boolean(
@@ -412,12 +412,14 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	} as Record<string, string>)[currentRetest.conclusion] || currentRetest.conclusion : "";
 	const syncConnectionReady = ["confirm", "syncing", "complete", "partial"].includes(syncPhase) || (syncPhase === "error" && syncAccounts.length > 0);
 	const syncSelectionReady = ["syncing", "complete", "partial"].includes(syncPhase) || (syncPhase === "error" && selectedSyncAccounts.length > 0);
-	const syncSavedAccountCount = syncAccounts.filter((account) => account.status === "done" && account.editResp?.draftLink).length;
-	const syncFailedAccountCount = syncAccounts.filter((account) => account.status === "failed").length;
+	const syncMatchedPlatformCount = new Set(syncAccounts.map(syncPlatformKey).filter(Boolean)).size;
+	const syncSavedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "draft_saved").length ?? 0;
+	const syncFailedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "failed").length ?? 0;
+	const syncPendingTargetCount = currentDistribution?.targets.filter((target) => !["draft_saved", "failed"].includes(target.draft_readback_status)).length ?? 0;
 	const syncProgressSteps = [
 		{
 			label: "连接助手",
-			hint: syncConnectionReady ? `${syncAccounts.length} 个匹配账号` : "检查扩展与登录状态",
+			hint: syncConnectionReady ? `${syncMatchedPlatformCount} 个平台 · ${syncAccounts.length} 个匹配账号` : "检查扩展与登录状态",
 			state: syncConnectionReady ? "done" : syncPhase === "discovering" ? "current" : syncPhase === "error" ? "issue" : "waiting",
 		},
 		{
@@ -427,7 +429,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		},
 		{
 			label: "写入并回读",
-			hint: syncPhase === "complete" ? "结果已按草稿链接归档" : syncPhase === "partial" ? `${syncSavedAccountCount} 个已保存 · ${syncFailedAccountCount} 个需处理` : "未回读不计为已保存",
+			hint: syncPhase === "complete" ? "结果已按草稿链接归档" : syncPhase === "partial" ? `${syncSavedTargetCount} 个已保存 · ${syncPendingTargetCount} 个待写入 · ${syncFailedTargetCount} 个失败` : "未回读不计为已保存",
 			state: syncPhase === "complete" ? "done" : syncPhase === "syncing" ? "current" : ["partial", "error"].includes(syncPhase) && selectedSyncAccounts.length > 0 ? "issue" : "waiting",
 		},
 	] as const;
@@ -770,9 +772,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			}
 			setSyncPhase("confirm");
 			const preservedCount = syncableApprovedPlatformKeys.length - syncablePlatformKeys.length;
-			setSyncMessage(platformAccounts.length === 1
+			const matchedPlatformCount = new Set(platformAccounts.map(syncPlatformKey).filter(Boolean)).size;
+			setSyncMessage(matchedPlatformCount === 1
 				? preservedCount ? `已有 ${preservedCount} 个平台草稿完成回读，本次只需重试剩余平台。` : "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
-				: `已检测到 ${platformAccounts.length} 个待写入平台。选择目标后由你确认，系统不会自动发布。`);
+				: `已检测到 ${matchedPlatformCount} 个待写入平台、${platformAccounts.length} 个可用账号。选择目标后由你确认，系统不会自动发布。`);
 		} catch (error) {
 			setSyncPhase("error");
 			setSyncMessage(error instanceof Error ? error.message : "文章同步助手连接失败。");
@@ -791,12 +794,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		if (!accountVariants.length) return;
 		setSyncPhase("syncing");
 		try {
-			const requestedPlatformKeys = accountVariants.map((item) => item.platformKey);
+			const distributionTargetPlatformKeys = syncableApprovedPlatformKeys;
 			const canReuseCurrent = currentDistribution?.content_asset_id === currentReviewPackage.asset.id
-				&& requestedPlatformKeys.every((platformKey) => currentDistribution.targets.some((target) => target.platform_key === platformKey));
+				&& distributionTargetPlatformKeys.every((platformKey) => currentDistribution.targets.some((target) => target.platform_key === platformKey));
 			const distribution = canReuseCurrent
 				? currentDistribution
-				: await createDistribution(currentReviewPackage.asset.id, requestedPlatformKeys);
+				: await createDistribution(currentReviewPackage.asset.id, distributionTargetPlatformKeys);
 			setDistributionRuns((current) => [distribution, ...current.filter((item) => item.id !== distribution.id)]);
 			let persisted = distribution;
 			for (const [index, { account, platformKey, variant }] of accountVariants.entries()) {
@@ -817,12 +820,17 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			}
 			const saved = persisted.targets.filter((target) => target.draft_readback_status === "draft_saved").length;
 			const failed = persisted.targets.filter((target) => target.draft_readback_status === "failed").length;
+			const pending = persisted.targets.length - saved - failed;
 			if (saved === persisted.targets.length) {
 				setSyncPhase("complete");
 				setSyncMessage(`${saved} 个平台草稿均已回读并归档；最终发布仍由你确认。`);
-			} else if (saved > 0) {
+			} else if (saved > 0 || failed > 0) {
 				setSyncPhase("partial");
-				setSyncMessage(`${saved} 个平台草稿已归档，${failed} 个平台写入失败。成功结果已保留，可重新检测后只重试失败平台。`);
+				const remaining = [
+					pending ? `${pending} 个平台等待登录或写入` : "",
+					failed ? `${failed} 个平台写入失败` : "",
+				].filter(Boolean).join("，");
+				setSyncMessage(`${saved} 个平台草稿已归档，${remaining}。成功结果已保留，重新检测只处理未完成平台。`);
 			} else {
 				setSyncPhase("error");
 				setSyncMessage("没有平台返回可核验的草稿链接，本次不计为已保存。请检查登录状态后重试。");

@@ -438,6 +438,90 @@ def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
     )
 
 
+def test_later_platform_login_extends_the_same_distribution_run(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu", "wechat"],
+        },
+    )
+    assert approved.status_code == 201
+
+    first = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu"],
+            "idempotency_key": "asset-1-first-login-zhihu",
+        },
+    )
+    assert first.status_code == 201
+    run_id = first.json()["id"]
+    zhihu_saved = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "zhihu",
+                    "request_status": "draft_saved",
+                    "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/later-login",
+                }
+            ]
+        },
+    )
+    assert zhihu_saved.status_code == 200
+    assert zhihu_saved.json()["status"] == "draft_saved"
+
+    extended = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu", "wechat"],
+            "idempotency_key": "asset-1-later-login-both",
+        },
+    )
+    assert extended.status_code == 201
+    payload = extended.json()
+    assert payload["id"] == run_id
+    assert payload["requested_platforms"] == ["zhihu", "wechat"]
+    assert payload["status"] == "partial"
+    by_platform = {target["platform_key"]: target for target in payload["targets"]}
+    assert by_platform["zhihu"]["draft_readback_status"] == "draft_saved"
+    assert by_platform["wechat"]["draft_readback_status"] == "not_started"
+
+    completed = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "wechat",
+                    "request_status": "draft_saved",
+                    "external_draft_id": "wechat-later-login-draft",
+                }
+            ]
+        },
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "draft_saved"
+    assert all(
+        target["draft_readback_status"] == "draft_saved"
+        for target in completed.json()["targets"]
+    )
+
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    assert library.json()[0]["distribution_run_id"] == run_id
+    assert library.json()[0]["saved_draft_count"] == 2
+    assert library.json()[0]["total_draft_targets"] == 2
+    runs = review_client.get("/api/v1/workspaces/1/distribution-runs")
+    assert runs.status_code == 200
+    assert [run["id"] for run in runs.json()] == [run_id]
+
+
 def test_official_site_uses_manual_handoff_before_human_publication(
     review_client: TestClient,
 ) -> None:

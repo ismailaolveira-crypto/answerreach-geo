@@ -4608,6 +4608,88 @@ def create_distribution_run(
             status_code=409,
             detail=f"Platform variants require human approval: {', '.join(unavailable)}",
         )
+    existing_client_run = None
+    if not is_website_handoff:
+        existing_client_run = db.scalar(
+            select(GeoDistributionRun)
+            .join(
+                GeoDistributionTarget,
+                GeoDistributionTarget.distribution_run_id == GeoDistributionRun.id,
+            )
+            .where(
+                GeoDistributionRun.workspace_id == workspace_id,
+                GeoDistributionRun.content_asset_id == asset.id,
+                GeoDistributionTarget.adapter_version == "browser-extension.v1",
+            )
+            .order_by(GeoDistributionRun.id.desc())
+        )
+    if existing_client_run is not None:
+        existing_targets = list(
+            db.scalars(
+                select(GeoDistributionTarget)
+                .where(GeoDistributionTarget.distribution_run_id == existing_client_run.id)
+                .order_by(GeoDistributionTarget.id)
+            )
+        )
+        existing_platform_keys = {target.platform_key for target in existing_targets}
+        missing_platform_keys = [
+            platform_key for platform_key in platform_keys if platform_key not in existing_platform_keys
+        ]
+        if not missing_platform_keys:
+            return _distribution_read(db, existing_client_run)
+        for platform_key in missing_platform_keys:
+            variant = variants[platform_key]
+            db.add(
+                GeoDistributionTarget(
+                    distribution_run_id=existing_client_run.id,
+                    platform_variant_id=variant.id,
+                    platform_key=platform_key,
+                    adapter_version="browser-extension.v1",
+                    request_status="not_started",
+                    draft_readback_status="not_started",
+                    human_publish_status="not_ready",
+                    waiting_human_reason="等待用户在当前浏览器中打开文章同步助手并确认写入。",
+                )
+            )
+        existing_client_run.requested_platforms = list(
+            dict.fromkeys([*(existing_client_run.requested_platforms or []), *platform_keys])
+        )
+        saved_count = sum(
+            target.draft_readback_status == "draft_saved" for target in existing_targets
+        )
+        failed_count = sum(target.request_status == "failed" for target in existing_targets)
+        existing_client_run.status = "partial" if saved_count or failed_count else "pending"
+        existing_client_run.stage = (
+            "needs_attention"
+            if failed_count
+            else "awaiting_client_results"
+            if saved_count
+            else "ready_for_client"
+        )
+        if action:
+            previous_stage = action.stage
+            action.stage = "sync_requested"
+            action.blocked_reason = None
+            db.add(
+                GeoActionEvent(
+                    workspace_id=workspace_id,
+                    action_id=action.id,
+                    event_type="distribution_targets_extended",
+                    from_stage=previous_stage,
+                    to_stage="sync_requested",
+                    actor_type="user",
+                    actor_user_id=user.id,
+                    detail={
+                        "distribution_run_id": existing_client_run.id,
+                        "added_platform_keys": missing_platform_keys,
+                        "requested_platform_keys": existing_client_run.requested_platforms,
+                        "final_action_clicked": False,
+                    },
+                )
+            )
+        db.commit()
+        db.refresh(existing_client_run)
+        return _distribution_read(db, existing_client_run)
     run = GeoDistributionRun(
         workspace_id=workspace_id,
         action_id=action.id if action else None,
