@@ -385,6 +385,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const regenerationDraftCount = pendingDraftPackages.filter((reviewPackage) => (
 		reviewPackage.asset.status === "changes_requested"
 		|| (reviewPackage.requires_sourced_brand_facts && reviewPackage.sourced_brand_fact_count === 0)
+		|| (
+			reviewPackage.available_sourced_brand_fact_count > 0
+			&& reviewPackage.sourced_brand_fact_count === 0
+		)
 	)).length;
 	const reviewReadyDraftCount = pendingDraftPackages.length - regenerationDraftCount;
 	const retestReady = retests.filter((item) => item.status === "completed").length;
