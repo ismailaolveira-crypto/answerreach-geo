@@ -25,7 +25,7 @@
 .identity small{color:#8794a6;font-size:10px}
 .state{border-radius:999px;font-size:9px;font-weight:800;padding:5px 8px}
 .state.review{background:#edf3ff;color:#2465d9}
-.state.stale{background:#fff4e5;color:#a86120}
+.state.stale,.state.verification_required{background:#fff4e5;color:#a86120}
 .state.revision{background:#fff1e8;color:#c8652f}
 .state.approved,.state.draft_saved{background:#e9f8ef;color:#21815d}
 .state.awaiting_confirmation{background:#fff5e8;color:#a56424}

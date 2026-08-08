@@ -630,6 +630,17 @@ def test_website_draft_requires_active_sourced_brand_fact(
             )
         )
         db.add(
+            GeoContentClaim(
+                content_asset_id=asset.id,
+                claim_key="unverified-brand-fact-1",
+                claim_text="仅有链接不能证明这段陈述。",
+                support_type="public_source",
+                source_url="https://brand.example/unverified",
+                verification_status="source_linked",
+                introduced_by_model=True,
+            )
+        )
+        db.add(
             GeoPlatformVariant(
                 workspace_id=1,
                 content_asset_id=asset.id,
@@ -675,6 +686,13 @@ def test_website_draft_requires_active_sourced_brand_fact(
     ).json()
     assert blocked_package["requires_sourced_brand_facts"] is True
     assert blocked_package["sourced_brand_fact_count"] == 0
+    assert blocked_package["unverified_brand_fact_count"] == 1
+    assert blocked_package["used_unverified_brand_fact_count"] == 1
+
+    library_item = client.get("/api/v1/workspaces/1/content-library").json()[0]
+    assert library_item["brand_fact_verification_required"] is True
+    assert library_item["unverified_brand_fact_count"] == 1
+    assert library_item["used_unverified_brand_fact_count"] == 1
 
     with website_audit_api.session_factory() as db:
         run = db.get(GeoAgentRun, queued.json()["id"])

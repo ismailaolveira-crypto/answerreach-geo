@@ -1294,6 +1294,8 @@ class ContentReviewPackageRead(BaseModel):
     available_sourced_brand_fact_count: int = Field(default=0, ge=0)
     sourced_brand_fact_count: int = Field(default=0, ge=0)
     sourced_brand_fact_ids: list[int] = Field(default_factory=list)
+    unverified_brand_fact_count: int = Field(default=0, ge=0)
+    used_unverified_brand_fact_count: int = Field(default=0, ge=0)
 
 
 class ContentReviewDecision(BaseModel):
@@ -1377,6 +1379,9 @@ class ContentLibraryItemRead(BaseModel):
     pending_claim_count: int = 0
     available_sourced_brand_fact_count: int = Field(default=0, ge=0)
     sourced_brand_fact_count: int = Field(default=0, ge=0)
+    unverified_brand_fact_count: int = Field(default=0, ge=0)
+    used_unverified_brand_fact_count: int = Field(default=0, ge=0)
+    brand_fact_verification_required: bool = False
     brand_fact_snapshot_stale: bool = False
     approved_platform_keys: list[str] = Field(default_factory=list)
     latest_review_verdict: str | None = None

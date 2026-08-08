@@ -4308,6 +4308,20 @@ def _active_sourced_brand_facts(db: Session, workspace_id: int) -> list[GeoBrand
     return verified_active_brand_facts(db, workspace_id)
 
 
+def _active_brand_facts_with_sources(db: Session, workspace_id: int) -> list[GeoBrandFact]:
+    return list(
+        db.scalars(
+            select(GeoBrandFact)
+            .where(
+                GeoBrandFact.workspace_id == workspace_id,
+                GeoBrandFact.status == "active",
+                GeoBrandFact.source_url.is_not(None),
+            )
+            .order_by(GeoBrandFact.id)
+        )
+    )
+
+
 REVIEW_RESOLVED_CLAIM_STATUSES = {
     "source_linked",
     "verified",
@@ -4358,6 +4372,7 @@ def _content_review_package(
     asset: GeoContentAsset,
     *,
     active_sourced_brand_facts: list[GeoBrandFact] | None = None,
+    active_brand_facts: list[GeoBrandFact] | None = None,
 ) -> dict:
     claims = list(
         db.scalars(
@@ -4408,11 +4423,23 @@ def _content_review_package(
     requires_sourced_brand_facts = _website_requires_sourced_brand_facts(opportunity)
     if active_sourced_brand_facts is None:
         active_sourced_brand_facts = _active_sourced_brand_facts(db, asset.workspace_id)
+    if active_brand_facts is None:
+        active_brand_facts = _active_brand_facts_with_sources(db, asset.workspace_id)
+    verified_fact_ids = {fact.id for fact in active_sourced_brand_facts}
+    unverified_brand_facts = [
+        fact for fact in active_brand_facts if fact.id not in verified_fact_ids
+    ]
     sourced_brand_facts = _asset_sourced_brand_facts(
         db,
         asset,
         claims,
         active_facts=active_sourced_brand_facts,
+    )
+    used_unverified_brand_facts = _asset_sourced_brand_facts(
+        db,
+        asset,
+        claims,
+        active_facts=unverified_brand_facts,
     )
     return {
         "asset": asset,
@@ -4428,6 +4455,8 @@ def _content_review_package(
         "available_sourced_brand_fact_count": len(active_sourced_brand_facts),
         "sourced_brand_fact_count": len(sourced_brand_facts),
         "sourced_brand_fact_ids": [fact.id for fact in sourced_brand_facts],
+        "unverified_brand_fact_count": len(unverified_brand_facts),
+        "used_unverified_brand_fact_count": len(used_unverified_brand_facts),
     }
 
 
@@ -4488,6 +4517,7 @@ def read_content_library(
         if distribution.content_asset_id:
             distributions_by_asset.setdefault(distribution.content_asset_id, distribution)
     active_sourced_brand_facts = _active_sourced_brand_facts(db, workspace_id)
+    active_brand_facts = _active_brand_facts_with_sources(db, workspace_id)
 
     items = []
     for asset in assets:
@@ -4499,6 +4529,7 @@ def read_content_library(
             db,
             asset,
             active_sourced_brand_facts=active_sourced_brand_facts,
+            active_brand_facts=active_brand_facts,
         )
         content_reviews = [
             review
@@ -4537,6 +4568,17 @@ def read_content_library(
                     "available_sourced_brand_fact_count"
                 ],
                 "sourced_brand_fact_count": package["sourced_brand_fact_count"],
+                "unverified_brand_fact_count": package[
+                    "unverified_brand_fact_count"
+                ],
+                "used_unverified_brand_fact_count": package[
+                    "used_unverified_brand_fact_count"
+                ],
+                "brand_fact_verification_required": (
+                    package["requires_sourced_brand_facts"]
+                    and package["sourced_brand_fact_count"] == 0
+                    and package["unverified_brand_fact_count"] > 0
+                ),
                 "brand_fact_snapshot_stale": (
                     asset.id == latest_asset.id
                     and asset.status not in {"approved", "superseded"}

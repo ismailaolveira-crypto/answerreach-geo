@@ -21,6 +21,7 @@ const PLATFORM_META: Record<string, { label: string; logo?: string }> = {
 const FILTERS = [
 	{ key: "all", label: "全部" },
 	{ key: "review", label: "待审核" },
+	{ key: "verification_required", label: "需核验事实" },
 	{ key: "stale", label: "需重新生成" },
 	{ key: "revision", label: "待修订" },
 	{ key: "approved", label: "已通过" },
@@ -34,6 +35,7 @@ const FILTERS = [
 function stateLabel(state: string) {
 	return {
 		review: "待审核",
+		verification_required: "事实待核验",
 		stale: "事实快照过期",
 		revision: "待修订",
 		approved: "已通过",
@@ -165,7 +167,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 			{visibleItems.length ? visibleItems.map((item) => {
 				const state = getContentLibraryItemState(item);
 				const visualAssets = capturedVisualAssets(item);
-				const canExport = state !== "superseded" && state !== "stale";
+				const canExport = state !== "superseded" && state !== "stale" && state !== "verification_required";
 				const reviewComplete = item.approved_platform_keys.length > 0;
 				const isWebsiteAsset = item.variants.length > 0 && item.variants.every((variant) => variant.platform_key === "official_site");
 				const websiteHandoffReady = item.draft_targets.some((target) => target.platform_key === "official_site" && target.adapter_version === "manual-website.v1" && target.request_status === "handoff_ready");
@@ -180,10 +182,11 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						<div className={styles.platforms} aria-label="平台版本">{item.variants.map((variant) => { const meta = PLATFORM_META[variant.platform_key]; return <span key={variant.id} title={`${meta?.label || variant.platform_key}：${variant.status}`}>{meta?.logo ? <img src={meta.logo} alt="" /> : null}{meta?.label || variant.platform_key}</span>; })}</div>
 					</header>
 					<div className={styles.copy}><small>{item.action_title}</small><h2>{item.asset.title}</h2><p>{item.asset.summary}</p>{item.latest_review_note ? <blockquote><b>人工意见</b>{item.latest_review_note}</blockquote> : null}</div>
+					{state === "verification_required" ? <div className={styles.staleNote} role="status"><b>品牌事实尚未完成原文核验</b><span>工作区有 {item.unverified_brand_fact_count} 条未核验事实，本稿匹配 {item.used_unverified_brand_fact_count} 条。有来源 URL 不等于原文已核验，当前禁止直接审核或交付。</span></div> : null}
 					{state === "stale" ? <div className={styles.staleNote} role="status"><b>需根据当前品牌事实重新生成</b><span>事实库已有 {item.available_sourced_brand_fact_count} 条带来源事实，本稿使用 {item.sourced_brand_fact_count} 条；审核已禁止直接通过。</span></div> : null}
 					{state === "superseded" ? <div className={styles.historyNote}><b>已由 v{item.latest_version_number} 替代</b><span>仅保留正文和退回意见用于追溯，不再进入审核、交付或发布流程。</span></div> : <div className={styles.flow} aria-label="内容进度">
 						<div className={styles.done}><span>1</span><b>Agent 生成</b><small>已持久化</small></div>
-						<div className={reviewComplete ? styles.done : state === "revision" || state === "stale" ? styles.warning : styles.current}><span>2</span><b>人工审核</b><small>{reviewComplete ? `${item.approved_platform_keys.length} 个平台已通过` : state === "revision" ? "已退回修订" : state === "stale" ? "需退回生成新版" : `${item.pending_claim_count} 条待判断`}</small></div>
+						<div className={reviewComplete ? styles.done : state === "revision" || state === "stale" || state === "verification_required" ? styles.warning : styles.current}><span>2</span><b>人工审核</b><small>{reviewComplete ? `${item.approved_platform_keys.length} 个平台已通过` : state === "revision" ? "已退回修订" : state === "verification_required" ? "需先核验品牌事实" : state === "stale" ? "需退回生成新版" : `${item.pending_claim_count} 条待判断`}</small></div>
 						<div className={deliveryComplete ? styles.done : reviewComplete ? styles.current : ""}><span>3</span><b>{isWebsiteAsset ? "官网交付" : "平台草稿"}</b><small>{isWebsiteAsset ? websiteHandoffReady ? "交付记录已建立" : reviewComplete ? "可建立交付记录" : "尚未开放" : draftComplete ? `${item.saved_draft_count}/${item.total_draft_targets} 已人工确认` : pendingConfirmationCount ? `${pendingConfirmationCount} 个等待打开确认` : item.saved_draft_count ? `${item.saved_draft_count}/${item.total_draft_targets} 已确认，继续同步` : reviewComplete ? "可打开同步助手" : "尚未开放"}</small></div>
 						<div className={publishedCount > 0 ? styles.done : deliveryComplete ? styles.current : ""}><span>4</span><b>{isWebsiteAsset ? "人工上线" : "人工发布"}</b><small>{publishedCount > 0 ? `${publishedCount}/${item.total_draft_targets} 已记录 URL` : deliveryComplete ? isWebsiteAsset ? "等待网站负责人上线" : "等待平台人工确认" : "尚未开放"}</small></div>
 					</div>}
@@ -200,7 +203,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 					<details className={styles.details}>
 						<summary>查看正文与 {item.variants.length} 个平台版本<span aria-hidden="true">›</span></summary>
 						<div className={styles.documents}>
-							{state === "stale" ? <p className={`${styles.exportNote} ${styles.staleExport}`}>这版稿件没有使用当前品牌事实，仅供比对；请返回优化行动生成新版后再交付。</p> : state !== "superseded" ? <p className={styles.exportNote}>复制或下载只用于人工审核与交付，不会改变审核、草稿或发布状态。</p> : null}
+							{state === "verification_required" ? <p className={`${styles.exportNote} ${styles.staleExport}`}>这版稿件使用了尚未完成原文核验的品牌事实，仅供核对；先核验事实并生成新版本。</p> : state === "stale" ? <p className={`${styles.exportNote} ${styles.staleExport}`}>这版稿件没有使用当前品牌事实，仅供比对；请返回优化行动生成新版后再交付。</p> : state !== "superseded" ? <p className={styles.exportNote}>复制或下载只用于人工审核与交付，不会改变审核、草稿或发布状态。</p> : null}
 							<section>
 								<div className={styles.documentHeading}><div><small>母稿 · v{item.asset.version}</small><h3>{item.asset.title}</h3></div>{canExport ? <DocumentActions feedback={exportFeedback[`asset-${item.asset.id}`]} title={item.asset.title} onCopy={() => copyMarkdown(`asset-${item.asset.id}`, item.asset.title, item.asset.body_markdown)} onDownload={() => downloadMarkdown(`asset-${item.asset.id}`, `${item.asset.title}-母稿-v${item.asset.version}`, item.asset.title, item.asset.body_markdown)} /> : null}</div>
 								<div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(item.asset.body_markdown) }} />
@@ -212,7 +215,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						</div>
 						<DetailsCollapseButton label="收起正文与平台版本" />
 					</details>
-					<footer><span>{state === "superseded" ? "历史正文、原始 Agent 工件与退回意见已保留" : state === "stale" ? `当前事实库 ${item.available_sourced_brand_fact_count} 条，本稿使用 ${item.sourced_brand_fact_count} 条；直接通过已被阻止` : "原始 Agent 工件与审核记录已保留"}</span><Link href={`/geo/${workspaceId}/actions`}>{state === "stale" ? "处理并生成新版" : "回到优化行动"}</Link></footer>
+					<footer><span>{state === "superseded" ? "历史正文、原始 Agent 工件与退回意见已保留" : state === "verification_required" ? `当前 ${item.unverified_brand_fact_count} 条品牌事实待核验，本稿匹配 ${item.used_unverified_brand_fact_count} 条；审核与交付均已阻止` : state === "stale" ? `当前事实库 ${item.available_sourced_brand_fact_count} 条，本稿使用 ${item.sourced_brand_fact_count} 条；直接通过已被阻止` : "原始 Agent 工件与审核记录已保留"}</span><Link href={`/geo/${workspaceId}/actions`}>{state === "stale" || state === "verification_required" ? "处理并生成新版" : "回到优化行动"}</Link></footer>
 				</article>;
 			}) : <div className={styles.noMatch}>当前筛选下没有内容。</div>}
 		</section>

@@ -2,6 +2,7 @@ import type { CleanroomContentLibraryItem } from "@/lib/cleanroom-v1-api";
 
 export type ContentLibraryState =
 	| "review"
+	| "verification_required"
 	| "stale"
 	| "revision"
 	| "approved"
@@ -29,6 +30,7 @@ export function getContentLibraryItemState(item: CleanroomContentLibraryItem): C
 	))) return "awaiting_confirmation";
 	if (item.saved_draft_count > 0) return "draft_saved";
 	if (item.latest_review_verdict === "changes_requested") return "revision";
+	if (item.brand_fact_verification_required) return "verification_required";
 	if (item.brand_fact_snapshot_stale) return "stale";
 	if (item.approved_platform_keys.length > 0) return "approved";
 	return "review";
@@ -38,7 +40,7 @@ export function getContentLibrarySummary(items: CleanroomContentLibraryItem[]) {
 	return {
 		versionCount: items.length,
 		awaitingReviewCount: items.filter((item) => getContentLibraryItemState(item) === "review").length,
-		staleDraftCount: items.filter((item) => getContentLibraryItemState(item) === "stale").length,
+		staleDraftCount: items.filter((item) => ["verification_required", "stale", "revision"].includes(getContentLibraryItemState(item))).length,
 		savedDraftCount: items.reduce((total, item) => total + item.saved_draft_count, 0),
 		verifiedPublicationCount: items.reduce((total, item) => total + item.draft_targets.filter((target) => (
 			target.human_publish_status === "published"

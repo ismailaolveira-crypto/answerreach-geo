@@ -812,6 +812,8 @@ export type CleanroomContentReviewPackage = {
 	available_sourced_brand_fact_count: number;
 	sourced_brand_fact_count: number;
 	sourced_brand_fact_ids: number[];
+	unverified_brand_fact_count: number;
+	used_unverified_brand_fact_count: number;
 };
 
 export type CleanroomContentLibraryItem = {
@@ -824,6 +826,9 @@ export type CleanroomContentLibraryItem = {
 	pending_claim_count: number;
 	available_sourced_brand_fact_count: number;
 	sourced_brand_fact_count: number;
+	unverified_brand_fact_count: number;
+	used_unverified_brand_fact_count: number;
+	brand_fact_verification_required: boolean;
 	brand_fact_snapshot_stale: boolean;
 	approved_platform_keys: string[];
 	latest_review_verdict?: string | null;
