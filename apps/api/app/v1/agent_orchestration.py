@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -481,6 +482,45 @@ INPUT_CONTEXT_JSON:
 """ + json.dumps(context, ensure_ascii=False, indent=2)
 
 
+def _validate_agent_result(run: GeoAgentRun, result: dict) -> None:
+    requested_platforms = list(dict.fromkeys(str(key) for key in run.selected_platforms))
+    requested_set = set(requested_platforms)
+    research = list(result.get("platform_research") or [])
+    variants = list(result.get("variants") or [])
+    research_keys = [str(item.get("platform_key") or "") for item in research]
+    variant_keys = [str(item.get("platform_key") or "") for item in variants]
+
+    if len(research_keys) != len(set(research_keys)):
+        raise ValueError("Agent returned duplicate platform research")
+    if len(variant_keys) != len(set(variant_keys)):
+        raise ValueError("Agent returned duplicate platform variants")
+    if set(research_keys) != requested_set:
+        missing = sorted(requested_set - set(research_keys))
+        raise ValueError(f"Agent platform research is incomplete: {', '.join(missing)}")
+    if set(variant_keys) != requested_set:
+        missing = sorted(requested_set - set(variant_keys))
+        raise ValueError(f"Agent platform variants are incomplete: {', '.join(missing)}")
+
+    for item in research:
+        platform_key = str(item.get("platform_key") or "")
+        source_urls = list(item.get("source_urls") or [])
+        if not str(item.get("tone") or "").strip() or not list(item.get("restrictions") or []):
+            raise ValueError(f"Agent platform research lacks tone or restrictions: {platform_key}")
+        if not source_urls or any(
+            urlsplit(str(url)).scheme not in {"http", "https"} or not urlsplit(str(url)).netloc
+            for url in source_urls
+        ):
+            raise ValueError(f"Agent platform research lacks public rule sources: {platform_key}")
+
+    for item in variants:
+        platform_key = str(item.get("platform_key") or "")
+        if not all(
+            str(item.get(field) or "").strip()
+            for field in ("title", "summary", "body_markdown")
+        ):
+            raise ValueError(f"Agent platform variant is incomplete: {platform_key}")
+
+
 def _cancellation_requested(run_id: int) -> bool:
     with SessionLocal() as check_db:
         timestamp = check_db.scalar(
@@ -788,6 +828,7 @@ def execute_agent_run(
             timeout_seconds=timeout_seconds,
         )
         parsed = json.loads(turn_result.final_response)
+        _validate_agent_result(run, parsed)
         task_directory.mkdir(parents=True, exist_ok=True)
         raw_path = task_directory / "result.json"
         raw_bytes = json.dumps(

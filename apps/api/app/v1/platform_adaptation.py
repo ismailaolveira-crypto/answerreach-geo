@@ -16,6 +16,12 @@ def adapt_asset(asset: GeoContentAsset, *, workspace_id: int, platform_key: str)
     source_body = asset.body_markdown.strip()
     if platform_key == "zhihu":
         body = f"## 先说结论\n\n{source_body}"
+    elif platform_key == "juejin":
+        body = f"## 工程问题与实现取舍\n\n{source_body}"
+    elif platform_key == "csdn":
+        body = f"## 问题、前置条件与执行步骤\n\n{source_body}"
+    elif platform_key == "51cto":
+        body = f"## 企业 IT 治理清单\n\n{source_body}"
     elif platform_key == "wechat":
         body = f"{source_body}\n\n> 本文依据已归档的真实观测与公开来源整理。"
     elif platform_key == "xiaohongshu":

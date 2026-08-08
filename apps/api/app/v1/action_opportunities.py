@@ -335,7 +335,7 @@ def discover_opportunities(
                 evidence_strength=round(evidence_strength, 4),
                 source_gap_type="missing_brand_citation" if top_source else "missing_authority_source",
                 recommended_asset_type="article",
-                recommended_platforms=["zhihu", "official_site", "wechat"],
+                recommended_platforms=["zhihu", "juejin", "csdn", "51cto"],
                 scope_snapshot=scope_snapshot,
                 rule_version=RULE_VERSION,
                 status="open",

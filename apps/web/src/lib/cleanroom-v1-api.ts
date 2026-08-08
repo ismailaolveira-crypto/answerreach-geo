@@ -1566,7 +1566,7 @@ export function recordCleanroomDistributionClientResults(
 	runId: number,
 	targets: Array<{
 		platform_key: string;
-		request_status: "draft_saved" | "failed" | "cancelled";
+		request_status: "draft_link_returned" | "draft_saved" | "failed" | "cancelled";
 		draft_url?: string | null;
 		external_draft_id?: string | null;
 		message?: string | null;
@@ -1576,6 +1576,20 @@ export function recordCleanroomDistributionClientResults(
 		method: "POST",
 		body: JSON.stringify({ targets }),
 	});
+}
+
+export function confirmCleanroomHumanDraftReadback(
+	workspaceId: string | number,
+	runId: number,
+	targetId: number,
+) {
+	return apiRequest<CleanroomDistributionRun>(
+		`/workspaces/${workspaceId}/distribution-runs/${runId}/targets/${targetId}/human-draft-readback`,
+		{
+			method: "POST",
+			body: JSON.stringify({ confirmed_visible: true }),
+		},
+	);
 }
 
 export function recordCleanroomHumanPublication(
@@ -1607,7 +1621,7 @@ export function queueCleanroomContentGeneration(
 	workspaceId: string | number,
 	actionId: number,
 	briefId: number,
-	payload: { provider_id: number; platform_key: "official_site" | "zhihu" | "wechat" | "xiaohongshu" },
+	payload: { provider_id: number; platform_key: "official_site" | "zhihu" | "juejin" | "csdn" | "51cto" | "wechat" | "xiaohongshu" },
 ) {
 	return apiRequest<CleanroomContentGenerationJob>(`/workspaces/${workspaceId}/actions/${actionId}/briefs/${briefId}/generate`, {
 		method: "POST",

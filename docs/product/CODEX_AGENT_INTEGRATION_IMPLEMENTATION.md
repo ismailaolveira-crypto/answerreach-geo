@@ -21,7 +21,8 @@ flowchart LR
     ORCH --> DB["行动、事件、内容资产"]
     UI -->|user click| EXT["文章同步助手扩展"]
     EXT --> DRAFT["平台草稿"]
-    DRAFT -->|draft id / URL readback| API
+    DRAFT -->|candidate draft URL| API
+    API -->|user opens and confirms visible| API
 ```
 
 ## 1. 我们先看了其他开源项目怎么做
@@ -148,6 +149,7 @@ apps/api/private_artifacts/agent-runs/{workspace_id}/{run_id}/
 | `POST` | `/api/v1/workspaces/{id}/content-assets/{asset_id}/reviews` | 人工通过/退回，每个平台稿独立审核 |
 | `POST` | `/api/v1/workspaces/{id}/distribution-runs` | 仅为已审核稿创建同步任务 |
 | `POST` | `/api/v1/workspaces/{id}/distribution-runs/{run_id}/client-results` | 归档同步助手返回的逐平台结果 |
+| `POST` | `/api/v1/workspaces/{id}/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback` | 用户打开草稿并确认正文可见后，才将候选链接升级为已保存草稿 |
 
 启动 Agent run 必须有幂等键。同一行动已有 `queued/running/waiting_human` run 时，不得再建第二个并行 run。
 
@@ -170,7 +172,8 @@ stateDiagram-v2
     approved --> sync_ready
     sync_ready --> sync_opened: user click
     sync_opened --> request_accepted
-    request_accepted --> draft_saved: external id or readback
+    request_accepted --> draft_link_returned: browser bridge returns candidate URL
+    draft_link_returned --> draft_saved: human opens and confirms visible
     draft_saved --> awaiting_publish
     awaiting_publish --> published: user records real URL
     published --> awaiting_retest
@@ -181,7 +184,8 @@ stateDiagram-v2
 
 - `awaiting_review → approved`：必须是用户操作；
 - `sync_ready → sync_opened`：必须是用户点击；
-- `request_accepted → draft_saved`：必须有草稿 ID/URL 或真实回读；
+- `request_accepted → draft_link_returned`：浏览器桥接只能保存符合目标平台域名的候选 URL；
+- `draft_link_returned → draft_saved`：必须由用户打开草稿页并确认正文可见，或由受信任后端适配器完成真实回读；
 - `awaiting_publish → published`：必须有人工确认的真实发布 URL；
 - `awaiting_retest → completed`：必须有同问题、同模型集的有效复测证据。
 

@@ -18,6 +18,7 @@ import {
 	getCleanroomActions,
 	interruptCleanroomAgentRun,
 	recordCleanroomDistributionClientResults,
+	confirmCleanroomHumanDraftReadback,
 	recordCleanroomHumanPublication,
 	resumeCleanroomAgentRun,
 	reviseCleanroomAgentRun,
@@ -172,11 +173,20 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 
 	async function recordDistributionResults(
 		runId: number,
-		targets: Array<{ platform_key: string; request_status: "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>,
+		targets: Array<{ platform_key: string; request_status: "draft_link_returned" | "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>,
 	) {
 		"use server";
 		const result = await recordCleanroomDistributionClientResults(workspaceId, runId, targets);
 		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
+		return result;
+	}
+
+	async function confirmDraftReadback(runId: number, targetId: number) {
+		"use server";
+		const result = await confirmCleanroomHumanDraftReadback(workspaceId, runId, targetId);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
 		return result;
 	}
 
@@ -207,5 +217,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return result;
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
 }

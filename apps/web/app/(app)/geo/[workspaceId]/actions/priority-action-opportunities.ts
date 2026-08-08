@@ -131,7 +131,7 @@ export function derivePriorityActionOpportunities({
 			opportunities.push({
 				id: `${questionId}:visibility`, questionId, questionText: question.question_text,
 				evidenceIds, modelLabels, type: "visibility", priority: absentRows.length === rows.length ? "high" : "medium",
-				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
+				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "juejin", "csdn", "51cto"],
 				generationReady: true,
 				requiresSourcedBrandFacts: false,
 				title: "补齐采购决策入口", recommendedAsset: "采购选型 FAQ + 对比页",
@@ -146,7 +146,7 @@ export function derivePriorityActionOpportunities({
 			opportunities.push({
 				id: `${questionId}:citation`, questionId, questionText: question.question_text,
 				evidenceIds, modelLabels, type: "citation", priority: citedSources.length >= rows.length ? "high" : "medium",
-				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "wechat"],
+				sourceType: "model_observation", recommendedPlatforms: ["zhihu", "juejin", "csdn", "51cto"],
 				generationReady: true,
 				requiresSourcedBrandFacts: false,
 				title: "补齐可被引用的依据", recommendedAsset: "可引用的数据说明 / FAQ",

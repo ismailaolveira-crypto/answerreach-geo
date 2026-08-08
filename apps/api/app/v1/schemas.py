@@ -1066,8 +1066,12 @@ class AgentRuntimeTestRead(BaseModel):
 
 
 class AgentRunCreate(BaseModel):
-    selected_platforms: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
-        default_factory=list, max_length=4
+    selected_platforms: list[
+        Literal[
+            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+        ]
+    ] = Field(
+        default_factory=list, max_length=7
     )
     model: str | None = Field(default=None, max_length=120)
 
@@ -1194,7 +1198,9 @@ class ContentBriefRead(ContentBriefCreate):
 
 class ContentGenerateRequest(BaseModel):
     provider_id: int = Field(ge=1)
-    platform_key: Literal["official_site", "zhihu", "wechat", "xiaohongshu"] = "official_site"
+    platform_key: Literal[
+        "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+    ] = "official_site"
 
 
 class ContentAssetRead(BaseModel):
@@ -1219,7 +1225,11 @@ class ContentAssetRead(BaseModel):
 
 
 class PlatformVariantCreate(BaseModel):
-    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
+    platform_keys: list[
+        Literal[
+            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+        ]
+    ] = Field(
         default_factory=lambda: ["official_site", "zhihu", "wechat"]
     )
 
@@ -1290,12 +1300,18 @@ class ContentReviewDecision(BaseModel):
     verdict: Literal["approved", "changes_requested"]
     confirmed_claim_ids: list[int] = Field(default_factory=list, max_length=200)
     unverified_claim_ids: list[int] = Field(default_factory=list, max_length=200)
-    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
-        default_factory=list, max_length=4
+    platform_keys: list[
+        Literal[
+            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+        ]
+    ] = Field(
+        default_factory=list, max_length=7
     )
     reviewed_platform_keys: list[
-        Literal["official_site", "zhihu", "wechat", "xiaohongshu"]
-    ] = Field(default_factory=list, max_length=4)
+        Literal[
+            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+        ]
+    ] = Field(default_factory=list, max_length=7)
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -1305,7 +1321,11 @@ class AgentRevisionRequest(BaseModel):
 
 class DistributionRunCreate(BaseModel):
     content_asset_id: int = Field(ge=1)
-    platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(min_length=1)
+    platform_keys: list[
+        Literal[
+            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
+        ]
+    ] = Field(min_length=1, max_length=7)
     idempotency_key: str = Field(min_length=8, max_length=160)
 
 
@@ -1375,7 +1395,7 @@ class ContentLibraryItemRead(BaseModel):
 
 class DistributionClientTargetResult(BaseModel):
     platform_key: str = Field(min_length=1, max_length=80)
-    request_status: Literal["draft_saved", "failed", "cancelled"]
+    request_status: Literal["draft_link_returned", "draft_saved", "failed", "cancelled"]
     draft_url: str | None = Field(default=None, max_length=1500)
     external_draft_id: str | None = Field(default=None, max_length=255)
     message: str | None = Field(default=None, max_length=2000)
@@ -1387,6 +1407,10 @@ class DistributionClientResults(BaseModel):
 
 class HumanPublicationRecord(BaseModel):
     public_url: str = Field(min_length=8, max_length=1500)
+
+
+class HumanDraftReadbackRecord(BaseModel):
+    confirmed_visible: Literal[True]
 
 
 class ActionRetestRead(BaseModel):

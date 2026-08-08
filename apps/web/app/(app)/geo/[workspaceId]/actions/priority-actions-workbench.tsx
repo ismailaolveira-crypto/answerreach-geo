@@ -52,7 +52,8 @@ type Props = {
 	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; progress: CleanroomAgentRunProgress | null }>;
 	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; reviewed_platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
-	recordDistributionResults: (runId: number, targets: Array<{ platform_key: string; request_status: "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>) => Promise<CleanroomDistributionRun>;
+	recordDistributionResults: (runId: number, targets: Array<{ platform_key: string; request_status: "draft_link_returned" | "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>) => Promise<CleanroomDistributionRun>;
+	confirmDraftReadback: (runId: number, targetId: number) => Promise<CleanroomDistributionRun>;
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
@@ -221,8 +222,13 @@ const agentStageLabels: Record<string, string> = {
 const platformOptions = [
 	{ key: "official_site", label: "春秋元泉官网", logo: "/icon.svg" },
 	{ key: "zhihu", label: "知乎", logo: "/brand/zhihu.svg" },
+	{ key: "juejin", label: "掘金", logo: "https://lf-web-assets.juejin.cn/obj/juejin-web/xitu_juejin_web/static/favicons/favicon-32x32.png" },
+	{ key: "csdn", label: "CSDN", logo: "https://g.csdnimg.cn/static/logo/favicon32.ico" },
+	{ key: "51cto", label: "51CTO", logo: "https://blog.51cto.com/favicon.ico" },
 	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
 ] as const;
+
+const syncablePlatformKeys = new Set(["zhihu", "juejin", "csdn", "51cto", "wechat"]);
 
 function runtimeVersionLabel(value?: string | null) {
 	if (!value) return "Codex 运行时已检测";
@@ -288,7 +294,7 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -325,7 +331,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [viewedPlatformKeys, setViewedPlatformKeys] = useState<string[]>([]);
 	const [reviewNote, setReviewNote] = useState("");
 	const [reviewFeedback, setReviewFeedback] = useState("");
-	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "wechat"]);
+	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "juejin"]);
 	const [websiteAudit, setWebsiteAudit] = useState(initialWebsiteAudit);
 	const [websiteAuditFeedback, setWebsiteAuditFeedback] = useState("");
 	const [isSaving, startSaving] = useTransition();
@@ -384,7 +390,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	);
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
-	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
+	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => syncablePlatformKeys.has(key));
 	const hasApprovedOfficialSiteDraft = approvedPlatformKeys.includes("official_site");
 	const resolvedClaimStatuses = ["source_linked", "verified", "human_confirmed", "explicitly_unverified"];
 	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !resolvedClaimStatuses.includes(claim.verification_status)) ?? [];
@@ -405,7 +411,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		&& websiteHandoffTarget.draft_readback_status === "not_required",
 	);
 	const savedDraftCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "draft_saved").length ?? 0;
+	const pendingDraftReadbackTargets = currentDistribution?.targets.filter((target) => (
+		target.draft_readback_status === "awaiting_human_confirmation"
+		&& Boolean(target.candidate_draft_url)
+	)) ?? [];
+	const pendingDraftReadbackCount = pendingDraftReadbackTargets.length;
 	const allDraftsSaved = Boolean(currentDistribution?.targets.length && savedDraftCount === currentDistribution.targets.length);
+	const platformKeysNeedingSync = syncableApprovedPlatformKeys.filter((platformKey) => {
+		const target = currentDistribution?.targets.find((item) => item.platform_key === platformKey);
+		return !target || !["draft_saved", "awaiting_human_confirmation"].includes(target.draft_readback_status);
+	});
 	const deliveryComplete = selected?.type === "website" ? websiteHandoffReady : allDraftsSaved;
 	const publicationReady = selected?.type === "website" ? websiteHandoffReady : allDraftsSaved;
 	const publishedTargetCount = currentDistribution?.targets.filter((target) => target.human_publish_status === "published" && target.public_url && target.publication_verification_status === "publicly_verified").length ?? 0;
@@ -428,8 +443,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const syncSelectionReady = ["syncing", "complete", "partial"].includes(syncPhase) || (syncPhase === "error" && selectedSyncAccounts.length > 0);
 	const syncMatchedPlatformCount = new Set(syncAccounts.map(articleSyncPlatformKey).filter(Boolean)).size;
 	const syncSavedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "draft_saved").length ?? 0;
+	const syncAwaitingConfirmationCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "awaiting_human_confirmation").length ?? 0;
 	const syncFailedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "failed").length ?? 0;
-	const syncPendingTargetCount = currentDistribution?.targets.filter((target) => !["draft_saved", "failed"].includes(target.draft_readback_status)).length ?? 0;
+	const syncPendingTargetCount = currentDistribution?.targets.filter((target) => !["draft_saved", "awaiting_human_confirmation", "failed"].includes(target.draft_readback_status)).length ?? 0;
 	const syncProgressSteps = [
 		{
 			label: "连接助手",
@@ -443,8 +459,18 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		},
 		{
 			label: "写入并回读",
-			hint: syncPhase === "complete" ? "结果已按草稿链接归档" : syncPhase === "partial" ? `${syncSavedTargetCount} 个已保存 · ${syncPendingTargetCount} 个待写入 · ${syncFailedTargetCount} 个失败` : "未回读不计为已保存",
-			state: syncPhase === "complete" ? "done" : syncPhase === "syncing" ? "current" : ["partial", "error"].includes(syncPhase) && selectedSyncAccounts.length > 0 ? "issue" : "waiting",
+			hint: syncPhase === "complete"
+				? "所有草稿已由你打开确认"
+				: syncPhase === "partial"
+					? `${syncAwaitingConfirmationCount} 个待打开确认 · ${syncSavedTargetCount} 个已确认 · ${syncPendingTargetCount} 个待写入 · ${syncFailedTargetCount} 个失败`
+					: "返回链接后仍需打开确认",
+			state: syncPhase === "complete"
+				? "done"
+				: syncPhase === "syncing" || syncAwaitingConfirmationCount > 0
+					? "current"
+					: ["partial", "error"].includes(syncPhase) && selectedSyncAccounts.length > 0
+						? "issue"
+						: "waiting",
 		},
 	] as const;
 	const visibleAgentProgress = agentProgress?.run.id === currentRunId ? agentProgress : null;
@@ -477,7 +503,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	useEffect(() => setWebsiteAudit(initialWebsiteAudit), [initialWebsiteAudit]);
 	useEffect(() => {
 		if (!selected) return;
-		setTargetPlatforms(selected.type === "website" ? ["official_site"] : ["zhihu", "wechat"]);
+		const recommended = selected.recommendedPlatforms.filter((key) => (
+			key !== "official_site" && platformOptions.some((platform) => platform.key === key)
+		));
+		setTargetPlatforms(selected.type === "website"
+			? ["official_site"]
+			: (recommended.length ? recommended.slice(0, 2) : ["zhihu", "juejin"]));
 	}, [selected?.id, selected?.type]);
 	useEffect(() => {
 		if (!reviewOpen && !syncOpen) return;
@@ -768,7 +799,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				});
 				setReviewPackages((current) => [result, ...current.filter((item) => item.asset.id !== result.asset.id)]);
 				setReviewFeedback(verdict === "approved"
-					? result.approved_platform_keys.some((key) => key === "zhihu" || key === "wechat")
+					? result.approved_platform_keys.some((key) => syncablePlatformKeys.has(key))
 						? "审核已记录，已通过的外部平台稿可以交给文章同步助手。"
 						: "官网稿审核已记录；请交给网站负责人部署，系统不会把审核当作已上线。"
 					: "修改要求已记录，本版本不会进入同步。");
@@ -812,15 +843,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			return;
 		}
 		if (allDraftsSaved) {
-			setPreviewMessage("已审核平台稿均有真实草稿回读，无需重复写入。");
+			setPreviewMessage("已审核平台稿均已打开并确认可见，无需重复写入。");
 			return;
 		}
-		const existingTargets = currentDistribution?.content_asset_id === currentReviewPackage.asset.id
-			? currentDistribution.targets
-			: [];
-		const syncablePlatformKeys = syncableApprovedPlatformKeys.filter((platformKey) => (
-			existingTargets.find((target) => target.platform_key === platformKey)?.draft_readback_status !== "draft_saved"
-		));
+		if (!platformKeysNeedingSync.length && pendingDraftReadbackCount) {
+			setPreviewMessage(`同步助手已返回 ${pendingDraftReadbackCount} 个草稿地址。请在「写入平台草稿」中逐个打开，确认正文可见后再继续。`);
+			return;
+		}
 		setSyncOpen(true);
 		setSyncPhase("discovering");
 		setSyncMessage("正在通过文章同步助手检查已登录平台…");
@@ -836,19 +865,22 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			const accounts = await discoverArticleSyncAccounts(api);
 			const platformAccounts = accounts.filter((account) => {
 				const platformKey = articleSyncPlatformKey(account);
-				return platformKey !== null && syncablePlatformKeys.includes(platformKey);
+				return platformKey !== null && platformKeysNeedingSync.includes(platformKey);
 			});
 			setSyncAccounts(platformAccounts);
 			if (!platformAccounts.length) {
 				setSyncPhase("error");
-				setSyncMessage("没有检测到与已审核稿匹配的登录平台。请先在 EgoLite 中登录知乎或微信公众号。");
+				const pendingLabels = [...platformKeysNeedingSync]
+					.map((key) => platformOptions.find((platform) => platform.key === key)?.label || key)
+					.join("、");
+				setSyncMessage(`没有检测到与已审核稿匹配的登录平台。请先在 EgoLite 中登录对应账号（${pendingLabels}）。`);
 				return;
 			}
 			setSyncPhase("confirm");
-			const preservedCount = syncableApprovedPlatformKeys.length - syncablePlatformKeys.length;
+			const preservedCount = syncableApprovedPlatformKeys.length - platformKeysNeedingSync.length;
 			const matchedPlatformCount = new Set(platformAccounts.map(articleSyncPlatformKey).filter(Boolean)).size;
 			setSyncMessage(matchedPlatformCount === 1
-				? preservedCount ? `已有 ${preservedCount} 个平台草稿完成回读，本次只需重试剩余平台。` : "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
+				? preservedCount ? `已有 ${preservedCount} 个平台无需重复写入（已确认或等待打开确认），本次只处理剩余平台。` : "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
 				: `已检测到 ${matchedPlatformCount} 个待写入平台、${platformAccounts.length} 个可用账号。选择目标后由你确认，系统不会自动发布。`);
 		} catch (error) {
 			setSyncPhase("error");
@@ -882,7 +914,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				const result = await syncVariant(api, account, variant, updateSyncAccount);
 				persisted = await recordDistributionResults(distribution.id, [{
 					platform_key: platformKey,
-					request_status: result.status === "done" && result.editResp?.draftLink ? "draft_saved" as const : "failed" as const,
+					request_status: result.status === "done" && result.editResp?.draftLink ? "draft_link_returned" as const : "failed" as const,
 					draft_url: result.editResp?.draftLink || null,
 					message: result.error || result.msg || null,
 				}]);
@@ -893,18 +925,20 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				if (index < accountVariants.length - 1) await new Promise<void>((resolve) => window.setTimeout(resolve, 200));
 			}
 			const saved = persisted.targets.filter((target) => target.draft_readback_status === "draft_saved").length;
+			const awaitingConfirmation = persisted.targets.filter((target) => target.draft_readback_status === "awaiting_human_confirmation").length;
 			const failed = persisted.targets.filter((target) => target.draft_readback_status === "failed").length;
-			const pending = persisted.targets.length - saved - failed;
+			const pending = persisted.targets.length - saved - awaitingConfirmation - failed;
 			if (saved === persisted.targets.length) {
 				setSyncPhase("complete");
-				setSyncMessage(`${saved} 个平台草稿均已回读并归档；最终发布仍由你确认。`);
-			} else if (saved > 0 || failed > 0) {
+				setSyncMessage(`${saved} 个平台草稿均已打开并由你确认可见；最终发布仍由你确认。`);
+			} else if (awaitingConfirmation > 0 || saved > 0 || failed > 0) {
 				setSyncPhase("partial");
 				const remaining = [
+					awaitingConfirmation ? `${awaitingConfirmation} 个草稿地址等待你打开确认` : "",
 					pending ? `${pending} 个平台等待登录或写入` : "",
 					failed ? `${failed} 个平台写入失败` : "",
 				].filter(Boolean).join("，");
-				setSyncMessage(`${saved} 个平台草稿已归档，${remaining}。成功结果已保留，重新检测只处理未完成平台。`);
+				setSyncMessage(`${saved} 个平台草稿已确认，${remaining}。草稿链接本身不等于草稿已保存。`);
 			} else {
 				setSyncPhase("error");
 				setSyncMessage("没有平台返回可核验的草稿链接，本次不计为已保存。请检查登录状态后重试。");
@@ -914,6 +948,29 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			setSyncPhase("error");
 			setSyncMessage(error instanceof Error ? error.message : "文章同步助手写入失败。");
 		}
+	}
+
+	function confirmDraftTarget(targetId: number) {
+		if (!currentDistribution) return;
+		const target = currentDistribution.targets.find((item) => item.id === targetId);
+		const platformLabel = platformOptions.find((item) => item.key === target?.platform_key)?.label || target?.platform_key || "平台";
+		startSaving(async () => {
+			try {
+				const result = await confirmDraftReadback(currentDistribution.id, targetId);
+				setDistributionRuns((current) => [result, ...current.filter((item) => item.id !== result.id)]);
+				const saved = result.targets.filter((item) => item.draft_readback_status === "draft_saved").length;
+				const awaiting = result.targets.filter((item) => item.draft_readback_status === "awaiting_human_confirmation").length;
+				const complete = saved === result.targets.length;
+				setSyncPhase(complete ? "complete" : "partial");
+				setSyncMessage(complete
+					? `${saved} 个平台草稿均已由你打开确认，现在可以进入人工发布。`
+					: `${platformLabel} 草稿已确认可见；还有 ${awaiting} 个草稿等待确认。`);
+				setPreviewMessage(`${platformLabel} 草稿已人工确认可见。`);
+				router.refresh();
+			} catch (error) {
+				setPreviewMessage(error instanceof Error ? error.message : "草稿回读确认失败。");
+			}
+		});
 	}
 
 	function savePublication(targetId: number) {
@@ -1097,7 +1154,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 												: "审阅内容与事实"}</button>}
 							</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}
 						</ActionStage>
-						<ActionStage index={4} label={selected.type === "website" ? "交付官网稿" : "写入平台草稿"} state={deliveryComplete ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? <div className="pa-stage-card"><b>{websiteHandoffReady ? "官网交付记录已建立" : "官网稿已通过审核，可以交付"}</b><p>{websiteHandoffReady ? "稿件等待网站负责人部署。只有回填同域公开 URL 后，系统才会记录为已上线并开放复测。" : "先在内容库查看或导出已审核稿，再建立交付记录。建立记录不等于官网已经上线。"}</p><Link href={`/geo/${workspaceId}/content`}>查看并导出官网稿</Link>{!websiteHandoffReady ? <button type="button" onClick={beginWebsiteHandoff} disabled={isSaving}>{isSaving ? "正在建立…" : "建立官网交付记录"}</button> : null}{publicationMessage && !publicationReady ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved || !syncableApprovedPlatformKeys.length}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">{selected.type === "website" ? "只有官网稿通过人工审核后，才能建立交付记录；当前不会计为已上线。" : "只允许写入草稿，最终发布仍由人工确认。"}</p>}</ActionStage>
+						<ActionStage index={4} label={selected.type === "website" ? "交付官网稿" : "写入平台草稿"} state={deliveryComplete ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>
+							{approvedPlatformKeys.length ? hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? <div className="pa-stage-card">
+								<b>{websiteHandoffReady ? "官网交付记录已建立" : "官网稿已通过审核，可以交付"}</b>
+								<p>{websiteHandoffReady ? "稿件等待网站负责人部署。只有回填同域公开 URL 后，系统才会记录为已上线并开放复测。" : "先在内容库查看或导出已审核稿，再建立交付记录。建立记录不等于官网已经上线。"}</p>
+								<Link href={`/geo/${workspaceId}/content`}>查看并导出官网稿</Link>
+								{!websiteHandoffReady ? <button type="button" onClick={beginWebsiteHandoff} disabled={isSaving}>{isSaving ? "正在建立…" : "建立官网交付记录"}</button> : null}
+								{publicationMessage && !publicationReady ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}
+							</div> : <div className="pa-stage-card">
+								<b>{allDraftsSaved ? `${savedDraftCount} 个草稿已人工确认` : pendingDraftReadbackCount ? `${pendingDraftReadbackCount} 个草稿等待你打开确认` : "已通过的平台稿可写入"}</b>
+								<p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount} 个已确认，${pendingDraftReadbackCount} 个待打开确认。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p>
+								{pendingDraftReadbackTargets.length ? <div className="pa-draft-readback-list" aria-label="等待人工确认的草稿">{pendingDraftReadbackTargets.map((target) => {
+									const platform = platformOptions.find((item) => item.key === target.platform_key);
+									return <div key={target.id}>{platform ? <img src={platform.logo} alt="" /> : null}<span><b>{platform?.label || target.platform_key}</b><small>链接已返回，尚未计为草稿已保存</small></span><a href={target.candidate_draft_url || "#"} target="_blank" rel="noreferrer">打开草稿</a><button type="button" onClick={() => confirmDraftTarget(target.id)} disabled={isSaving}>{isSaving ? "正在确认…" : "我已打开并确认"}</button></div>;
+								})}</div> : null}
+								<button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved || !syncableApprovedPlatformKeys.length || !platformKeysNeedingSync.length}>{allDraftsSaved ? "草稿已人工确认" : !platformKeysNeedingSync.length && pendingDraftReadbackCount ? "等待确认草稿" : "打开文章同步助手"}</button>
+							</div> : <p className="pa-stage-note">{selected.type === "website" ? "只有官网稿通过人工审核后，才能建立交付记录；当前不会计为已上线。" : "只允许写入草稿，最终发布仍由人工确认。"}</p>}
+						</ActionStage>
 						<ActionStage index={5} label={selected.type === "website" ? "人工上线" : "人工发布"} state={allTargetsPublished ? "done" : publicationReady ? "active" : "idle"}>
 							{publicationReady && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
 								const platform = platformOptions.find((item) => item.key === target.platform_key);
@@ -1121,11 +1194,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					<div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工判断项分开记录</p></div>
 					<div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div>
 					<div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{approvedPlatformKeys.length || (currentReviewPackage ? 1 : 0)}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : reviewNeedsRevision || draftMissesAvailableBrandFacts ? "当前版本需重新生成，不能进入交付" : currentReviewPackage ? `${currentReviewPackage.pending_claim_count} 条主张待人工判断` : "等待当前行动生成可审核内容"}</p></div>
-					<div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : savedDraftCount}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div>
+					<div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : savedDraftCount}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? pendingDraftReadbackCount ? `${savedDraftCount} 个已确认 · ${pendingDraftReadbackCount} 个待打开确认` : `${savedDraftCount}/${currentDistribution.targets.length} 个目标已人工确认草稿可见` : "等待外部平台稿审核通过后人工触发"}</p></div>
 					<div className={publicationReady && !allTargetsPublished ? "is-current" : ""}><b>{selected.type === "website" ? "人工上线" : "人工发布"}</b><span>{publishedTargetCount}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个目标已记录公开 URL` : selected.type === "website" ? "上线始终由网站负责人完成" : "发布始终由人工在平台完成"}</p></div>
 					<div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{currentRetest?.status === "completed" ? 1 : 0}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "上线或发布完成后复用原问题与模型"}</p></div>
 				</div>
-				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、交付、上线/发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={selected.type === "website" ? beginWebsiteHandoff : openSyncAssistant} disabled={selected.type === "website" ? !hasApprovedOfficialSiteDraft || websiteHandoffReady || isSaving : !syncableApprovedPlatformKeys.length || allDraftsSaved} title={selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "请先通过官网稿人工审核" : websiteHandoffReady ? "官网交付记录已建立，等待人工上线" : "建立官网人工交付记录" : allDraftsSaved ? "已审核平台稿均已完成草稿回读" : syncableApprovedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个外部平台稿"}>{selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "等待官网稿审核" : websiteHandoffReady ? "等待人工上线" : "建立官网交付" : allDraftsSaved ? "草稿已写入" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
+				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、交付、上线/发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={selected.type === "website" ? beginWebsiteHandoff : openSyncAssistant} disabled={selected.type === "website" ? !hasApprovedOfficialSiteDraft || websiteHandoffReady || isSaving : !syncableApprovedPlatformKeys.length || allDraftsSaved || !platformKeysNeedingSync.length} title={selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "请先通过官网稿人工审核" : websiteHandoffReady ? "官网交付记录已建立，等待人工上线" : "建立官网人工交付记录" : allDraftsSaved ? "已审核平台稿均已人工确认可见" : pendingDraftReadbackCount && !platformKeysNeedingSync.length ? "请在本次行动中打开草稿并确认" : syncableApprovedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个外部平台稿"}>{selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "等待官网稿审核" : websiteHandoffReady ? "等待人工上线" : "建立官网交付" : allDraftsSaved ? "草稿已确认" : pendingDraftReadbackCount && !platformKeysNeedingSync.length ? "等待确认草稿" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>
@@ -1186,10 +1259,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						const checked = selectedSyncAccounts.includes(accountKey);
 						const platformKey = articleSyncPlatformKey(account);
 						const platform = platformOptions.find((item) => item.key === platformKey);
-						return <label key={accountKey} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleSyncAccount(account)} />{platform ? <img src={platform.logo} alt={`${platform.label} 官方标志`} /> : null}<span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿已返回并等待回读归档" : account.status === "failed" ? (account.error || "写入失败") : account.msg || (account.uid ? `账号 ${account.uid}` : platform?.label || account.title)}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
+						return <label key={accountKey} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleSyncAccount(account)} />{platform ? <img src={platform.logo} alt={`${platform.label} 官方标志`} /> : null}<span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿链接已返回，还需你打开确认正文可见" : account.status === "failed" ? (account.error || "写入失败") : account.msg || (account.uid ? `账号 ${account.uid}` : platform?.label || account.title)}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
 					})}</div> : null}
 				</div>
-				<footer><span>各平台按顺序写入并立即回读；成功结果会逐个平台归档，确认过程不会点击发布。</span><div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"}>{["complete", "partial"].includes(syncPhase) ? "关闭" : "取消"}</button>{syncPhase === "confirm" ? <button className="is-primary" type="button" onClick={confirmSync} disabled={!selectedSyncAccounts.length}>确认写入 {selectedSyncAccounts.length} 个平台</button> : null}{["error", "partial"].includes(syncPhase) ? <button className="is-primary" type="button" onClick={openSyncAssistant}>重新检测平台</button> : null}</div></footer>
+				<footer><span>各平台按顺序写入。链接返回后仍需你打开草稿确认；全程不会点击发布。</span><div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"}>{["complete", "partial"].includes(syncPhase) ? "关闭" : "取消"}</button>{syncPhase === "confirm" ? <button className="is-primary" type="button" onClick={confirmSync} disabled={!selectedSyncAccounts.length}>确认写入 {selectedSyncAccounts.length} 个平台</button> : null}{["error", "partial"].includes(syncPhase) && platformKeysNeedingSync.length ? <button className="is-primary" type="button" onClick={openSyncAssistant}>重新检测平台</button> : null}</div></footer>
 			</section>
 		</div> : null}
 		</>}

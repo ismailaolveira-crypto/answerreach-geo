@@ -26,9 +26,14 @@ export function getArticleSyncPageApi() {
 	return (window as Window & { $syncer?: ArticleSyncPageApi }).$syncer ?? null;
 }
 
-export function articleSyncPlatformKey(account: ArticleSyncAccount): "zhihu" | "wechat" | null {
+export type ArticleSyncPlatformKey = "zhihu" | "juejin" | "csdn" | "51cto" | "wechat";
+
+export function articleSyncPlatformKey(account: ArticleSyncAccount): ArticleSyncPlatformKey | null {
 	const value = `${account.type} ${account.title} ${account.displayName || ""}`.toLowerCase();
 	if (value.includes("zhihu") || value.includes("知乎")) return "zhihu";
+	if (value.includes("juejin") || value.includes("掘金")) return "juejin";
+	if (value.includes("csdn")) return "csdn";
+	if (value.includes("51cto") || value.includes("cto51")) return "51cto";
 	if (value.includes("wechat") || value.includes("weixin") || value.includes("微信") || value.includes("公众号")) return "wechat";
 	return null;
 }

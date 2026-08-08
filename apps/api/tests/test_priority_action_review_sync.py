@@ -226,8 +226,6 @@ def test_review_gate_and_browser_client_draft_readback(
     package = review_client.get("/api/v1/workspaces/1/content-assets/1/review-package")
     assert package.status_code == 200
     assert package.json()["pending_claim_count"] == 1
-
-
     blocked_review = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
         json={
@@ -371,6 +369,202 @@ def test_review_gate_and_browser_client_draft_readback(
     assert library.json()[0]["saved_draft_count"] == 1
     assert library.json()[0]["draft_targets"][0]["draft_url"].startswith("https://www.zhihu.com/")
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
+
+
+def test_browser_draft_link_requires_explicit_human_readback_confirmation(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
+    )
+    assert approved.status_code == 201
+    created = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu"],
+            "idempotency_key": "asset-1-human-draft-readback",
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["id"]
+    target_id = created.json()["targets"][0]["id"]
+
+    wrong_domain = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "zhihu",
+                    "request_status": "draft_link_returned",
+                    "draft_url": "https://example.com/drafts/not-zhihu",
+                }
+            ]
+        },
+    )
+    assert wrong_domain.status_code == 422
+
+    returned = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
+        json={
+            "targets": [
+                {
+                    "platform_key": "zhihu",
+                    "request_status": "draft_link_returned",
+                    "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/human-check",
+                }
+            ]
+        },
+    )
+    assert returned.status_code == 200
+    payload = returned.json()
+    assert payload["status"] == "pending"
+    assert payload["stage"] == "awaiting_readback"
+    target = payload["targets"][0]
+    assert target["request_status"] == "draft_link_returned"
+    assert target["draft_readback_status"] == "awaiting_human_confirmation"
+    assert target["candidate_draft_url"].endswith("/human-check")
+    assert target["draft_url"] is None
+    assert target["human_publish_status"] == "not_ready"
+    assert target["final_action_clicked"] is False
+
+    premature_publication = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
+    )
+    assert premature_publication.status_code == 409
+    rejected_assertion = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback",
+        json={"confirmed_visible": False},
+    )
+    assert rejected_assertion.status_code == 422
+
+    confirmed = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback",
+        json={"confirmed_visible": True},
+    )
+    assert confirmed.status_code == 200
+    payload = confirmed.json()
+    assert payload["status"] == "draft_saved"
+    assert payload["stage"] == "draft_saved"
+    target = payload["targets"][0]
+    assert target["request_status"] == "draft_saved"
+    assert target["draft_readback_status"] == "draft_saved"
+    assert target["draft_url"].endswith("/human-check")
+    assert target["readback_artifact_uri"].startswith("human://draft-readback/")
+    assert target["human_publish_status"] == "awaiting_publish"
+    assert target["final_action_clicked"] is False
+
+    repeated = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback",
+        json={"confirmed_visible": True},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["targets"][0]["draft_readback_status"] == "draft_saved"
+
+
+def test_four_technical_platforms_create_distinct_reviewable_drafts(
+    review_client: TestClient,
+) -> None:
+    created = review_client.post(
+        "/api/v1/workspaces/1/actions/1/briefs/1/assets/1/variants",
+        json={"platform_keys": ["zhihu", "juejin", "csdn", "51cto"]},
+    )
+    assert created.status_code == 201
+    variants = {item["platform_key"]: item for item in created.json()}
+    assert set(variants) == {"zhihu", "juejin", "csdn", "51cto"}
+    technical_labels = {
+        variants[key]["adaptation_contract"]["label"]
+        for key in {"juejin", "csdn", "51cto"}
+    }
+    assert technical_labels == {
+        "稀土掘金",
+        "CSDN",
+        "51CTO",
+    }
+    assert len({variants[key]["body_markdown"] for key in variants}) == 4
+
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu", "juejin", "csdn", "51cto"],
+            "reviewed_platform_keys": ["zhihu", "juejin", "csdn", "51cto"],
+        },
+    )
+    assert approved.status_code == 201
+    assert set(approved.json()["approved_platform_keys"]) == {
+        "zhihu",
+        "juejin",
+        "csdn",
+        "51cto",
+    }
+
+    distribution = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu", "juejin", "csdn", "51cto"],
+            "idempotency_key": "asset-1-four-technical-platforms",
+        },
+    )
+    assert distribution.status_code == 201
+    assert distribution.json()["stage"] == "ready_for_client"
+    assert {target["platform_key"] for target in distribution.json()["targets"]} == {
+        "zhihu",
+        "juejin",
+        "csdn",
+        "51cto",
+    }
+    assert all(target["final_action_clicked"] is False for target in distribution.json()["targets"])
+
+
+@pytest.mark.parametrize(
+    ("platform_key", "public_url"),
+    [
+        ("zhihu", "https://zhuanlan.zhihu.com/p/123456"),
+        ("juejin", "https://juejin.cn/post/123456"),
+        ("csdn", "https://blog.csdn.net/example/article/details/123456"),
+        ("51cto", "https://blog.51cto.com/example/123456"),
+    ],
+)
+def test_four_technical_platform_publication_urls_are_scoped(
+    platform_key: str,
+    public_url: str,
+) -> None:
+    workspace = SimpleNamespace(website_url="https://brand.example.com/")
+    assert routes._validated_publication_url(workspace, platform_key, public_url) == public_url
+
+
+def test_agent_result_requires_rule_sources_and_variants_for_every_platform() -> None:
+    run = SimpleNamespace(selected_platforms=["zhihu", "juejin"])
+    incomplete = {
+        "platform_research": [
+            {
+                "platform_key": "zhihu",
+                "tone": "克制",
+                "restrictions": ["禁止硬广"],
+                "source_urls": ["https://www.zhihu.com/term/zhihu-terms"],
+            }
+        ],
+        "variants": [
+            {
+                "platform_key": "zhihu",
+                "title": "标题",
+                "summary": "摘要",
+                "body_markdown": "正文",
+            }
+        ],
+    }
+    with pytest.raises(ValueError, match="platform research is incomplete"):
+        agent_orchestration._validate_agent_result(run, incomplete)
 
 
 def test_action_workbench_state_returns_persisted_flow_without_empty_retest_errors(

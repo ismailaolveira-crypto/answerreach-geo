@@ -96,6 +96,7 @@ from app.v1.schemas import (
     DistributionClientResults,
     DistributionRunRead,
     HumanPublicationRecord,
+    HumanDraftReadbackRecord,
     PlatformVariantCreate,
     PlatformVariantRead,
     DecisionMapRead,
@@ -5079,16 +5080,38 @@ def record_distribution_client_results(
             raise HTTPException(status_code=422, detail=f"Platform is not part of this sync run: {result.platform_key}")
         if target.adapter_version == "manual-website.v1":
             raise HTTPException(status_code=409, detail="官网人工交付不接受文章同步助手草稿结果")
-        if result.request_status == "draft_saved":
+        if result.request_status == "draft_link_returned":
+            if not result.draft_url:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{result.platform_key} requires the returned draft URL",
+                )
+            candidate_draft_url = _validated_draft_url(result.platform_key, result.draft_url)
+            target.request_status = "draft_link_returned"
+            target.draft_readback_status = "awaiting_human_confirmation"
+            target.candidate_draft_url = candidate_draft_url
+            target.draft_url = None
+            target.external_draft_id = result.external_draft_id
+            target.waiting_human_reason = "同步助手已返回草稿地址；请打开并确认草稿真实可见。"
+            target.blocked_reason = None
+            target.last_error_code = None
+            target.human_publish_status = "not_ready"
+            target.publication_verification_status = "not_checked"
+        elif result.request_status == "draft_saved":
             if not result.draft_url and not result.external_draft_id:
                 raise HTTPException(
                     status_code=422,
                     detail=f"{result.platform_key} requires a draft URL or external draft ID",
                 )
+            verified_draft_url = (
+                _validated_draft_url(result.platform_key, result.draft_url)
+                if result.draft_url
+                else None
+            )
             target.request_status = "draft_saved"
             target.draft_readback_status = "draft_saved"
-            target.candidate_draft_url = result.draft_url
-            target.draft_url = result.draft_url
+            target.candidate_draft_url = verified_draft_url
+            target.draft_url = verified_draft_url
             target.external_draft_id = result.external_draft_id
             target.waiting_human_reason = "平台草稿已回读；最终发布仍等待人工确认。"
             target.blocked_reason = None
@@ -5099,17 +5122,26 @@ def record_distribution_client_results(
         elif result.request_status == "failed":
             target.request_status = "failed"
             target.draft_readback_status = "failed"
+            target.candidate_draft_url = None
+            target.draft_url = None
+            target.external_draft_id = None
             target.blocked_reason = (result.message or "文章同步助手未能保存草稿")[:2000]
             target.last_error_code = "client_sync_failed"
             target.waiting_human_reason = None
         else:
             target.request_status = "cancelled"
             target.draft_readback_status = "not_started"
+            target.candidate_draft_url = None
+            target.draft_url = None
+            target.external_draft_id = None
             target.waiting_human_reason = result.message or "用户取消了本次平台草稿写入。"
         target.final_action_clicked = False
 
     saved_count = sum(target.draft_readback_status == "draft_saved" for target in targets)
     failed_count = sum(target.request_status == "failed" for target in targets)
+    awaiting_confirmation_count = sum(
+        target.draft_readback_status == "awaiting_human_confirmation" for target in targets
+    )
     pending_count = len(targets) - saved_count - failed_count
     if saved_count == len(targets):
         run.stage = "draft_saved"
@@ -5117,6 +5149,9 @@ def record_distribution_client_results(
     elif failed_count and not saved_count and pending_count == 0:
         run.stage = "needs_attention"
         run.status = "failed"
+    elif awaiting_confirmation_count:
+        run.stage = "awaiting_readback"
+        run.status = "pending"
     else:
         run.stage = "needs_attention" if failed_count else "awaiting_client_results"
         run.status = "partial" if saved_count or failed_count else "pending"
@@ -5124,7 +5159,7 @@ def record_distribution_client_results(
     if action:
         # A saved draft is not a published result and never advances the action
         # to verified. Verification requires a later real re-observation.
-        action.stage = "awaiting_readback"
+        action.stage = "awaiting_publication" if saved_count == len(targets) else "awaiting_readback"
         action.blocked_reason = None if not failed_count else "部分平台草稿写入失败，请核对逐平台结果。"
     db.add(
         GeoActionEvent(
@@ -5139,7 +5174,106 @@ def record_distribution_client_results(
                 "distribution_run_id": run.id,
                 "saved_count": saved_count,
                 "failed_count": failed_count,
+                "awaiting_confirmation_count": awaiting_confirmation_count,
                 "pending_count": pending_count,
+                "final_action_clicked": False,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(run)
+    return _distribution_read(db, run)
+
+
+def _validated_draft_url(platform_key: str, value: str) -> str:
+    url = value.strip()
+    parsed = urlsplit(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme != "https" or not host or parsed.username or parsed.password:
+        raise HTTPException(status_code=422, detail="草稿地址必须是完整的 HTTPS URL")
+
+    expected_domains = {
+        "zhihu": "zhihu.com",
+        "juejin": "juejin.cn",
+        "csdn": "csdn.net",
+        "51cto": "51cto.com",
+        "wechat": "mp.weixin.qq.com",
+    }
+    expected = expected_domains.get(platform_key)
+    valid = expected is not None and (host == expected or host.endswith(f".{expected}"))
+    if not valid or not parsed.path or parsed.path == "/":
+        raise HTTPException(status_code=422, detail="同步助手返回的地址不是当前平台草稿页")
+    return parsed.geturl()
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback",
+    response_model=DistributionRunRead,
+)
+def confirm_human_draft_readback(
+    workspace_id: int,
+    run_id: int,
+    target_id: int,
+    payload: HumanDraftReadbackRecord,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id)
+        )
+    )
+    target = next((item for item in targets if item.id == target_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Distribution target not found")
+    if target.adapter_version == "manual-website.v1":
+        raise HTTPException(status_code=409, detail="官网人工交付不使用平台草稿回读")
+    if target.draft_readback_status == "draft_saved":
+        return _distribution_read(db, run)
+    if (
+        target.request_status != "draft_link_returned"
+        or target.draft_readback_status != "awaiting_human_confirmation"
+        or not target.candidate_draft_url
+    ):
+        raise HTTPException(status_code=409, detail="当前目标没有等待确认的草稿地址")
+
+    draft_url = _validated_draft_url(target.platform_key, target.candidate_draft_url)
+    previous_stage = run.stage
+    target.draft_url = draft_url
+    target.request_status = "draft_saved"
+    target.draft_readback_status = "draft_saved"
+    target.readback_artifact_uri = f"human://draft-readback/{run.id}/{target.id}"
+    target.waiting_human_reason = None
+    target.blocked_reason = None
+    target.last_error_code = None
+    target.human_publish_status = "awaiting_publish"
+    target.publication_verification_status = "not_checked"
+    target.final_action_clicked = False
+    all_saved = all(item.draft_readback_status == "draft_saved" for item in targets)
+    run.stage = "draft_saved" if all_saved else "awaiting_readback"
+    run.status = "draft_saved" if all_saved else "pending"
+    action = db.get(GeoOptimizationAction, run.action_id) if run.action_id else None
+    if action:
+        action.stage = "awaiting_publication" if all_saved else "awaiting_readback"
+        action.blocked_reason = None
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=run.action_id,
+            event_type="draft_readback_human_confirmed",
+            from_stage=previous_stage,
+            to_stage=run.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "distribution_run_id": run.id,
+                "target_id": target.id,
+                "platform_key": target.platform_key,
+                "confirmed_visible": payload.confirmed_visible,
                 "final_action_clicked": False,
             },
         )
@@ -5165,6 +5299,15 @@ def _validated_publication_url(
     if platform_key == "zhihu":
         valid = host_matches("zhihu.com")
         expected_label = "知乎"
+    elif platform_key == "juejin":
+        valid = host_matches("juejin.cn")
+        expected_label = "稀土掘金"
+    elif platform_key == "csdn":
+        valid = host_matches("csdn.net")
+        expected_label = "CSDN"
+    elif platform_key == "51cto":
+        valid = host_matches("51cto.com")
+        expected_label = "51CTO"
     elif platform_key == "wechat":
         valid = host == "mp.weixin.qq.com"
         expected_label = "微信公众号"
@@ -5653,9 +5796,14 @@ def test_agent_runtime(
 def _default_agent_platforms(db: Session, action: GeoOptimizationAction) -> list[str]:
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
     requested = list(opportunity.recommended_platforms or []) if opportunity else []
-    supported = [key for key in requested if key in {"zhihu", "wechat", "official_site", "xiaohongshu"}]
+    supported = [
+        key
+        for key in requested
+        if key
+        in {"zhihu", "juejin", "csdn", "51cto", "wechat", "official_site", "xiaohongshu"}
+    ]
     preferred = [key for key in supported if key != "official_site"]
-    return (preferred or supported or ["zhihu", "wechat"])[:2]
+    return (preferred or supported or ["zhihu", "juejin"])[:2]
 
 
 def _website_requires_sourced_brand_facts(opportunity: GeoActionOpportunity | None) -> bool:

@@ -5,6 +5,7 @@ import {
 	articleSyncPlatformKey,
 	discoverArticleSyncAccounts,
 	getArticleSyncPageApi,
+	type ArticleSyncPlatformKey,
 } from "@/lib/article-sync-page-bridge";
 import type { AgentRuntime, WorkspaceIntegrationSettings } from "@/lib/cleanroom-v1-api";
 import { runAgentRuntimeTest, runWorkspaceIntegrationTest, saveWorkspaceIntegrations } from "./actions";
@@ -12,12 +13,16 @@ import styles from "./settings.module.css";
 
 type Feedback = { kind: "success" | "error" | "idle"; message?: string };
 type PageSyncState = "unchecked" | "ready" | "missing" | "no_accounts" | "error";
-type PageSyncPlatform = "zhihu" | "wechat";
+type PageSyncPlatform = ArticleSyncPlatformKey;
 
 const pageSyncPlatformMeta: Record<PageSyncPlatform, { label: string; logo: string }> = {
 	zhihu: { label: "知乎", logo: "/brand/zhihu.svg" },
+	juejin: { label: "掘金", logo: "https://lf-web-assets.juejin.cn/obj/juejin-web/xitu_juejin_web/static/favicons/favicon-32x32.png" },
+	csdn: { label: "CSDN", logo: "https://g.csdnimg.cn/static/logo/favicon32.ico" },
+	"51cto": { label: "51CTO", logo: "https://blog.51cto.com/favicon.ico" },
 	wechat: { label: "微信公众号", logo: "/brand/wechat.svg" },
 };
+const pageSyncPlatformOrder: PageSyncPlatform[] = ["zhihu", "juejin", "csdn", "51cto", "wechat"];
 
 function mcpStatusLabel(configured: boolean) {
 	return configured ? "已配置（密钥不回显）" : "未配置";
@@ -143,7 +148,7 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings, initialR
 			<div className={styles.integrationBlock}>
 				<div className={styles.integrationBlockTitle}><div><b>EgoLite 文章同步助手</b><small>{pageSyncSummary}</small></div><i className={deliveryReady ? styles.dotReady : styles.dotPending} /></div>
 				<dl className={styles.runtimeFacts}><div><dt>触发方式</dt><dd>审核后网页确认</dd></div><div><dt>写入范围</dt><dd>仅平台草稿</dd></div><div><dt>最终发布</dt><dd>始终由人工完成</dd></div></dl>
-				{pageSyncPlatforms.length ? <div className={styles.syncPlatformList}>{pageSyncPlatforms.map((platform) => <span key={platform}><img src={pageSyncPlatformMeta[platform].logo} alt={`${pageSyncPlatformMeta[platform].label} 官方标志`} /><b>{pageSyncPlatformMeta[platform].label}</b><small>账号可用</small></span>)}</div> : null}
+				<div className={styles.syncPlatformList} aria-label="文章同步助手支持平台">{pageSyncPlatformOrder.map((platform) => { const available = pageSyncPlatforms.includes(platform); return <span key={platform} className={available ? styles.syncPlatformAvailable : ""}><img src={pageSyncPlatformMeta[platform].logo} alt={`${pageSyncPlatformMeta[platform].label} 官方标志`} /><b>{pageSyncPlatformMeta[platform].label}</b><small>{available ? "账号可用" : "支持检测"}</small></span>; })}</div>
 				<p className={styles.runtimeNote}>检测的是当前浏览器页面里的真实扩展和登录账号；保存 MCP 路径并不能代表 EgoLite 已连接。</p>
 				<button type="button" className={styles.testButton} onClick={testPageSync} disabled={testing !== null || saving}>{testing === "article_sync_page" ? "正在读取登录账号…" : pageSyncState === "ready" ? "重新检测同步助手" : "检测当前页面"}</button>
 			</div>
