@@ -53,9 +53,20 @@ function formatDate(value: string) {
 	}).format(new Date(value));
 }
 
+type ExportFeedback = "copied" | "copy_error" | "downloaded";
+
+function DocumentActions({ feedback, title, onCopy, onDownload }: { feedback?: ExportFeedback; title: string; onCopy: () => void; onDownload: () => void }) {
+	return <div className={styles.documentActions}>
+		<button type="button" onClick={onCopy}>{feedback === "copied" ? "已复制 Markdown" : feedback === "copy_error" ? "复制失败，请重试" : "复制 Markdown"}</button>
+		<button type="button" onClick={onDownload}>{feedback === "downloaded" ? "已下载 .md" : "下载 .md"}</button>
+		<span className={styles.srOnly} role="status" aria-live="polite">{feedback === "copied" ? `${title} 已复制` : feedback === "copy_error" ? `${title} 复制失败` : feedback === "downloaded" ? `${title} 已开始下载` : ""}</span>
+	</div>;
+}
+
 export function ContentLibrary({ workspaceId, items }: { workspaceId: string; items: CleanroomContentLibraryItem[] }) {
 	const [status, setStatus] = useState<(typeof FILTERS)[number]["key"]>("all");
 	const [platform, setPlatform] = useState("all");
+	const [exportFeedback, setExportFeedback] = useState<Record<string, ExportFeedback>>({});
 	const platforms = useMemo(() => [...new Set(items.flatMap((item) => item.variants.map((variant) => variant.platform_key)))], [items]);
 	const visibleItems = useMemo(() => items.filter((item) => {
 		const state = itemState(item);
@@ -63,6 +74,46 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 		const matchesPlatform = platform === "all" || item.variants.some((variant) => variant.platform_key === platform);
 		return matchesStatus && matchesPlatform;
 	}), [items, platform, status]);
+
+	function documentMarkdown(title: string, bodyMarkdown: string) {
+		const body = bodyMarkdown.trim();
+		return `${body.startsWith("# ") ? "" : `# ${title}\n\n`}${body}\n`;
+	}
+
+	async function copyMarkdown(key: string, title: string, bodyMarkdown: string) {
+		const markdown = documentMarkdown(title, bodyMarkdown);
+		try {
+			if (navigator.clipboard?.writeText) {
+				await navigator.clipboard.writeText(markdown);
+			} else {
+				const field = document.createElement("textarea");
+				field.value = markdown;
+				field.style.position = "fixed";
+				field.style.opacity = "0";
+				document.body.appendChild(field);
+				field.select();
+				const copied = document.execCommand("copy");
+				field.remove();
+				if (!copied) throw new Error("copy failed");
+			}
+			setExportFeedback((current) => ({ ...current, [key]: "copied" }));
+		} catch {
+			setExportFeedback((current) => ({ ...current, [key]: "copy_error" }));
+		}
+	}
+
+	function downloadMarkdown(key: string, fileName: string, title: string, bodyMarkdown: string) {
+		const safeName = fileName.replace(/[\\/:*?"<>|]/g, "-").replace(/\s+/g, "-").slice(0, 80) || "content-draft";
+		const url = URL.createObjectURL(new Blob([documentMarkdown(title, bodyMarkdown)], { type: "text/markdown;charset=utf-8" }));
+		const link = document.createElement("a");
+		link.href = url;
+		link.download = `${safeName}.md`;
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+		window.setTimeout(() => URL.revokeObjectURL(url), 0);
+		setExportFeedback((current) => ({ ...current, [key]: "downloaded" }));
+	}
 
 	if (!items.length) return <section className={styles.empty}>
 		<div aria-hidden="true">◇</div><h2>还没有内容资产</h2><p>从优化行动选择一个真实机会，完成 Agent 调研后，草稿会自动出现在这里。</p><Link href={`/geo/${workspaceId}/actions`}>去优化行动</Link>
@@ -97,8 +148,15 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 					<details className={styles.details}>
 						<summary>查看正文与 {item.variants.length} 个平台版本<span aria-hidden="true">›</span></summary>
 						<div className={styles.documents}>
-							<section><small>母稿 · v{item.asset.version}</small><h3>{item.asset.title}</h3><div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(item.asset.body_markdown) }} /></section>
-							{item.variants.map((variant) => <section key={variant.id}><small>{PLATFORM_META[variant.platform_key]?.label || variant.platform_key} · {variant.policy_version}</small><h3>{variant.title}</h3><div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(variant.body_markdown) }} /></section>)}
+							{state !== "superseded" ? <p className={styles.exportNote}>复制或下载只用于人工审核与交付，不会改变审核、草稿或发布状态。</p> : null}
+							<section>
+								<div className={styles.documentHeading}><div><small>母稿 · v{item.asset.version}</small><h3>{item.asset.title}</h3></div>{state !== "superseded" ? <DocumentActions feedback={exportFeedback[`asset-${item.asset.id}`]} title={item.asset.title} onCopy={() => copyMarkdown(`asset-${item.asset.id}`, item.asset.title, item.asset.body_markdown)} onDownload={() => downloadMarkdown(`asset-${item.asset.id}`, `${item.asset.title}-母稿-v${item.asset.version}`, item.asset.title, item.asset.body_markdown)} /> : null}</div>
+								<div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(item.asset.body_markdown) }} />
+							</section>
+							{item.variants.map((variant) => { const label = PLATFORM_META[variant.platform_key]?.label || variant.platform_key; return <section key={variant.id}>
+								<div className={styles.documentHeading}><div><small>{label} · {variant.policy_version}</small><h3>{variant.title}</h3></div>{state !== "superseded" ? <DocumentActions feedback={exportFeedback[`variant-${variant.id}`]} title={variant.title} onCopy={() => copyMarkdown(`variant-${variant.id}`, variant.title, variant.body_markdown)} onDownload={() => downloadMarkdown(`variant-${variant.id}`, `${variant.title}-${label}-v${variant.version}`, variant.title, variant.body_markdown)} /> : null}</div>
+								<div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(variant.body_markdown) }} />
+							</section>; })}
 						</div>
 					</details>
 					<footer><span>{state === "superseded" ? "历史正文、原始 Agent 工件与退回意见已保留" : "原始 Agent 工件与审核记录已保留"}</span><Link href={`/geo/${workspaceId}/actions`}>回到优化行动</Link></footer>

@@ -60,7 +60,16 @@
 .documents section{background:transparent;border:0;border-bottom:1px solid #e3e8ef;border-radius:0;padding:18px 2px 24px}
 .documents section:last-child{border-bottom:0}
 .documents small{color:#75869e;font-size:9px;font-weight:760}
-.documents h3{font-size:18px;letter-spacing:-.025em;line-height:1.35;margin:7px 0 18px}
+.documents h3{font-size:18px;letter-spacing:-.025em;line-height:1.35;margin:7px 0 0}
+.exportNote{background:#f5f8fc;border-left:3px solid #8eace3;color:#64758c;font-size:10px;line-height:1.6;margin:0 2px 5px;padding:9px 12px}
+.documentHeading{align-items:flex-start;display:flex;gap:18px;justify-content:space-between;margin-bottom:18px}
+.documentHeading>div:first-child{min-width:0}
+.documentActions{display:flex;flex:0 0 auto;gap:7px}
+.documentActions button{background:#fff;border:1px solid #d5dfec;border-radius:9px;color:#315eaa;cursor:pointer;font:inherit;font-size:10px;font-weight:740;min-height:44px;padding:0 12px}
+.documentActions button:hover{background:#f3f7ff;border-color:#b9ccec}
+.documentActions button:active{transform:scale(.98)}
+.documentActions button:focus-visible{outline:3px solid rgb(36 103 232 / 22%);outline-offset:2px}
+.srOnly{clip:rect(0,0,0,0);clip-path:inset(50%);height:1px;overflow:hidden;position:absolute;white-space:nowrap;width:1px}
 .item>footer{align-items:center;border-top:1px solid #e9edf3;display:flex;justify-content:space-between;padding:11px 20px}
 .item>footer span{color:#8a97a8;font-size:9px}
 .item>footer a,.empty a{align-items:center;background:var(--blue);border-radius:8px;color:#fff;display:inline-flex;font-size:10px;font-weight:760;min-height:44px;padding:8px 11px}
@@ -86,6 +95,9 @@
 .item>header{align-items:flex-start;flex-direction:column}
 .flow{grid-template-columns:1fr}
 .draftLinks{align-items:flex-start;flex-wrap:wrap}
+.documentHeading{align-items:stretch;flex-direction:column}
+.documentActions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+.documentActions button{padding-inline:8px}
 .item>footer{align-items:flex-start;flex-direction:column;gap:10px}
 .item>footer a{width:100%;text-align:center}
 }
