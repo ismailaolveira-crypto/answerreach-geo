@@ -264,6 +264,10 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         .order_by(GeoContentBrief.id.desc())
     )
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    is_website_action = bool(
+        opportunity
+        and opportunity.opportunity_type in {"website_citation_readiness", "website_scope_gap"}
+    )
     website_audit = None
     if opportunity and opportunity.opportunity_type == "website_citation_readiness":
         audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
@@ -311,7 +315,7 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         asset_type=opportunity.recommended_asset_type if opportunity else "article",
         required_sections=(
             ["首屏直接答案", "产品能力与边界", "适用场景", "验证方式", "常见问题", "来源"]
-            if website_audit
+            if is_website_action
             else ["先给结论", "选型标准", "品牌可核验能力", "适用边界", "来源"]
         ),
         brand_fact_ids=[],
@@ -320,9 +324,9 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         required_claims=(
             [
                 action.title,
-                "不得把官网审计结果表述为模型引用、品牌推荐或 GEO 效果提升",
+                "不得把官网技术检查或差距分析结果表述为品牌推荐或已实现 GEO 效果提升",
             ]
-            if website_audit
+            if is_website_action
             else [question.question_text if question else action.title]
         ),
         forbidden_claims=["未有来源支持的绝对化承诺", "伪造客户案例", "声称已发布或已改善 GEO 效果"],

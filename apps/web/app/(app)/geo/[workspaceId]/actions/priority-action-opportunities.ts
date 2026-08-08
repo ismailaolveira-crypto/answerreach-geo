@@ -42,7 +42,9 @@ export function mapBackendPriorityActionOpportunities(
 		const questionText = String(row.scope_snapshot.question ?? row.title);
 		const evidenceIds = row.evidence.map((item) => item.evidence_id);
 		const sourceType = row.scope_snapshot.source_type === "website_audit" ? "website_audit" : "model_observation";
-		const websiteAuditId = Number(row.scope_snapshot.website_audit_id ?? 0) || undefined;
+		const websiteAuditId = sourceType === "website_audit"
+			? Number(row.scope_snapshot.website_audit_id ?? 0) || undefined
+			: undefined;
 		const websiteAuditHash = String(row.scope_snapshot.raw_html_sha256 ?? "");
 		const findingCodes = Array.isArray(row.scope_snapshot.finding_codes)
 			? row.scope_snapshot.finding_codes.map(String)
@@ -68,7 +70,7 @@ export function mapBackendPriorityActionOpportunities(
 			"51cto": "51CTO",
 			wechat: "微信公众号",
 		};
-		const type = row.opportunity_type === "website_citation_readiness"
+		const type = ["website_citation_readiness", "website_scope_gap"].includes(row.opportunity_type)
 			? "website"
 			: row.opportunity_type === "competitor_gap"
 				? "competitor"
@@ -119,6 +121,8 @@ export function mapBackendPriorityActionOpportunities(
 				? websiteAuditHash
 					? `依据官网审计 #${websiteAuditId ?? "—"} · 原始证据 ${websiteAuditHash.slice(0, 12)}`
 					: `依据官网审计 #${websiteAuditId ?? "—"} · 公网访问阻塞记录`
+				: row.opportunity_type === "website_scope_gap" && discoveryJobId
+					? `Codex 官网分析 #${discoveryJobId} · 批次 #${row.latest_seen_batch_id ?? "—"} · ${evidenceIds.length} 条真实证据`
 				: discoveryJobId
 					? `Codex Run #${discoveryJobId} · 批次 #${row.latest_seen_batch_id ?? "—"} · ${evidenceIds.length} 条真实证据`
 					: `依据 ${evidenceIds.length} 条真实证据 · ${row.rule_version}`,

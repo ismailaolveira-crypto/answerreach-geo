@@ -739,6 +739,30 @@ export type CleanroomOpportunityAnalysisRun = {
 	finished_at?: string | null;
 };
 
+export type WebsiteGapAnalysisRun = {
+	job_id: number;
+	workspace_id: number;
+	batch_id: number;
+	model_keys: string[];
+	question_plan_ids: number[];
+	status: "queued" | "running" | "succeeded" | "failed";
+	stage: "queued" | "analyzing" | "complete" | "failed";
+	evidence_count: number;
+	result_count: number;
+	recommendation_count: number;
+	input_fingerprint: string;
+	skill_name: string;
+	skill_sha256: string;
+	official_metrics: Record<string, unknown>;
+	codex_thread_id?: string | null;
+	codex_turn_id?: string | null;
+	analysis_summary?: string | null;
+	error_message?: string | null;
+	created_at: string;
+	started_at?: string | null;
+	finished_at?: string | null;
+};
+
 export type CleanroomContentBrief = {
 	id: number;
 	workspace_id: number;
@@ -1581,6 +1605,30 @@ export function getLatestCleanroomOpportunityAnalysis(
 
 export function getCleanroomOpportunityAnalysis(workspaceId: string | number, jobId: number) {
 	return apiRequest<CleanroomOpportunityAnalysisRun>(`/workspaces/${workspaceId}/action-opportunities/analysis-runs/${jobId}`);
+}
+
+export function createWebsiteGapAnalysis(
+	workspaceId: string | number,
+	payload: { batch_id: number; question_plan_ids?: number[]; model_keys?: string[] },
+) {
+	return apiRequest<WebsiteGapAnalysisRun>(`/workspaces/${workspaceId}/website-gap-analyses`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function getLatestWebsiteGapAnalysis(
+	workspaceId: string | number,
+	options: { batch_id: number; model_key?: string | null; question_plan_id?: number | null },
+) {
+	const params = new URLSearchParams({ batch_id: String(options.batch_id) });
+	if (options.model_key) params.set("model_key", options.model_key);
+	if (options.question_plan_id) params.set("question_plan_id", String(options.question_plan_id));
+	return apiRequest<WebsiteGapAnalysisRun | null>(`/workspaces/${workspaceId}/website-gap-analyses/latest?${params.toString()}`);
+}
+
+export function getWebsiteGapAnalysis(workspaceId: string | number, jobId: number) {
+	return apiRequest<WebsiteGapAnalysisRun>(`/workspaces/${workspaceId}/website-gap-analyses/${jobId}`);
 }
 
 export function selectCleanroomActionOpportunity(workspaceId: string | number, opportunityId: number) {

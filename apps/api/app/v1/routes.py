@@ -141,6 +141,8 @@ from app.v1.schemas import (
     WorkspaceUpdate,
     WebsiteAuditOverviewRead,
     WebsiteAuditRead,
+    WebsiteGapAnalysisRequest,
+    WebsiteGapAnalysisRunRead,
     YaoDatasetImport,
     YaoDeepSeekDatasetImport,
     YaoDoubaoDatasetImport,
@@ -166,6 +168,12 @@ from app.v1.action_opportunities import (
 from app.v1.opportunity_agent import (
     AGENT_RULE_VERSION,
     build_opportunity_context,
+)
+from app.v1.website_gap_agent import (
+    WEBSITE_GAP_JOB_TYPE,
+    WEBSITE_GAP_RULE_VERSION,
+    build_website_gap_context,
+    load_skill_contract,
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.brand_facts import (
@@ -3751,6 +3759,44 @@ def _opportunity_analysis_read(job: QueueJob) -> dict:
     }
 
 
+def _website_gap_analysis_read(job: QueueJob) -> dict:
+    payload = dict(job.payload_json or {})
+    status = {
+        "pending": "queued",
+        "running": "running",
+        "success": "succeeded",
+        "failed": "failed",
+    }.get(job.status, "failed")
+    stage = str(payload.get("stage") or ("failed" if status == "failed" else "queued"))
+    if stage not in {"queued", "analyzing", "complete", "failed"}:
+        stage = "failed" if status == "failed" else "queued"
+    if status == "failed":
+        stage = "failed"
+    return {
+        "job_id": job.id,
+        "workspace_id": int(payload.get("workspace_id") or 0),
+        "batch_id": int(payload.get("batch_id") or 0),
+        "model_keys": list(payload.get("model_keys") or []),
+        "question_plan_ids": list(payload.get("question_plan_ids") or []),
+        "status": status,
+        "stage": stage,
+        "evidence_count": int(payload.get("evidence_count") or 0),
+        "result_count": int(payload.get("result_count") or 0),
+        "recommendation_count": int(payload.get("recommendation_count") or 0),
+        "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "skill_name": str(payload.get("skill_name") or ""),
+        "skill_sha256": str(payload.get("skill_sha256") or ""),
+        "official_metrics": dict(payload.get("official_metrics") or {}),
+        "codex_thread_id": payload.get("codex_thread_id"),
+        "codex_turn_id": payload.get("codex_turn_id"),
+        "analysis_summary": payload.get("analysis_summary"),
+        "error_message": job.error_message,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+
+
 @router.get(
     "/workspaces/{workspace_id}/action-opportunities/scope",
     response_model=ActionOpportunityScopeRead,
@@ -4051,6 +4097,171 @@ def get_opportunity_analysis(
     return _opportunity_analysis_read(job)
 
 
+@router.post(
+    "/workspaces/{workspace_id}/website-gap-analyses",
+    response_model=WebsiteGapAnalysisRunRead,
+    status_code=202,
+)
+def create_website_gap_analysis(
+    workspace_id: int,
+    payload: WebsiteGapAnalysisRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    scoped_or_404(db, GeoObservationBatch, workspace_id, payload.batch_id)
+    selected_models = sorted({value.strip() for value in payload.model_keys if value.strip()})
+    selected_questions = sorted({int(value) for value in payload.question_plan_ids})
+    for question_id in selected_questions:
+        scoped_or_404(db, GeoQuestionPlan, workspace_id, question_id)
+    try:
+        skill = load_skill_contract()
+        context = build_website_gap_context(
+            db,
+            workspace_id,
+            batch_id=payload.batch_id,
+            model_keys=selected_models,
+            question_plan_ids=selected_questions,
+            skill_contract=skill,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    active_jobs = [
+        job
+        for job in db.scalars(
+            select(QueueJob)
+            .where(
+                QueueJob.job_type == WEBSITE_GAP_JOB_TYPE,
+                QueueJob.status.in_(("pending", "running")),
+            )
+            .order_by(QueueJob.id.desc())
+        )
+        if int((job.payload_json or {}).get("workspace_id") or 0) == workspace_id
+    ]
+    same_scope = next(
+        (
+            job
+            for job in active_jobs
+            if (job.payload_json or {}).get("input_fingerprint")
+            == context["input_fingerprint"]
+        ),
+        None,
+    )
+    if same_scope is not None:
+        return _website_gap_analysis_read(same_scope)
+
+    invalidate_local_codex_diagnostic_cache()
+    diagnostic = diagnose_local_codex()
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+        )
+    _assert_agent_capacity(db, workspace_id)
+    job = QueueJob(
+        job_type=WEBSITE_GAP_JOB_TYPE,
+        status="pending",
+        priority=26,
+        scheduled_at=datetime.now(timezone.utc),
+        max_attempts=1,
+        payload_json={
+            "project_id": 0,
+            "workspace_id": workspace_id,
+            "batch_id": payload.batch_id,
+            "model_keys": selected_models,
+            "question_plan_ids": selected_questions,
+            "input_fingerprint": context["input_fingerprint"],
+            "evidence_count": len(context["evidence"]),
+            "official_metrics": context["deterministic_metrics"],
+            "skill_name": skill["name"],
+            "skill_sha256": skill["sha256"],
+            "model": diagnostic.get("default_model"),
+            "actor_user_id": user.id,
+            "stage": "queued",
+        },
+    )
+    db.add(job)
+    db.flush()
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            job_id=job.id,
+            event_type="website_gap_analysis_queued",
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "batch_id": payload.batch_id,
+                "model_keys": selected_models,
+                "question_plan_ids": selected_questions,
+                "input_fingerprint": context["input_fingerprint"],
+                "evidence_count": len(context["evidence"]),
+                "skill_name": skill["name"],
+                "skill_sha256": skill["sha256"],
+            },
+        )
+    )
+    db.commit()
+    db.refresh(job)
+    return _website_gap_analysis_read(job)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/website-gap-analyses/latest",
+    response_model=WebsiteGapAnalysisRunRead | None,
+)
+def get_latest_website_gap_analysis(
+    workspace_id: int,
+    batch_id: int = Query(ge=1),
+    model_key: str | None = Query(default=None, min_length=1, max_length=120),
+    question_plan_id: int | None = Query(default=None, ge=1),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    expected_models = [model_key] if model_key else []
+    expected_questions = [question_plan_id] if question_plan_id else []
+    job = next(
+        (
+            row
+            for row in db.scalars(
+                select(QueueJob)
+                .where(QueueJob.job_type == WEBSITE_GAP_JOB_TYPE)
+                .order_by(QueueJob.id.desc())
+                .limit(200)
+            )
+            if int((row.payload_json or {}).get("workspace_id") or 0) == workspace_id
+            and int((row.payload_json or {}).get("batch_id") or 0) == batch_id
+            and list((row.payload_json or {}).get("model_keys") or []) == expected_models
+            and list((row.payload_json or {}).get("question_plan_ids") or [])
+            == expected_questions
+        ),
+        None,
+    )
+    return _website_gap_analysis_read(job) if job else None
+
+
+@router.get(
+    "/workspaces/{workspace_id}/website-gap-analyses/{job_id}",
+    response_model=WebsiteGapAnalysisRunRead,
+)
+def get_website_gap_analysis(
+    workspace_id: int,
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    job = db.get(QueueJob, job_id)
+    if (
+        job is None
+        or job.job_type != WEBSITE_GAP_JOB_TYPE
+        or int((job.payload_json or {}).get("workspace_id") or 0) != workspace_id
+    ):
+        raise HTTPException(status_code=404, detail="Website gap analysis run not found")
+    return _website_gap_analysis_read(job)
+
+
 @router.get(
     "/workspaces/{workspace_id}/action-opportunities",
     response_model=list[ActionOpportunityRead],
@@ -4068,7 +4279,11 @@ def list_action_opportunities(
     workspace_or_404(db, user, workspace_id)
     query = select(GeoActionOpportunity).where(GeoActionOpportunity.workspace_id == workspace_id)
     if not include_legacy:
-        query = query.where(GeoActionOpportunity.rule_version == AGENT_RULE_VERSION)
+        query = query.where(
+            GeoActionOpportunity.rule_version.in_(
+                [AGENT_RULE_VERSION, WEBSITE_GAP_RULE_VERSION]
+            )
+        )
     if status:
         query = query.where(GeoActionOpportunity.status == status)
     else:
@@ -4080,6 +4295,18 @@ def list_action_opportunities(
             )
         )
     )
+    rows = [
+        row
+        for row in rows
+        if row.opportunity_type != "website_scope_gap"
+        or (
+            int((row.scope_snapshot or {}).get("batch_id") or 0) == int(batch_id or 0)
+            and list((row.scope_snapshot or {}).get("model_keys") or [])
+            == ([model_key] if model_key else [])
+            and list((row.scope_snapshot or {}).get("question_plan_ids") or [])
+            == ([question_plan_id] if question_plan_id else [])
+        )
+    ]
     if batch_id is not None:
         rows = [
             row for row in rows
@@ -4130,14 +4357,18 @@ def select_action_opportunity(
         )
     )
     question_plan_id = opportunity.scope_snapshot.get("question_plan_id")
-    is_website_action = opportunity.opportunity_type == "website_citation_readiness"
+    is_website_audit_action = opportunity.opportunity_type == "website_citation_readiness"
+    is_website_action = opportunity.opportunity_type in {
+        "website_citation_readiness",
+        "website_scope_gap",
+    }
     selected_scope = {
         "opportunity_id": opportunity.id,
         "evidence_ids": [link.evidence_id for link in links],
         "question_plan_id": question_plan_id,
         "source_type": (opportunity.scope_snapshot or {}).get("source_type", "model_observation"),
     }
-    if is_website_action:
+    if is_website_audit_action:
         selected_scope.update(
             {
                 "website_audit_id": opportunity.scope_snapshot.get("website_audit_id"),
@@ -6004,7 +6235,7 @@ def _agent_capacity(
         job
         for job in db.scalars(
             select(QueueJob).where(
-                QueueJob.job_type == "geo_opportunity.discover",
+                QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
                 QueueJob.status.in_(("pending", "running")),
             )
         )
@@ -6171,6 +6402,7 @@ def create_agent_run(
             status_code=409,
             detail="当前行动未关联已持久化的真实机会，请重新选择当前机会后再启动 Agent。",
         )
+    is_website_scope_gap = opportunity.opportunity_type == "website_scope_gap"
     website_audit = None
     if opportunity and opportunity.opportunity_type == "website_citation_readiness":
         website_audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
@@ -6187,7 +6419,7 @@ def create_agent_run(
                 detail="Website audit is incomplete; resolve access and run the audit again before drafting",
             )
     else:
-        if action.question_plan_id is None:
+        if action.question_plan_id is None and not is_website_scope_gap:
             raise HTTPException(
                 status_code=409,
                 detail="当前机会已缺少目标问题，请按最新观测范围重新发现机会后再生成。",
@@ -6223,10 +6455,10 @@ def create_agent_run(
     platforms = list(dict.fromkeys(payload.selected_platforms or _default_agent_platforms(db, action)))
     if not platforms:
         raise HTTPException(status_code=422, detail="Select at least one target platform")
-    if website_audit and platforms != ["official_site"]:
+    if (website_audit or is_website_scope_gap) and platforms != ["official_site"]:
         raise HTTPException(
             status_code=422,
-            detail="Website audit actions must generate the official-site draft before external distribution",
+            detail="Website actions must generate the official-site draft before external distribution",
         )
     if website_audit:
         readable_brand_source_missing = _website_requires_sourced_brand_facts(opportunity)

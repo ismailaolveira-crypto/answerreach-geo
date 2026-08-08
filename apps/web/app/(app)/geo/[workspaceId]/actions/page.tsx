@@ -26,6 +26,9 @@ import {
 	reviseCleanroomAgentRun,
 	updateCleanroomPlatformVariant,
 	createWebsiteAudit,
+	createWebsiteGapAnalysis,
+	getLatestWebsiteGapAnalysis,
+	getWebsiteGapAnalysis,
 	getLatestWebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
 import { PriorityActionsWorkbench } from "./priority-actions-workbench";
@@ -64,12 +67,17 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		model_key: modelKey,
 		question_plan_id: questionPlanId,
 	});
-	const [agentRuntime, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis] = await Promise.all([
+	const [agentRuntime, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis, websiteGapAnalysis] = await Promise.all([
 		getAgentRuntime(workspaceId).catch(() => null),
 		getCleanroomActionWorkbenchState(workspaceId),
 		getLatestWebsiteAudit(workspaceId).catch(() => ({ website_url: null, latest: null })),
 		getCleanroomBrandFacts(workspaceId).catch(() => []),
 		batchId ? getLatestCleanroomOpportunityAnalysis(workspaceId, {
+			batch_id: batchId,
+			model_key: modelKey,
+			question_plan_id: questionPlanId,
+		}).catch(() => null) : Promise.resolve(null),
+		batchId ? getLatestWebsiteGapAnalysis(workspaceId, {
 			batch_id: batchId,
 			model_key: modelKey,
 			question_plan_id: questionPlanId,
@@ -93,6 +101,21 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	async function readOpportunityAnalysis(jobId: number) {
 		"use server";
 		return getCleanroomOpportunityAnalysis(workspaceId, jobId);
+	}
+
+	async function analyzeWebsiteGap(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) {
+		"use server";
+		if (!scope.batchId) throw new Error("请先选择一个已完成的观测批次");
+		return createWebsiteGapAnalysis(workspaceId, {
+			batch_id: scope.batchId,
+			model_keys: scope.modelKey ? [scope.modelKey] : [],
+			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
+		});
+	}
+
+	async function readWebsiteGapAnalysis(jobId: number) {
+		"use server";
+		return getWebsiteGapAnalysis(workspaceId, jobId);
 	}
 
 	async function createAction(formData: FormData) {
@@ -243,5 +266,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
 		fact.status === "active"
 		&& fact.source_verification?.status === "source_and_statement_verified"
-	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} />;
+	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialWebsiteGapAnalysis={websiteGapAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} analyzeWebsiteGap={analyzeWebsiteGap} readWebsiteGapAnalysis={readWebsiteGapAnalysis} />;
 }

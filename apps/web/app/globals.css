@@ -1714,6 +1714,35 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
 .pa-site-audit-empty { border-top: 1px solid #e6ebf2; padding: 18px 20px; }
 .pa-site-audit-empty b { display: block; font-size: 12px; }
 .pa-site-audit-empty span { color: #7d8ba0; display: block; font-size: 10px; line-height: 1.55; margin-top: 4px; }
+.pa-site-gap-analysis {
+  align-items: center;
+  background: #f6f9ff;
+  border-top: 1px solid #dfe8f7;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+.pa-site-gap-analysis > div { display: grid; gap: 4px; min-width: 0; }
+.pa-site-gap-analysis small { color: #2e67d1; font-size: 9px; font-weight: 800; letter-spacing: .04em; }
+.pa-site-gap-analysis b { color: #31435d; font-size: 11px; line-height: 1.45; }
+.pa-site-gap-analysis span { color: #718096; font-size: 9px; line-height: 1.55; }
+.pa-site-gap-analysis button {
+  background: #fff;
+  border: 1px solid #9db9ed;
+  border-radius: 8px;
+  color: #2467df;
+  cursor: pointer;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 780;
+  min-height: 44px;
+  padding: 0 14px;
+}
+.pa-site-gap-analysis button:hover { background: #edf4ff; }
+.pa-site-gap-analysis button:disabled { cursor: not-allowed; opacity: .58; }
+.pa-site-gap-analysis button:focus-visible { outline: 2px solid #2467df; outline-offset: 2px; }
 .pa-site-audit > footer {
   align-items: center;
   border-top: 1px solid #e6ebf2;
@@ -1786,6 +1815,8 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
   .pa-site-audit-signals > div:last-child { border-bottom: 0; }
   .pa-site-audit-result { grid-template-columns: 1fr; }
   .pa-site-audit-result li { grid-template-columns: 1fr; gap: 2px; }
+  .pa-site-gap-analysis { align-items: stretch; flex-direction: column; gap: 12px; }
+  .pa-site-gap-analysis button { width: 100%; }
   .pa-site-audit > footer { align-items: flex-start; flex-direction: column; gap: 8px; }
   .pa-draft-readback-list > div { grid-template-columns: 18px minmax(0, 1fr); }
   .pa-draft-readback-list a,

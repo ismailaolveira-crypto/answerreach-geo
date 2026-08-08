@@ -310,6 +310,17 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             }
             job.status = "success"
             job.error_message = None
+        elif job.job_type == "geo_website_gap.analyze":
+            from app.v1.website_gap_agent import execute_website_gap_analysis
+
+            payload_json = dict(job.payload_json or {})
+            result = execute_website_gap_analysis(db, job)
+            job.payload_json = {
+                **dict(job.payload_json or payload_json),
+                **result,
+            }
+            job.status = "success"
+            job.error_message = None
         elif job.job_type == "geo_content.generate":
             from app.models import LLMProvider
             from app.models.cleanroom_v1 import GeoActionEvent, GeoContentBrief, GeoOptimizationAction, GeoWorkspace

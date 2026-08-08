@@ -1013,6 +1013,36 @@ class OpportunityAnalysisRunRead(BaseModel):
     finished_at: datetime | None = None
 
 
+class WebsiteGapAnalysisRequest(BaseModel):
+    batch_id: int = Field(ge=1)
+    question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
+    model_keys: list[str] = Field(default_factory=list, max_length=20)
+
+
+class WebsiteGapAnalysisRunRead(BaseModel):
+    job_id: int
+    workspace_id: int
+    batch_id: int
+    model_keys: list[str] = Field(default_factory=list)
+    question_plan_ids: list[int] = Field(default_factory=list)
+    status: Literal["queued", "running", "succeeded", "failed"]
+    stage: Literal["queued", "analyzing", "complete", "failed"]
+    evidence_count: int = 0
+    result_count: int = 0
+    recommendation_count: int = 0
+    input_fingerprint: str
+    skill_name: str
+    skill_sha256: str
+    official_metrics: dict = Field(default_factory=dict)
+    codex_thread_id: str | None = None
+    codex_turn_id: str | None = None
+    analysis_summary: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class ActionOpportunityScopeBatchRead(BaseModel):
     id: int
     status: str

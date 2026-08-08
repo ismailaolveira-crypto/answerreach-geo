@@ -17,6 +17,7 @@ import type {
 	CleanroomOpportunityAnalysisRun,
 	CleanroomPlatformVariant,
 	WebsiteAudit,
+	WebsiteGapAnalysisRun,
 } from "@/lib/cleanroom-v1-api";
 import {
 	articleSyncAccountKey,
@@ -42,6 +43,7 @@ type Props = {
 	websiteUrl: string | null;
 	initialWebsiteAudit: WebsiteAudit | null;
 	initialOpportunityAnalysis: CleanroomOpportunityAnalysisRun | null;
+	initialWebsiteGapAnalysis: WebsiteGapAnalysisRun | null;
 	initialAgentRuns: CleanroomAgentRun[];
 	initialReviewPackages: CleanroomContentReviewPackage[];
 	initialDistributionRuns: CleanroomDistributionRun[];
@@ -64,6 +66,8 @@ type Props = {
 	runWebsiteAudit: () => Promise<WebsiteAudit>;
 	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<CleanroomOpportunityAnalysisRun>;
 	readOpportunityAnalysis: (jobId: number) => Promise<CleanroomOpportunityAnalysisRun>;
+	analyzeWebsiteGap: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<WebsiteGapAnalysisRun>;
+	readWebsiteGapAnalysis: (jobId: number) => Promise<WebsiteGapAnalysisRun>;
 };
 
 function syncVariant(
@@ -303,7 +307,7 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialOpportunityAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions, readOpportunityAnalysis }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -313,6 +317,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
 	const [discoveryFeedback, setDiscoveryFeedback] = useState("");
 	const [opportunityAnalysis, setOpportunityAnalysis] = useState(initialOpportunityAnalysis);
+	const [websiteGapAnalysis, setWebsiteGapAnalysis] = useState(initialWebsiteGapAnalysis);
+	const [websiteGapFeedback, setWebsiteGapFeedback] = useState("");
 	const [expandedOpportunityId, setExpandedOpportunityId] = useState<string | null>(null);
 	const [runtimeExpanded, setRuntimeExpanded] = useState(false);
 	const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
@@ -387,16 +393,24 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [isVariantSaving, startVariantSaving] = useTransition();
 	const [isScopePending, startScopeTransition] = useTransition();
 	const [isWebsiteAuditing, startWebsiteAuditTransition] = useTransition();
+	const [isWebsiteGapPending, startWebsiteGapTransition] = useTransition();
 	const reviewDialogRef = useRef<HTMLElement | null>(null);
 	const syncDialogRef = useRef<HTMLElement | null>(null);
 
 	const selectedBatch = opportunityScope.batches.find((batch) => batch.id === selectedBatchId);
 	const models = opportunityScope.models.filter((model) => selectedBatch?.model_keys.includes(model.key));
 	const questions = opportunityScope.questions.filter((question) => selectedBatch?.question_plan_ids.includes(question.id));
+	const selectedModelLabel = selectedModel === "all"
+		? "全部模型"
+		: models.find((model) => model.key === selectedModel)?.label ?? selectedModel;
+	const selectedQuestionLabel = selectedQuestion === "all"
+		? "全部问题"
+		: questions.find((question) => String(question.id) === selectedQuestion)?.label ?? `问题 #${selectedQuestion}`;
 	// The server has already applied the exact batch/model/question scope. Do not
 	// compare model keys with user-facing model labels a second time in the client.
 	const filtered = opportunities;
 	const opportunityAnalysisActive = Boolean(opportunityAnalysis && ["queued", "running"].includes(opportunityAnalysis.status));
+	const websiteGapAnalysisActive = Boolean(websiteGapAnalysis && ["queued", "running"].includes(websiteGapAnalysis.status));
 	useEffect(() => { if (!filtered.some((item) => item.id === selectedId)) setSelectedId(filtered[0]?.id ?? ""); }, [filtered, selectedId]);
 	const selected = filtered.find((item) => item.id === selectedId) ?? filtered[0];
 	const unresolved = filtered.filter((item) => !item.existingAction || !["verified", "closed"].includes(item.existingAction.status));
@@ -425,7 +439,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		.sort((a, b) => b.id - a.id)[0], [agentRuns, selected?.existingAction?.id]);
 	const activeAgentRunCount = agentRuns.filter((run) => ["queued", "resuming", "running", "cancelling"].includes(run.status)).length;
 	const agentCapacityLimit = Math.max(1, agentRuntime?.max_concurrent_runs ?? 1);
-	const agentCapacityUsed = Math.max(agentRuntime?.active_run_count ?? 0, activeAgentRunCount + (opportunityAnalysisActive ? 1 : 0));
+	const agentCapacityUsed = Math.max(agentRuntime?.active_run_count ?? 0, activeAgentRunCount + (opportunityAnalysisActive ? 1 : 0) + (websiteGapAnalysisActive ? 1 : 0));
 	const agentCapacityAvailable = agentCapacityUsed < agentCapacityLimit;
 	const agentCanStart = Boolean(agentRuntime?.ready && agentCapacityAvailable);
 	const agentTimeoutMinutes = Math.max(1, Math.round((agentRuntime?.run_timeout_seconds ?? 900) / 60));
@@ -562,6 +576,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setSelectedQuestion(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
 	}, [initialScope.batchId, initialScope.modelKey, initialScope.questionPlanId]);
 	useEffect(() => setOpportunityAnalysis(initialOpportunityAnalysis), [initialOpportunityAnalysis]);
+	useEffect(() => setWebsiteGapAnalysis(initialWebsiteGapAnalysis), [initialWebsiteGapAnalysis]);
 	useEffect(() => {
 		if (!opportunityAnalysisActive || !opportunityAnalysis) return;
 		let cancelled = false;
@@ -589,6 +604,33 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			window.clearInterval(timer);
 		};
 	}, [opportunityAnalysis?.job_id, opportunityAnalysisActive, readOpportunityAnalysis, router]);
+	useEffect(() => {
+		if (!websiteGapAnalysisActive || !websiteGapAnalysis) return;
+		let cancelled = false;
+		async function refreshAnalysis() {
+			try {
+				const result = await readWebsiteGapAnalysis(websiteGapAnalysis!.job_id);
+				if (cancelled) return;
+				setWebsiteGapAnalysis(result);
+				if (result.status === "succeeded") {
+					setWebsiteGapFeedback(result.result_count > 0
+						? `Codex 已根据当前范围生成 ${result.recommendation_count} 项官网建议。`
+						: "Codex 已完成分析，当前范围没有足够证据形成官网行动。");
+					router.refresh();
+				} else if (result.status === "failed") {
+					setWebsiteGapFeedback(result.error_message || "Codex 官网差距分析失败，没有产生建议。");
+				}
+			} catch (error) {
+				if (!cancelled) setWebsiteGapFeedback(error instanceof Error ? error.message : "无法读取官网分析进度");
+			}
+		}
+		void refreshAnalysis();
+		const timer = window.setInterval(refreshAnalysis, 1800);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+		};
+	}, [websiteGapAnalysis?.job_id, websiteGapAnalysisActive, readWebsiteGapAnalysis, router]);
 
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
@@ -743,6 +785,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				? next.questionPlanId
 				: selectedQuestion === "all" ? null : Number(selectedQuestion);
 		setDiscoveryFeedback("");
+		setWebsiteGapFeedback("");
+		setWebsiteGapAnalysis(null);
 		setSelectedBatchId(batchId);
 		setSelectedModel(modelKey);
 		setSelectedQuestion(questionPlanId ? String(questionPlanId) : "all");
@@ -784,6 +828,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				router.refresh();
 			} catch (error) {
 				setWebsiteAuditFeedback(error instanceof Error ? error.message : "官网检查失败");
+			}
+		});
+	}
+
+	function startWebsiteGapAnalysis() {
+		setWebsiteGapFeedback("");
+		startWebsiteGapTransition(async () => {
+			try {
+				const run = await analyzeWebsiteGap({
+					batchId: selectedBatchId,
+					modelKey: selectedModel === "all" ? null : selectedModel,
+					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
+				});
+				setWebsiteGapAnalysis(run);
+				setWebsiteGapFeedback(`Codex 已接收当前范围的 ${run.evidence_count} 条真实证据；成功前不会生成官网机会。`);
+			} catch (error) {
+				setWebsiteGapFeedback(error instanceof Error ? error.message : "无法启动 Codex 官网差距分析");
 			}
 		});
 	}
@@ -1215,7 +1276,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 
 		<section id="website-audit" className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">
 			<header>
-				<div><small>真实问题发现 · 官网</small><h2 id="website-audit-title">官网可引用性</h2><p>{websiteUrl || "工作区尚未配置官网地址"}</p></div>
+				<div><small>技术基础检查 · 官网</small><h2 id="website-audit-title">官网基础可引用性</h2><p>{websiteUrl || "工作区尚未配置官网地址"}</p></div>
 				<div className="pa-site-audit-action">
 					{websiteAudit ? <span><b>{Math.round(websiteAudit.score)}</b><small>{isWebsiteAuditing ? "上次结果" : "/ 100"}</small></span> : <span className="is-empty"><b>—</b><small>尚未检查</small></span>}
 					<button type="button" onClick={refreshWebsiteAudit} disabled={isWebsiteAuditing || !websiteUrl}>{isWebsiteAuditing ? <><i />正在检查官网…</> : websiteAudit ? "重新检查" : "开始检查"}</button>
@@ -1233,7 +1294,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					{websiteAudit.findings.length ? <ul>{websiteAudit.findings.slice(0, 3).map((finding) => <li key={finding.code}><b>{finding.title}</b><span>{finding.recommendation}</span></li>)}</ul> : <p>本轮未发现高优先级官网可引用性问题。</p>}
 				</div>
 			</> : <div className="pa-site-audit-empty"><b>{websiteUrl ? "尚无官网检查记录" : "请先在设置中填写官网地址"}</b><span>{websiteUrl ? "检查会保存真实响应、内容哈希和明确的问题清单；结果不会计入模型出现率。" : "官网地址用于限定检查范围，系统不会接受任意目标地址。"}</span></div>}
-			<footer><span>{websiteAuditFeedback || "这里只评估公开页面是否便于抓取、理解与引用，不等于模型已经引用春秋元泉。"}</span>{websiteAudit?.raw_html_sha256 ? <code title={websiteAudit.raw_html_sha256}>证据 {websiteAudit.raw_html_sha256.slice(0, 12)}</code> : null}</footer>
+			<div className="pa-site-gap-analysis" aria-live="polite">
+				<div><small>Codex 官网差距分析 · 强制 Skill</small><b>{selectedBatchId ? `批次 #${selectedBatchId} · ${selectedModelLabel} · ${selectedQuestionLabel}` : "请先选择真实观测批次"}</b><span>{isScopePending ? "正在切换范围，不展示旧结果…" : websiteGapFeedback || (websiteGapAnalysis?.status === "succeeded" ? websiteGapAnalysis.result_count > 0 ? `${websiteGapAnalysis.analysis_summary || "已形成官网改进建议。"} 官网引用 ${Number(websiteGapAnalysis.official_metrics.official_cited_answer_count || 0)}/${Number(websiteGapAnalysis.official_metrics.eligible_answer_count || 0)} 条回答。` : websiteGapAnalysis.analysis_summary || "当前范围没有足够证据形成官网行动。" : "只读取上方已选批次、模型和问题；点击前不会生成官网机会。")}</span></div>
+				<button type="button" onClick={startWebsiteGapAnalysis} disabled={isScopePending || isWebsiteGapPending || websiteGapAnalysisActive || !selectedBatchId || !websiteUrl || !agentRuntime?.ready || !agentCapacityAvailable}>{isWebsiteGapPending ? "正在提交…" : websiteGapAnalysisActive ? websiteGapAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在分析…" : websiteGapAnalysis?.status === "succeeded" ? "重新分析当前范围" : "让 Codex 分析官网"}</button>
+			</div>
+			<footer><span>{websiteAuditFeedback || "上方分数只表示公开页面是否便于抓取与理解，不等于模型已引用春秋元泉。"}</span>{websiteAudit?.raw_html_sha256 ? <code title={websiteAudit.raw_html_sha256}>证据 {websiteAudit.raw_html_sha256.slice(0, 12)}</code> : null}</footer>
 		</section>
 
 			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>{opportunityAnalysisActive ? "Codex 正在判断优先机会" : opportunityAnalysis?.status === "succeeded" ? "Codex 未发现足够可靠的优先机会" : "尚未让 Codex 分析这个批次"}</h2><p>{opportunityAnalysisActive ? `正在阅读批次 #${opportunityAnalysis?.batch_id} 的 ${opportunityAnalysis?.evidence_count ?? 0} 条真实证据；完成并通过证据校验前，这里保持为空。` : opportunityAnalysis?.status === "succeeded" ? opportunityAnalysis.analysis_summary || "Codex 已完成分析，但当前数据不足以支持具体行动。" : selectedBatch ? `已选定批次 #${selectedBatch.id}。只有你点击后，Codex 才会阅读该批次的回答、信源和竞品内容并给出判断。` : "请先完成一次真实联网观测。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>

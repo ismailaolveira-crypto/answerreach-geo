@@ -1,0 +1,4 @@
+interface:
+  display_name: "春秋元泉官网差距分析"
+  short_description: "严格按选定批次、模型和问题分析官网真实引用差距并输出证据建议"
+  default_prompt: "严格使用给定批次、模型、问题与证据，分析春秋元泉官网相对竞品的引用差距并输出可核验建议。"
