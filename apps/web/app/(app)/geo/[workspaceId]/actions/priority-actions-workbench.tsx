@@ -372,6 +372,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const websiteGenerationReady = !selected?.requiresSourcedBrandFacts || activeSourcedBrandFactCount > 0;
 	const websiteDraftReadyForApproval = !currentReviewPackage?.requires_sourced_brand_facts
 		|| currentReviewPackage.sourced_brand_fact_count > 0;
+	const draftMissesAvailableBrandFacts = Boolean(
+		currentReviewPackage
+		&& currentReviewPackage.available_sourced_brand_fact_count > 0
+		&& currentReviewPackage.sourced_brand_fact_count === 0,
+	);
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
@@ -1083,6 +1088,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					})}
 				</nav>
 				{!websiteDraftReadyForApproval ? <div className="pa-review-readiness" role="status"><div><b>这版内容是整改框架，不是可上线的品牌成稿</b><p>生成时品牌事实库为空。请先在设置中补齐带公开来源的品牌事实，再退回并生成新版本；系统不会允许直接批准这版官网稿。</p></div><Link href={`/geo/${workspaceId}/settings`}>补齐品牌事实 →</Link></div> : null}
+				{websiteDraftReadyForApproval && draftMissesAvailableBrandFacts ? <div className="pa-review-readiness" role="status"><div><b>这版稿件没有使用当前品牌事实</b><p>工作区已有 {currentReviewPackage.available_sourced_brand_fact_count} 条带公开来源的品牌事实，但这版内容引用了 0 条。请填写修改意见并退回，然后生成新版本，避免继续审核过时的“待补证”稿。</p></div><Link href={`/geo/${workspaceId}/settings`}>查看品牌事实 →</Link></div> : null}
 				<div className="pa-review-body">
 					<article className="pa-review-document">
 						{reviewTab === "master" ? <><small>母稿 · v{currentReviewPackage.asset.version}</small><h3>{currentReviewPackage.asset.title}</h3><p className="pa-review-summary">{currentReviewPackage.asset.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(currentReviewPackage.asset.body_markdown) }} /></> : (() => {
@@ -1111,7 +1117,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已处理 ${reviewedPendingClaimCount}/${pendingClaims.length} 条待判断事实 · 已查看 ${viewedPlatformKeys.length}/${currentReviewPackage.variants.length} 个平台稿 · 已选择 ${reviewPlatformKeys.length} 个通过。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || selectedUnviewedPlatformCount > 0 || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需处理 ${remainingPendingClaimCount} 条事实` : selectedUnviewedPlatformCount > 0 ? "先查看已选平台稿" : !reviewPlatformKeys.length ? "选择通过的平台稿" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : draftMissesAvailableBrandFacts ? `当前事实库有 ${currentReviewPackage.available_sourced_brand_fact_count} 条可追溯品牌事实，这版稿件使用了 0 条；请退回生成新版本。` : `已处理 ${reviewedPendingClaimCount}/${pendingClaims.length} 条待判断事实 · 已查看 ${viewedPlatformKeys.length}/${currentReviewPackage.variants.length} 个平台稿 · 已选择 ${reviewPlatformKeys.length} 个通过。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || selectedUnviewedPlatformCount > 0 || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval || draftMissesAvailableBrandFacts}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : draftMissesAvailableBrandFacts ? "先用当前品牌事实生成新版本" : remainingPendingClaimCount > 0 ? `还需处理 ${remainingPendingClaimCount} 条事实` : selectedUnviewedPlatformCount > 0 ? "先查看已选平台稿" : !reviewPlatformKeys.length ? "选择通过的平台稿" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

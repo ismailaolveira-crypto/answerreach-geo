@@ -4284,6 +4284,21 @@ def _normalized_fact_source(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
 
 
+def _active_sourced_brand_facts(db: Session, workspace_id: int) -> list[GeoBrandFact]:
+    return list(
+        db.scalars(
+            select(GeoBrandFact)
+            .where(
+                GeoBrandFact.workspace_id == workspace_id,
+                GeoBrandFact.status == "active",
+                GeoBrandFact.source_url.is_not(None),
+                func.length(func.trim(GeoBrandFact.source_url)) > 0,
+            )
+            .order_by(GeoBrandFact.id)
+        )
+    )
+
+
 REVIEW_RESOLVED_CLAIM_STATUSES = {
     "source_linked",
     "verified",
@@ -4296,18 +4311,12 @@ def _asset_sourced_brand_facts(
     db: Session,
     asset: GeoContentAsset,
     claims: list[GeoContentClaim] | None = None,
+    active_facts: list[GeoBrandFact] | None = None,
 ) -> list[GeoBrandFact]:
-    active_facts = list(
-        db.scalars(
-            select(GeoBrandFact)
-            .where(
-                GeoBrandFact.workspace_id == asset.workspace_id,
-                GeoBrandFact.status == "active",
-                GeoBrandFact.source_url.is_not(None),
-                func.length(func.trim(GeoBrandFact.source_url)) > 0,
-            )
-            .order_by(GeoBrandFact.id)
-        )
+    active_facts = (
+        active_facts
+        if active_facts is not None
+        else _active_sourced_brand_facts(db, asset.workspace_id)
     )
     if not active_facts:
         return []
@@ -4383,7 +4392,13 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
         else None
     )
     requires_sourced_brand_facts = _website_requires_sourced_brand_facts(opportunity)
-    sourced_brand_facts = _asset_sourced_brand_facts(db, asset, claims)
+    active_sourced_brand_facts = _active_sourced_brand_facts(db, asset.workspace_id)
+    sourced_brand_facts = _asset_sourced_brand_facts(
+        db,
+        asset,
+        claims,
+        active_facts=active_sourced_brand_facts,
+    )
     return {
         "asset": asset,
         "claims": claims,
@@ -4395,6 +4410,7 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
         ),
         "approved_platform_keys": list(dict.fromkeys(approved_platform_keys)),
         "requires_sourced_brand_facts": requires_sourced_brand_facts,
+        "available_sourced_brand_fact_count": len(active_sourced_brand_facts),
         "sourced_brand_fact_count": len(sourced_brand_facts),
         "sourced_brand_fact_ids": [fact.id for fact in sourced_brand_facts],
     }
@@ -4586,6 +4602,13 @@ def decide_content_review(
             detail=f"请先打开并审阅这些平台稿，再批准：{', '.join(unreviewed_platforms)}",
         )
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    active_sourced_brand_facts = _active_sourced_brand_facts(db, workspace_id)
+    asset_sourced_brand_facts = _asset_sourced_brand_facts(
+        db,
+        asset,
+        claims,
+        active_facts=active_sourced_brand_facts,
+    )
     if (
         payload.verdict == "approved"
         and "official_site" in platform_keys
@@ -4593,7 +4616,7 @@ def decide_content_review(
         and opportunity.opportunity_type == "website_citation_readiness"
         and _website_requires_sourced_brand_facts(opportunity)
     ):
-        if not _asset_sourced_brand_facts(db, asset, claims):
+        if not asset_sourced_brand_facts:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -4601,6 +4624,18 @@ def decide_content_review(
                     "请先补齐品牌事实并退回生成新版本，不能把通用整改框架批准为官网成稿"
                 ),
             )
+    if (
+        payload.verdict == "approved"
+        and active_sourced_brand_facts
+        and not asset_sourced_brand_facts
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "当前工作区已有带公开来源的品牌事实，但这版稿件未使用任何一条；"
+                "请退回并生成新版本，避免批准过时的待补证内容"
+            ),
+        )
 
     unresolved = [
         claim

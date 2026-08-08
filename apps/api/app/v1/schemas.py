@@ -1281,6 +1281,7 @@ class ContentReviewPackageRead(BaseModel):
     pending_claim_count: int = 0
     approved_platform_keys: list[str] = Field(default_factory=list)
     requires_sourced_brand_facts: bool = False
+    available_sourced_brand_fact_count: int = Field(default=0, ge=0)
     sourced_brand_fact_count: int = Field(default=0, ge=0)
     sourced_brand_fact_ids: list[int] = Field(default_factory=list)
 

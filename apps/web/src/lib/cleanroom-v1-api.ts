@@ -809,6 +809,7 @@ export type CleanroomContentReviewPackage = {
 	pending_claim_count: number;
 	approved_platform_keys: string[];
 	requires_sourced_brand_facts: boolean;
+	available_sourced_brand_fact_count: number;
 	sourced_brand_fact_count: number;
 	sourced_brand_fact_ids: number[];
 };

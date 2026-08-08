@@ -20,6 +20,7 @@ from app.models.cleanroom_v1 import (
     GeoAgentEvent,
     GeoContentAsset,
     GeoAgentRun,
+    GeoBrandFact,
     GeoContentBrief,
     GeoContentClaim,
     GeoContentReview,
@@ -349,6 +350,49 @@ def test_action_workbench_state_returns_persisted_flow_without_empty_retest_erro
     assert payload["review_packages"][0]["pending_claim_count"] == 1
     assert payload["distribution_runs"] == []
     assert payload["retests"] == []
+
+
+def test_review_rejects_draft_that_ignored_available_sourced_brand_facts(
+    review_client: TestClient,
+) -> None:
+    with review_client.app.state.review_session_factory() as db:
+        db.add(
+            GeoBrandFact(
+                workspace_id=1,
+                title="产品定位",
+                statement="测试品牌是企业大模型统一管理平台。",
+                source_url="https://brand.example.com/product",
+                status="active",
+            )
+        )
+        db.commit()
+
+    package = review_client.get("/api/v1/workspaces/1/content-assets/1/review-package")
+    assert package.status_code == 200
+    assert package.json()["available_sourced_brand_fact_count"] == 1
+    assert package.json()["sourced_brand_fact_count"] == 0
+
+    blocked = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
+    )
+    assert blocked.status_code == 409
+    assert "这版稿件未使用任何一条" in blocked.json()["detail"]
+
+    returned = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "changes_requested",
+            "note": "请使用当前带来源的品牌事实重新生成。",
+        },
+    )
+    assert returned.status_code == 201
+    assert returned.json()["asset"]["status"] == "changes_requested"
 
 
 def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
