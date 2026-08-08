@@ -162,7 +162,12 @@ from app.v1.action_opportunities import (
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
-from app.v1.website_audit import WebsiteAuditTargetError, audit_website
+from app.v1.website_audit import (
+    PublicationVerificationError,
+    WebsiteAuditTargetError,
+    audit_website,
+    verify_publication_page,
+)
 from app.services.article_sync_adapter import get_article_sync_adapter
 from app.services.codex_agent_runtime import (
     LocalCodexRuntime,
@@ -5219,7 +5224,11 @@ def record_human_publication(
     elif target.draft_readback_status != "draft_saved":
         raise HTTPException(status_code=409, detail="只有已回读的真实平台草稿可以记录发布结果")
     public_url = _validated_publication_url(workspace, target.platform_key, payload.public_url)
-    if target.human_publish_status == "published" and target.public_url == public_url:
+    if (
+        target.human_publish_status == "published"
+        and target.public_url == public_url
+        and target.publication_verification_status == "publicly_verified"
+    ):
         return _distribution_read(db, run)
     retest = db.scalar(
         select(GeoReobservation).where(
@@ -5233,10 +5242,29 @@ def record_human_publication(
             detail="同口径复测已建立，发布 URL 已锁定；如需更正，请保留本次记录并创建新的发布行动",
         )
     previous_url = target.public_url
+    try:
+        verification = verify_publication_page(public_url)
+        _validated_publication_url(
+            workspace,
+            target.platform_key,
+            str(verification.get("verified_url") or ""),
+        )
+    except WebsiteAuditTargetError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="公开页面地址未通过公网安全校验，请确认它不是内网或本机地址",
+        ) from exc
+    except PublicationVerificationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="暂时无法从公网读取该 HTML 页面；本次不会记录为已上线或已发布",
+        ) from exc
+    except HTTPException:
+        raise
     now = datetime.now(timezone.utc)
     target.human_publish_status = "published"
     target.public_url = public_url
-    target.publication_verification_status = "human_confirmed"
+    target.publication_verification_status = "publicly_verified"
     target.published_at = now
     target.published_by_user_id = user.id
     target.waiting_human_reason = None
@@ -5252,7 +5280,10 @@ def record_human_publication(
         )
     )
     all_published = bool(targets) and all(
-        item.human_publish_status == "published" and item.public_url for item in targets
+        item.human_publish_status == "published"
+        and item.public_url
+        and item.publication_verification_status == "publicly_verified"
+        for item in targets
     )
     run.stage = "published" if all_published else "awaiting_publication"
     run.status = "published" if all_published else "partial"
@@ -5278,6 +5309,7 @@ def record_human_publication(
                 "corrected": bool(previous_url and previous_url != public_url),
                 "all_targets_published": all_published,
                 "final_action_clicked": False,
+                "publication_verification": verification,
             },
         )
     )
@@ -6762,7 +6794,9 @@ def create_action_retest(
             )
         )
         if targets and all(
-            target.human_publish_status == "published" and target.public_url
+            target.human_publish_status == "published"
+            and target.public_url
+            and target.publication_verification_status == "publicly_verified"
             for target in targets
         ):
             published_run = (distribution, targets)
@@ -6770,7 +6804,7 @@ def create_action_retest(
     if published_run is None:
         raise HTTPException(
             status_code=409,
-            detail="请先为本次同步的全部平台记录真实公开文章 URL",
+            detail="请先为全部平台记录并通过公网校验的真实公开文章 URL",
         )
 
     baseline_batch_id = int((action.baseline_snapshot or {}).get("batch_id") or 0)

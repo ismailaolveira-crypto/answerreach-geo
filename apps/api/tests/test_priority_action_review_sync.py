@@ -36,7 +36,22 @@ from app.v1 import agent_orchestration, routes
 
 
 @pytest.fixture
-def review_client() -> Generator[TestClient, None, None]:
+def review_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+    monkeypatch.setattr(
+        routes,
+        "verify_publication_page",
+        lambda url: {
+            "status": "publicly_verified",
+            "verified_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "sha256": "f" * 64,
+            "size_bytes": 4096,
+            "truncated": False,
+            "redirect_count": 0,
+            "verified_at": "2026-08-08T00:00:00+00:00",
+        },
+    )
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -204,7 +219,10 @@ def review_client() -> Generator[TestClient, None, None]:
     app.dependency_overrides.clear()
 
 
-def test_review_gate_and_browser_client_draft_readback(review_client: TestClient) -> None:
+def test_review_gate_and_browser_client_draft_readback(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     package = review_client.get("/api/v1/workspaces/1/content-assets/1/review-package")
     assert package.status_code == 200
     assert package.json()["pending_claim_count"] == 1
@@ -313,6 +331,22 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     )
     assert platform_homepage.status_code == 422
 
+    successful_verifier = routes.verify_publication_page
+
+    def unavailable_page(_url: str) -> dict:
+        from app.v1.website_audit import PublicationVerificationError
+
+        raise PublicationVerificationError("public_page_request_failed")
+
+    monkeypatch.setattr(routes, "verify_publication_page", unavailable_page)
+    unreachable = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
+        json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
+    )
+    assert unreachable.status_code == 409
+    assert "不会记录" in unreachable.json()["detail"]
+    monkeypatch.setattr(routes, "verify_publication_page", successful_verifier)
+
     published = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
         json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
@@ -320,7 +354,7 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert published.status_code == 200
     assert published.json()["status"] == "published"
     assert published.json()["targets"][0]["human_publish_status"] == "published"
-    assert published.json()["targets"][0]["publication_verification_status"] == "human_confirmed"
+    assert published.json()["targets"][0]["publication_verification_status"] == "publicly_verified"
     assert published.json()["targets"][0]["final_action_clicked"] is False
 
     corrected = review_client.post(
@@ -705,7 +739,7 @@ def test_official_site_uses_manual_handoff_before_human_publication(
     assert published.status_code == 200
     assert published.json()["status"] == "published"
     assert published.json()["targets"][0]["public_url"] == "https://brand.example.com/"
-    assert published.json()["targets"][0]["publication_verification_status"] == "human_confirmed"
+    assert published.json()["targets"][0]["publication_verification_status"] == "publicly_verified"
     assert published.json()["targets"][0]["final_action_clicked"] is False
 
     library = review_client.get("/api/v1/workspaces/1/content-library")

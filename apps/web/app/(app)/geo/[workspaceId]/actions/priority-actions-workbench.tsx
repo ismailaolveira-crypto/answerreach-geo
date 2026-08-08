@@ -99,6 +99,41 @@ function syncVariant(
 const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
 const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先", website: "官网审计" } as const;
 
+type ReviewVisualAsset = {
+	artifactId: number;
+	altText: string;
+	purpose: string;
+	sourceHost: string;
+	sourceUrl: string;
+	sha256: string;
+};
+
+function reviewVisualAssets(variants: CleanroomPlatformVariant[]): ReviewVisualAsset[] {
+	const items = new Map<number, ReviewVisualAsset>();
+	for (const variant of variants) {
+		for (const manifest of variant.image_manifest) {
+			const artifactId = Number(manifest.artifact_id || 0);
+			const sourceUrl = typeof manifest.source_url === "string" ? manifest.source_url : "";
+			if (artifactId < 1 || !sourceUrl || manifest.quality_gate !== "passed") continue;
+			let sourceHost = sourceUrl;
+			try {
+				sourceHost = new URL(sourceUrl).hostname;
+			} catch {
+				continue;
+			}
+			items.set(artifactId, {
+				artifactId,
+				altText: typeof manifest.alt_text === "string" ? manifest.alt_text : "官网归档素材",
+				purpose: typeof manifest.purpose === "string" ? manifest.purpose : "供内容审核与配图选择",
+				sourceHost,
+				sourceUrl,
+				sha256: typeof manifest.sha256 === "string" ? manifest.sha256 : "",
+			});
+		}
+	}
+	return [...items.values()];
+}
+
 function suggestedSources(type: PriorityActionOpportunity["type"]) {
 	if (type === "website") return ["服务端正文", "页面标题结构", "结构化数据"];
 	if (type === "citation") return ["关键指标释义", "应用场景说明", "行业解决方案"];
@@ -338,6 +373,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const currentRunStatus = currentRun?.status;
 	const currentAssetId = Number(currentRun?.result_snapshot.asset_id) || null;
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
+	const reviewVisuals = reviewVisualAssets(currentReviewPackage?.variants ?? []);
 	const websiteGenerationReady = !selected?.requiresSourcedBrandFacts || activeSourcedBrandFactCount > 0;
 	const websiteDraftReadyForApproval = !currentReviewPackage?.requires_sourced_brand_facts
 		|| currentReviewPackage.sourced_brand_fact_count > 0;
@@ -372,7 +408,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const allDraftsSaved = Boolean(currentDistribution?.targets.length && savedDraftCount === currentDistribution.targets.length);
 	const deliveryComplete = selected?.type === "website" ? websiteHandoffReady : allDraftsSaved;
 	const publicationReady = selected?.type === "website" ? websiteHandoffReady : allDraftsSaved;
-	const publishedTargetCount = currentDistribution?.targets.filter((target) => target.human_publish_status === "published" && target.public_url).length ?? 0;
+	const publishedTargetCount = currentDistribution?.targets.filter((target) => target.human_publish_status === "published" && target.public_url && target.publication_verification_status === "publicly_verified").length ?? 0;
 	const allTargetsPublished = Boolean(currentDistribution?.targets.length && publishedTargetCount === currentDistribution.targets.length);
 	const currentRetest = retests.find((item) => item.action_id === selected?.existingAction?.id);
 	const publicationRecordsLocked = Boolean(currentRetest?.retest_batch_id);
@@ -898,8 +934,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				const result = await recordHumanPublication(currentDistribution.id, targetId, publicUrl);
 				setDistributionRuns((current) => [result, ...current.filter((item) => item.id !== result.id)]);
 				setPublicationUrls((current) => ({ ...current, [targetId]: publicUrl }));
-				const published = result.targets.filter((item) => item.human_publish_status === "published").length;
-				setPublicationMessage(`${published}/${result.targets.length} 个平台已记录人工发布结果。系统没有代替你点击发布。`);
+				const verified = result.targets.filter((item) => item.publication_verification_status === "publicly_verified").length;
+				setPublicationMessage(`${verified}/${result.targets.length} 个公开页面已通过公网校验。系统没有代替你点击发布。`);
 				router.refresh();
 			} catch (error) {
 				setPublicationMessage(error instanceof Error ? error.message : "无法保存发布结果");
@@ -1067,7 +1103,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 								const platform = platformOptions.find((item) => item.key === target.platform_key);
 								const published = target.human_publish_status === "published" && Boolean(target.public_url);
 								const isWebsiteTarget = target.platform_key === "official_site";
-								return <section key={target.id} className={published ? "is-published" : ""}><header><span>{platform ? <img src={platform.logo} alt="" /> : null}<b>{platform?.label || target.platform_key}</b></span><small>{publicationRecordsLocked ? "复测已开始，记录已锁定" : published ? (isWebsiteTarget ? "上线已记录" : "发布已记录") : (isWebsiteTarget ? "等待网站负责人上线" : "等待人工发布")}</small></header><div><input type="url" aria-label={`${platform?.label || target.platform_key}${isWebsiteTarget ? "已上线页面" : "公开文章"} URL`} placeholder={isWebsiteTarget ? "粘贴已上线的同域官网 URL" : "粘贴具体公开文章 URL"} value={publicationUrls[target.id] ?? target.public_url ?? ""} disabled={publicationRecordsLocked} onChange={(event) => setPublicationUrls((current) => ({ ...current, [target.id]: event.target.value }))} /><button type="button" disabled={publicationRecordsLocked || isSaving || !((publicationUrls[target.id] ?? target.public_url ?? "").trim())} onClick={() => savePublication(target.id)}>{publicationRecordsLocked ? "已锁定" : published ? "更正记录" : isWebsiteTarget ? "记录上线" : "记录发布"}</button></div>{target.draft_url ? <a href={target.draft_url} target="_blank" rel="noreferrer">打开平台草稿</a> : null}{target.public_url ? <a href={target.public_url} target="_blank" rel="noreferrer">{isWebsiteTarget ? "查看已上线页面" : "查看公开文章"}</a> : null}</section>;
+								const publiclyVerified = target.publication_verification_status === "publicly_verified";
+								return <section key={target.id} className={publiclyVerified ? "is-published" : ""}><header><span>{platform ? <img src={platform.logo} alt="" /> : null}<b>{platform?.label || target.platform_key}</b></span><small>{publicationRecordsLocked ? "复测已开始，记录已锁定" : publiclyVerified ? "公网已核验" : published ? "等待公网校验" : (isWebsiteTarget ? "等待网站负责人上线" : "等待人工发布")}</small></header><div><input type="url" aria-label={`${platform?.label || target.platform_key}${isWebsiteTarget ? "已上线页面" : "公开文章"} URL`} placeholder={isWebsiteTarget ? "粘贴已上线的同域官网 URL" : "粘贴具体公开文章 URL"} value={publicationUrls[target.id] ?? target.public_url ?? ""} disabled={publicationRecordsLocked} onChange={(event) => setPublicationUrls((current) => ({ ...current, [target.id]: event.target.value }))} /><button type="button" disabled={publicationRecordsLocked || isSaving || !((publicationUrls[target.id] ?? target.public_url ?? "").trim())} onClick={() => savePublication(target.id)}>{publicationRecordsLocked ? "已锁定" : isSaving ? "正在核验…" : publiclyVerified ? "更正并复验" : isWebsiteTarget ? "核验并记录上线" : "核验并记录发布"}</button></div>{target.draft_url ? <a href={target.draft_url} target="_blank" rel="noreferrer">打开平台草稿</a> : null}{target.public_url ? <a href={target.public_url} target="_blank" rel="noreferrer">{isWebsiteTarget ? "查看已上线页面" : "查看公开文章"}</a> : null}</section>;
 							})}{publicationMessage ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <p className="pa-stage-note">{selected.type === "website" ? "官网交付记录建立后，才能回填真实上线 URL。" : "草稿真实回读后，才可记录人工发布结果。"}</p>}
 						</ActionStage>
 						<ActionStage index={6} label="同口径复测" state={comparableRetestComplete ? "done" : retestActive || allTargetsPublished ? "active" : "idle"}>
@@ -1113,6 +1150,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						})()}
 					</article>
 					<aside className="pa-review-checks">
+						{reviewVisuals.length ? <section className="pa-review-visuals"><header><div><b>官网素材</b><small>{reviewVisuals.length} 张真实截图 · 来源与文件哈希已校验</small></div></header><div className="pa-review-visual-list">{reviewVisuals.map((visual) => <article key={visual.artifactId}><a href={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} target="_blank" rel="noreferrer"><img src={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} alt={visual.altText} /></a><div><b>{visual.purpose}</b><small>{visual.sourceHost}{visual.sha256 ? ` · ${visual.sha256.slice(0, 10)}…` : ""}</small><a href={visual.sourceUrl} target="_blank" rel="noreferrer">查看官方来源</a></div></article>)}</div></section> : null}
 						<section><header><div><b>事实与来源</b><small>{currentReviewPackage.claims.length - pendingClaims.length} 条已有处理结论 · {pendingClaims.length} 条待判断</small></div></header><div className="pa-claim-list">{currentReviewPackage.claims.map((claim) => {
 							const needsHuman = !resolvedClaimStatuses.includes(claim.verification_status);
 							const confirmed = claim.verification_status === "human_confirmed" || confirmedClaimIds.includes(claim.id);

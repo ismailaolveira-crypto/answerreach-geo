@@ -29,11 +29,55 @@ from app.models.cleanroom_v1 import (
 from app.models.user import User
 from app.v1 import routes
 from app.v1.agent_orchestration import _build_context
-from app.v1.website_audit import WebsiteAuditTargetError, audit_website
+from app.v1.website_audit import (
+    PublicationVerificationError,
+    WebsiteAuditTargetError,
+    audit_website,
+    verify_publication_page,
+)
 
 
 def public_resolver(_host: str, _port: int) -> list[str]:
     return ["93.184.216.34"]
+
+
+def test_publication_verification_returns_compact_response_evidence() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text="<html><body>" + ("真实公开文章内容" * 20) + "</body></html>",
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        result = verify_publication_page(
+            "https://brand.example/article/1",
+            resolver=public_resolver,
+            client=client,
+        )
+    assert result["status"] == "publicly_verified"
+    assert result["status_code"] == 200
+    assert result["content_type"] == "text/html"
+    assert result["sha256"]
+    assert result["size_bytes"] > 64
+    assert "body" not in result
+
+
+def test_publication_verification_rejects_non_html_response() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={"status": "ok", "padding": "x" * 100},
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(PublicationVerificationError, match="public_page_not_html"):
+            verify_publication_page(
+                "https://brand.example/api/article/1",
+                resolver=public_resolver,
+                client=client,
+            )
 
 
 def _transport(request: httpx.Request) -> httpx.Response:

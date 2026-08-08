@@ -20,10 +20,15 @@ AUDIT_VERSION = "website-citation-audit.v1"
 MAX_HOME_BYTES = 512 * 1024
 MAX_DISCOVERY_BYTES = 128 * 1024
 USER_AGENT = "ChunqiuYuanquan-GEO-Audit/1.0 (+website citation readiness)"
+PUBLICATION_VERIFY_MAX_BYTES = 128 * 1024
 
 
 class WebsiteAuditTargetError(ValueError):
     """Raised when a configured workspace URL is unsafe or unsupported."""
+
+
+class PublicationVerificationError(ValueError):
+    """Raised when a claimed public page cannot be verified as readable HTML."""
 
 
 Resolver = Callable[[str, int], list[str]]
@@ -256,6 +261,54 @@ def _fetch(
                 "redirects": redirects,
             }
     raise httpx.TooManyRedirects("Website audit exceeded redirect limit", request=None)
+
+
+def verify_publication_page(
+    url: str,
+    *,
+    resolver: Resolver = _default_resolver,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Fetch a public page safely and return a compact, persisted proof snapshot."""
+    owned_client = client is None
+    active_client = client or httpx.Client(
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        timeout=httpx.Timeout(12.0, connect=8.0),
+        follow_redirects=False,
+    )
+    try:
+        document = _fetch(
+            active_client,
+            url,
+            resolver=resolver,
+            max_bytes=PUBLICATION_VERIFY_MAX_BYTES,
+        )
+    except WebsiteAuditTargetError:
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise PublicationVerificationError("public_page_request_failed") from exc
+    finally:
+        if owned_client:
+            active_client.close()
+    status_code = int(document.get("status_code") or 0)
+    if status_code < 200 or status_code >= 400:
+        raise PublicationVerificationError(f"public_page_http_{status_code or 'unknown'}")
+    content_type = str(document.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        raise PublicationVerificationError("public_page_not_html")
+    if int(document.get("size_bytes") or 0) < 64:
+        raise PublicationVerificationError("public_page_body_too_small")
+    return {
+        "status": "publicly_verified",
+        "verified_url": document["url"],
+        "status_code": status_code,
+        "content_type": content_type,
+        "sha256": document["sha256"],
+        "size_bytes": document["size_bytes"],
+        "truncated": bool(document.get("truncated")),
+        "redirect_count": len(document.get("redirects") or []),
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def _check(label: str, passed: bool, detail: str, weight: int) -> dict[str, Any]:

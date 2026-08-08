@@ -27,7 +27,7 @@ const FILTERS = [
 
 function itemState(item: CleanroomContentLibraryItem) {
 	if (!item.is_latest_version || item.asset.status === "superseded") return "superseded";
-	if (item.draft_targets.some((target) => target.human_publish_status === "published" && target.public_url)) return "published";
+	if (item.draft_targets.some((target) => target.human_publish_status === "published" && target.public_url && target.publication_verification_status === "publicly_verified")) return "published";
 	if (item.draft_targets.some((target) => target.platform_key === "official_site" && target.adapter_version === "manual-website.v1" && target.request_status === "handoff_ready")) return "website_handoff";
 	if (item.saved_draft_count > 0) return "draft_saved";
 	if (item.latest_review_verdict === "changes_requested") return "revision";
@@ -175,7 +175,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 				const websiteHandoffReady = item.draft_targets.some((target) => target.platform_key === "official_site" && target.adapter_version === "manual-website.v1" && target.request_status === "handoff_ready");
 				const draftComplete = item.saved_draft_count > 0;
 				const deliveryComplete = isWebsiteAsset ? websiteHandoffReady : draftComplete;
-				const publishedCount = item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url).length;
+				const publishedCount = item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url && target.publication_verification_status === "publicly_verified").length;
 				return <article className={`${styles.item} ${state === "superseded" ? styles.history : ""}`} key={item.asset.id}>
 					<header>
 						<div className={styles.identity}><span className={`${styles.state} ${styles[state]}`}>{stateLabel(state)}</span><small>内容 #{item.asset.id} · v{item.asset.version} · {formatDate(item.asset.updated_at)}</small></div>
@@ -197,7 +197,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						</figure>)}</div>
 					</section> : null}
 					{item.draft_targets.some((target) => target.draft_url) ? <div className={styles.draftLinks}><b>已回读草稿</b>{item.draft_targets.filter((target) => target.draft_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.draft_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}打开{meta?.label || target.platform_key}草稿</a>; })}</div> : null}
-					{publishedCount > 0 ? <div className={styles.publicLinks}><b>人工发布记录</b>{item.draft_targets.filter((target) => target.public_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.public_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}查看{meta?.label || target.platform_key}公开文章</a>; })}</div> : null}
+					{publishedCount > 0 ? <div className={styles.publicLinks}><b>公网已核验的发布记录</b>{item.draft_targets.filter((target) => target.public_url && target.publication_verification_status === "publicly_verified").map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.public_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}查看{meta?.label || target.platform_key}公开文章</a>; })}</div> : null}
 					<details className={styles.details}>
 						<summary>查看正文与 {item.variants.length} 个平台版本<span aria-hidden="true">›</span></summary>
 						<div className={styles.documents}>
