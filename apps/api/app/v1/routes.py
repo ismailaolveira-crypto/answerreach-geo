@@ -158,7 +158,11 @@ from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.platform_adaptation import adapt_asset
 from app.v1.website_audit import WebsiteAuditTargetError, audit_website
 from app.services.article_sync_adapter import get_article_sync_adapter
-from app.services.codex_agent_runtime import LocalCodexRuntime, diagnose_local_codex
+from app.services.codex_agent_runtime import (
+    LocalCodexRuntime,
+    diagnose_local_codex,
+    invalidate_local_codex_diagnostic_cache,
+)
 from app.db.session import SessionLocal
 from app.v1.agent_orchestration import append_agent_event
 from app.services.workspace_secrets import (
@@ -5275,6 +5279,7 @@ def test_agent_runtime(
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
     workspace_or_404(db, user, workspace_id)
+    invalidate_local_codex_diagnostic_cache()
     diagnostic = _agent_runtime_diagnostic(db, workspace_id)
     started = perf_counter()
     if not diagnostic.get("ready"):
@@ -5380,6 +5385,7 @@ def create_agent_run(
                 status_code=409,
                 detail="Website audit is incomplete; resolve access and run the audit again before drafting",
             )
+    invalidate_local_codex_diagnostic_cache()
     diagnostic = diagnose_local_codex()
     if not diagnostic.get("ready"):
         raise HTTPException(

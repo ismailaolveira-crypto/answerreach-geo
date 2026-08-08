@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 import threading
+from time import monotonic
 from typing import Callable
 
 
@@ -19,6 +20,11 @@ class CodexRunInterrupted(RuntimeError):
 
 class CodexRunTimedOut(RuntimeError):
     pass
+
+
+_DIAGNOSTIC_CACHE_TTL_SECONDS = 60.0
+_diagnostic_cache: tuple[float, dict] | None = None
+_diagnostic_cache_lock = threading.Lock()
 
 
 @dataclass(slots=True)
@@ -36,8 +42,8 @@ def _payload_dict(payload: object) -> dict:
     return {"value": str(payload)}
 
 
-def diagnose_local_codex() -> dict:
-    """Return non-secret local runtime/account state using the official SDK."""
+def _probe_local_codex() -> dict:
+    """Read non-secret local runtime/account state using the official SDK."""
 
     try:
         import openai_codex
@@ -83,6 +89,37 @@ def diagnose_local_codex() -> dict:
             "login_status": "runtime_error",
             "error": str(exc)[:500],
         }
+
+
+def invalidate_local_codex_diagnostic_cache() -> None:
+    """Force the next diagnostic to read the live local Codex runtime."""
+
+    global _diagnostic_cache
+    with _diagnostic_cache_lock:
+        _diagnostic_cache = None
+
+
+def diagnose_local_codex() -> dict:
+    """Return a short-lived, non-secret Codex diagnostic snapshot.
+
+    Account and model discovery starts a local Codex process and can take several
+    seconds. Page reads may reuse the snapshot, while explicit tests and run
+    creation invalidate it first.
+    """
+
+    global _diagnostic_cache
+    now = monotonic()
+    cached = _diagnostic_cache
+    if cached and now - cached[0] < _DIAGNOSTIC_CACHE_TTL_SECONDS:
+        return dict(cached[1])
+    with _diagnostic_cache_lock:
+        now = monotonic()
+        cached = _diagnostic_cache
+        if cached and now - cached[0] < _DIAGNOSTIC_CACHE_TTL_SECONDS:
+            return dict(cached[1])
+        result = _probe_local_codex()
+        _diagnostic_cache = (monotonic(), dict(result))
+        return dict(result)
 
 
 class LocalCodexRuntime:

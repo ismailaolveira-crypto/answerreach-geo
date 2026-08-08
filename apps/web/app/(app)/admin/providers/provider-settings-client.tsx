@@ -69,7 +69,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
     setSelectedKey(key);
   }
 
-  return <div className="provider-hub">
+  return <main className="provider-hub">
     <header className="provider-hub-heading">
       <div><p>运营设置</p><h1>模型与渠道</h1><span>统一维护模型、API 渠道和联网能力。切换模型只切换视图，不会执行测试。</span></div>
       <div className={`provider-overall-state ${healthyCount ? "is-ready" : "is-pending"}`}><i />整体连接状态：{healthyCount ? `${healthyCount} 个渠道可观测` : "待完成测试"}</div>
@@ -161,5 +161,5 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
       <div><p>观测工作台</p><h2>渠道准备好后，再去决策地图发起观测</h2><span>推荐问题、自定义问题、模型和运行次数都在同一个紧凑面板内完成。</span></div>
       <Link href={`/geo/1?model=${selectedKey}`}>前往决策地图 <span>→</span></Link>
     </section>
-  </div>;
+  </main>;
 }

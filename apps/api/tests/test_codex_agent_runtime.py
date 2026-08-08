@@ -8,6 +8,7 @@ from app.services.codex_agent_runtime import (
     CodexRunTimedOut,
     LocalCodexRuntime,
 )
+from app.services import codex_agent_runtime
 
 
 class Payload:
@@ -93,6 +94,32 @@ def run_runtime(tmp_path: Path, *, timeout_seconds: float) -> object:
         developer_instructions="Test only",
         timeout_seconds=timeout_seconds,
     )
+
+
+def test_diagnostic_cache_reuses_snapshot_until_invalidated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def fake_probe() -> dict:
+        nonlocal calls
+        calls += 1
+        return {"ready": True, "probe": calls}
+
+    codex_agent_runtime.invalidate_local_codex_diagnostic_cache()
+    monkeypatch.setattr(codex_agent_runtime, "_probe_local_codex", fake_probe)
+    try:
+        first = codex_agent_runtime.diagnose_local_codex()
+        second = codex_agent_runtime.diagnose_local_codex()
+        assert first == second == {"ready": True, "probe": 1}
+        assert calls == 1
+
+        codex_agent_runtime.invalidate_local_codex_diagnostic_cache()
+        refreshed = codex_agent_runtime.diagnose_local_codex()
+        assert refreshed == {"ready": True, "probe": 2}
+        assert calls == 2
+    finally:
+        codex_agent_runtime.invalidate_local_codex_diagnostic_cache()
 
 
 def test_timeout_interrupts_the_real_turn_handle_and_surfaces_timeout(
