@@ -111,17 +111,19 @@ export default async function OperationsPage({ params }: Props) {
     return { definition, provider, diagnostic, latestTest, providerEvidence, accepted, testedAvailable: readiness?.collection_ready === true, state };
   });
   const testedAvailableCount = rows.filter((item) => item.testedAvailable).length;
-  const needsConfigurationCount = rows.length - testedAvailableCount;
+  const acceptedCount = rows.filter((item) => item.accepted).length;
+  const needsAttentionCount = rows.length - acceptedCount;
 
   return <div className="sy-page">
     <header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header>
     <main className="sy-work-main sy-api-settings">
-      <header><p>运营设置</p><h1>模型连接</h1><span>统一配置官方 API。只有能证明执行过联网搜索的回答，才会进入决策地图。</span></header>
+      <header><p>运营总览</p><h1>运营状态</h1><span>同时查看模型连接、真实观测批次和证据闭环；连接测试不会被误认为已完成观测。</span></header>
 
-      <section className="sy-api-summary" aria-label="模型连接摘要">
+      <section className="sy-api-summary" aria-label="运营状态摘要">
         <div className="is-total"><span>模型平台</span><strong>{PLATFORMS.length}</strong><small>家已纳入观测</small></div>
-        <div className="is-ready"><span>可发起观测</span><strong>{testedAvailableCount}</strong><small>家当前通过联网门禁</small></div>
-        <div className="is-config"><span>需要处理</span><strong>{needsConfigurationCount}</strong><small>家需配置、重测或排障</small></div>
+        <div className="is-ready"><span>观测就绪</span><strong>{testedAvailableCount}</strong><small>家通过真实联网门禁</small></div>
+        <div className="is-proof"><span>证据闭环</span><strong>{acceptedCount}</strong><small>家已归档回答、来源与工件</small></div>
+        <div className="is-config"><span>需要处理</span><strong>{needsAttentionCount}</strong><small>家尚未形成完整证据</small></div>
       </section>
 
       <section className="sy-provider-section">
