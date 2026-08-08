@@ -10,7 +10,7 @@ from time import perf_counter
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -170,7 +170,7 @@ from app.services.codex_agent_runtime import (
     invalidate_local_codex_diagnostic_cache,
 )
 from app.db.session import SessionLocal
-from app.v1.agent_orchestration import append_agent_event
+from app.v1.agent_orchestration import ARTIFACT_ROOT, append_agent_event, capture_agent_visuals
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
     ARTICLE_SYNC_MCP_SERVER_PATH,
@@ -186,6 +186,7 @@ router = APIRouter(prefix="/v1", tags=["clean-room-geo-v1"])
 
 API_ROOT = Path(__file__).resolve().parents[2]
 OFFICIAL_API_ARTIFACT_ROOT = API_ROOT / "private_artifacts" / "official_api"
+AGENT_ARTIFACT_ROOT = API_ROOT / "private_artifacts" / "agent-runs"
 
 
 def workspace_or_404(db: Session, user: User, workspace_id: int) -> GeoWorkspace:
@@ -5971,6 +5972,148 @@ def read_agent_run_progress(
     return _build_agent_run_progress(db, run)
 
 
+@router.post(
+    "/workspaces/{workspace_id}/agent-runs/{run_id}/visual-captures",
+    response_model=AgentRunProgressRead,
+)
+def capture_agent_run_visuals(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace = workspace_or_404(db, user, workspace_id)
+    run = _agent_run_or_404(db, workspace_id, run_id)
+    if run.status != "awaiting_review":
+        raise HTTPException(
+            status_code=409,
+            detail="Agent 内容完成后才能补采官网素材",
+        )
+    asset_id = int((run.result_snapshot or {}).get("asset_id") or 0)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, asset_id)
+    variants = list(
+        db.scalars(
+            select(GeoPlatformVariant)
+            .where(GeoPlatformVariant.content_asset_id == asset.id)
+            .order_by(GeoPlatformVariant.id)
+        )
+    )
+    manifest_items = [item for variant in variants for item in (variant.image_manifest or [])]
+    referenced_artifact_ids = {
+        int(item.get("artifact_id") or 0)
+        for item in manifest_items
+        if int(item.get("artifact_id") or 0) > 0
+    }
+    referenced_artifacts = {
+        artifact.id: artifact
+        for artifact in db.scalars(
+            select(GeoAgentArtifact).where(
+                GeoAgentArtifact.agent_run_id == run.id,
+                GeoAgentArtifact.id.in_(referenced_artifact_ids or {-1}),
+            )
+        )
+    }
+    manifest_is_verified = bool(manifest_items) and all(
+        item.get("quality_gate") == "passed"
+        and (artifact := referenced_artifacts.get(int(item.get("artifact_id") or 0))) is not None
+        and artifact.artifact_kind == "official_page_screenshot"
+        and (artifact.metadata_json or {}).get("quality_gate") == "passed"
+        for item in manifest_items
+    )
+    if manifest_is_verified:
+        run.stage = "awaiting_review"
+        db.add(run)
+        db.commit()
+        return _build_agent_run_progress(db, run)
+    if manifest_items:
+        for artifact in referenced_artifacts.values():
+            if artifact.artifact_kind == "official_page_screenshot":
+                artifact.artifact_kind = "invalid_page_screenshot"
+                artifact.metadata_json = {
+                    **(artifact.metadata_json or {}),
+                    "status": "invalid",
+                    "invalid_reason": "capture_quality_unverified",
+                }
+                db.add(artifact)
+        for variant in variants:
+            variant.image_manifest = []
+            db.add(variant)
+
+    structured = db.scalar(
+        select(GeoAgentArtifact)
+        .where(
+            GeoAgentArtifact.agent_run_id == run.id,
+            GeoAgentArtifact.artifact_kind == "structured_result",
+        )
+        .order_by(GeoAgentArtifact.id.desc())
+    )
+    candidates: list[dict] = []
+    if structured is not None:
+        try:
+            root = ARTIFACT_ROOT.resolve(strict=True)
+            result_path = Path(structured.uri).resolve(strict=True)
+            result_path.relative_to(root)
+            payload = result_path.read_bytes()
+            if sha256(payload).hexdigest() == structured.sha256:
+                result = json.loads(payload).get("result") or {}
+                candidates = list(result.get("visual_assets") or [])
+        except (OSError, ValueError, json.JSONDecodeError, AttributeError):
+            candidates = []
+    if not candidates and workspace.website_url:
+        candidates = [
+            {
+                "source_url": workspace.website_url,
+                "alt_text": f"{workspace.brand_name}官网页面",
+                "purpose": "官网当前品牌呈现，供内容审核和配图选择",
+                "recommended_platforms": run.selected_platforms,
+            }
+        ]
+    capture_outcome, manifest = capture_agent_visuals(
+        db,
+        run,
+        official_website=workspace.website_url,
+        candidates=candidates,
+        output_directory=ARTIFACT_ROOT / str(workspace_id) / str(run.id) / "visuals",
+    )
+    snapshot = dict(run.result_snapshot or {})
+    snapshot["visual_asset_count"] = len(manifest)
+    snapshot["visual_capture_status"] = capture_outcome.status
+    run.result_snapshot = snapshot
+    run.stage = "awaiting_review"
+    if manifest:
+        for variant in variants:
+            variant.image_manifest = [
+                item
+                for item in manifest
+                if not item.get("recommended_platforms")
+                or variant.platform_key in item.get("recommended_platforms", [])
+            ]
+            db.add(variant)
+        db.add(run)
+        db.commit()
+        return _build_agent_run_progress(db, run)
+    db.add(run)
+    db.commit()
+    detail_by_reason = {
+        "browser_bridge_not_connected": "未检测到已连接的本机浏览器桥接，请开启 OpenCLI 扩展后重试",
+        "no_official_domain_candidate": "Agent 没有提供可验证的官方同域素材页",
+        "official_page_open_failed": "官方页面无法在本机浏览器中打开",
+        "official_page_identity_missing": "官方页面已打开，但未获得可验证的浏览器页签",
+        "official_page_render_timeout": "官方页面渲染超时，未将空白画面归档",
+        "official_page_visual_empty": "官方页面没有可见正文或图像，未将空白画面归档",
+        "official_page_screenshot_command_failed": "官方页面已渲染，但浏览器截图命令失败",
+        "official_page_screenshot_file_missing": "浏览器已执行截图，但私密工件目录没有收到图片",
+        "official_page_screenshot_empty": "浏览器截图文件为空，未将它计为真实素材",
+    }
+    raise HTTPException(
+        status_code=409,
+        detail=detail_by_reason.get(
+            capture_outcome.reason or "",
+            "本次官网素材未采集，正文与审核状态未受影响",
+        ),
+    )
+
+
 @router.get(
     "/workspaces/{workspace_id}/agent-runs/{run_id}/events",
     response_model=list[AgentEventRead],
@@ -6063,6 +6206,41 @@ def list_agent_artifacts(
             .where(GeoAgentArtifact.agent_run_id == run_id)
             .order_by(GeoAgentArtifact.id)
         )
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent-artifacts/{artifact_id}/content",
+    response_class=FileResponse,
+)
+def read_agent_artifact_content(
+    workspace_id: int,
+    artifact_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    artifact = scoped_or_404(db, GeoAgentArtifact, workspace_id, artifact_id)
+    if artifact.artifact_kind != "official_page_screenshot":
+        raise HTTPException(status_code=404, detail="Visual artifact not found")
+    try:
+        root = AGENT_ARTIFACT_ROOT.resolve(strict=True)
+        artifact_path = Path(artifact.uri).resolve(strict=True)
+        artifact_path.relative_to(root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Visual artifact file not found") from None
+    if not artifact_path.is_file():
+        raise HTTPException(status_code=404, detail="Visual artifact file not found")
+    payload = artifact_path.read_bytes()
+    if sha256(payload).hexdigest() != artifact.sha256:
+        raise HTTPException(status_code=409, detail="Visual artifact integrity check failed")
+    return FileResponse(
+        artifact_path,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "ETag": f'"{artifact.sha256}"',
+        },
     )
 
 

@@ -1448,6 +1448,12 @@ export function getAgentRunProgress(workspaceId: string | number, runId: number)
 	return apiRequest<CleanroomAgentRunProgress>(`/workspaces/${workspaceId}/agent-runs/${runId}/progress`);
 }
 
+export function captureAgentRunVisuals(workspaceId: string | number, runId: number) {
+	return apiRequest<CleanroomAgentRunProgress>(`/workspaces/${workspaceId}/agent-runs/${runId}/visual-captures`, {
+		method: "POST",
+	});
+}
+
 export function interruptCleanroomAgentRun(workspaceId: string | number, runId: number) {
 	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/agent-runs/${runId}/interrupt`, {
 		method: "POST",

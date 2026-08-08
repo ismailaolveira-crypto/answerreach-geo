@@ -1,5 +1,6 @@
 import { revalidatePath } from "next/cache";
 import {
+	captureAgentRunVisuals,
 	createCleanroomAction,
 	createCleanroomAgentRun,
 	createCleanroomActionRetest,
@@ -129,6 +130,14 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return run;
 	}
 
+	async function captureAgentVisuals(runId: number) {
+		"use server";
+		const progress = await captureAgentRunVisuals(workspaceId, runId);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
+		return progress;
+	}
+
 	async function readAgentProgress(actionId: number) {
 		"use server";
 		const runs = await getActionAgentRuns(workspaceId, actionId);
@@ -198,5 +207,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return result;
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
 }

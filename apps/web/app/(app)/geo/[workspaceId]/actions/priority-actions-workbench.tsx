@@ -48,6 +48,7 @@ type Props = {
 	interruptAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	reviseAgent: (runId: number, contentAssetId: number) => Promise<CleanroomAgentRun>;
+	captureAgentVisuals: (runId: number) => Promise<CleanroomAgentRunProgress>;
 	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; progress: CleanroomAgentRunProgress | null }>;
 	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; reviewed_platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
@@ -209,6 +210,13 @@ function formatArtifactSize(size: number) {
 	return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function agentArtifactLabel(kind: string) {
+	if (kind === "official_page_screenshot") return "官网截图";
+	if (kind === "invalid_page_screenshot") return "无效截图（未使用）";
+	if (kind === "structured_result") return "结构化结果";
+	return "Agent 工件";
+}
+
 function formatEventTime(value: string) {
 	return value.replace("T", " ").slice(11, 19);
 }
@@ -245,7 +253,7 @@ function formatWebsiteAuditTime(value: string) {
 	}).format(new Date(normalized));
 }
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, createDistribution, recordDistributionResults, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -404,6 +412,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		},
 	] as const;
 	const visibleAgentProgress = agentProgress?.run.id === currentRunId ? agentProgress : null;
+	const hasCapturedVisual = visibleAgentProgress?.artifacts.some((artifact) => artifact.artifact_kind === "official_page_screenshot") ?? false;
 	const groupedAgentEvents = useMemo(() => groupAgentEvents(visibleAgentProgress?.events ?? []), [visibleAgentProgress?.events]);
 	const agentTransportLabel = agentTransport === "live"
 		? "实时事件已连接"
@@ -654,6 +663,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				setAgentRuns((current) => current.map((item) => item.id === run.id ? run : item));
 			} catch (error) {
 				setAgentFeedback(error instanceof Error ? error.message : "恢复请求失败");
+			}
+		});
+	}
+
+	function requestVisualCapture() {
+		if (!currentRun) return;
+		setAgentFeedback("");
+		startSaving(async () => {
+			try {
+				const progress = await captureAgentVisuals(currentRun.id);
+				setAgentProgress(progress);
+				setAgentEvents(progress.events);
+				setAgentRuns((current) => current.map((item) => item.id === progress.run.id ? progress.run : item));
+				setAgentFeedback("官网截图已归档，可在内容库查看原图与来源。");
+				router.refresh();
+			} catch (error) {
+				setAgentFeedback(error instanceof Error ? error.message : "官网素材采集失败");
 			}
 		});
 	}
@@ -1003,14 +1029,14 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 									</ol>
 									<div className="pa-agent-artifacts">
 										<b>本轮持久化结果</b>
-										{visibleAgentProgress.artifacts.length ? visibleAgentProgress.artifacts.map((artifact) => <span key={artifact.id}>结构化结果 · {formatArtifactSize(artifact.size_bytes)} · 已校验归档</span>) : <span>尚未产生可审核工件</span>}
+										{visibleAgentProgress.artifacts.length ? visibleAgentProgress.artifacts.map((artifact) => <span key={artifact.id}>{agentArtifactLabel(artifact.artifact_kind)} · {formatArtifactSize(artifact.size_bytes)} · 已校验归档</span>) : <span>尚未产生可审核工件</span>}
 										{currentReviewPackage && !(reviewNeedsRevision && runActive) ? <span>内容资产 #{currentReviewPackage.asset.id} · {currentReviewPackage.variants.length} 个平台稿 · {currentReviewPackage.claims.length} 条主张</span> : null}
 									</div>
 									{visibleAgentProgress.event_count ? <button className="pa-agent-log-toggle" type="button" onClick={() => setAgentDetailsExpanded((value) => !value)} aria-expanded={agentDetailsExpanded}>{agentDetailsExpanded ? "收起执行记录" : `查看 ${visibleAgentProgress.event_count} 条执行记录`} <Icon name="chevron" /></button> : null}
 									{agentDetailsExpanded ? <><small className="pa-agent-log-note">{visibleAgentProgress.attempt_number > 1 ? `当前为第 ${visibleAgentProgress.attempt_number} 轮；下方保留全部历史事件，` : ""}连续重复事件已合并展示，原始事件完整保留。</small><ul className="pa-agent-event-log">{groupedAgentEvents.map((event) => <li key={event.key}><time>{formatEventTime(event.firstAt)}{event.count > 1 ? `–${formatEventTime(event.lastAt)}` : ""}</time><span><b>{agentStageLabels[event.stage] || event.stage}{event.count > 1 ? ` · ${event.count} 次` : ""}</b>{event.message}</span></li>)}</ul></> : null}
 								</> : null}
 								{currentRun.status === "failed" && currentRun.error_message ? <p className="is-error">{currentRun.error_message}</p> : null}
-								<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "恢复原任务" : "Agent 正忙"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && !currentRun.codex_thread_id ? <button type="button" onClick={beginAgent} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "重新启动" : "Agent 正忙"}</button> : null}</div>
+								<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{currentRun.status === "awaiting_review" && !hasCapturedVisual ? <button type="button" onClick={requestVisualCapture} disabled={isSaving}>{isSaving ? "正在采集…" : "补采官网素材"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "恢复原任务" : "Agent 正忙"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && !currentRun.codex_thread_id ? <button type="button" onClick={beginAgent} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "重新启动" : "Agent 正忙"}</button> : null}</div>
 							</div> : null}
 							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
 						</ActionStage>

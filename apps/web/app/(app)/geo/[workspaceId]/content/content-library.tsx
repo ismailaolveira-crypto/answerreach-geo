@@ -59,6 +59,40 @@ function formatDate(value: string) {
 	}).format(new Date(value));
 }
 
+type CapturedVisualAsset = {
+	artifactId: number;
+	altText: string;
+	purpose: string;
+	sourceUrl: string;
+	sha256: string;
+};
+
+function capturedVisualAssets(item: CleanroomContentLibraryItem): CapturedVisualAsset[] {
+	const byArtifact = new Map<number, CapturedVisualAsset>();
+	for (const variant of item.variants) {
+		for (const record of variant.image_manifest) {
+			const artifactId = record.artifact_id;
+			if (record.status !== "captured" || typeof artifactId !== "number") continue;
+			byArtifact.set(artifactId, {
+				artifactId,
+				altText: typeof record.alt_text === "string" ? record.alt_text : "官方网站截图",
+				purpose: typeof record.purpose === "string" ? record.purpose : "内容审核参考",
+				sourceUrl: typeof record.source_url === "string" ? record.source_url : "",
+				sha256: typeof record.sha256 === "string" ? record.sha256 : "",
+			});
+		}
+	}
+	return [...byArtifact.values()];
+}
+
+function sourceHost(value: string) {
+	try {
+		return new URL(value).hostname;
+	} catch {
+		return "未知来源";
+	}
+}
+
 type ExportFeedback = "copied" | "copy_error" | "downloaded";
 
 function DocumentActions({ feedback, title, onCopy, onDownload }: { feedback?: ExportFeedback; title: string; onCopy: () => void; onDownload: () => void }) {
@@ -134,6 +168,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 		<section className={styles.list} aria-live="polite">
 			{visibleItems.length ? visibleItems.map((item) => {
 				const state = itemState(item);
+				const visualAssets = capturedVisualAssets(item);
 				const canExport = state !== "superseded" && state !== "stale";
 				const reviewComplete = item.approved_platform_keys.length > 0;
 				const isWebsiteAsset = item.variants.length > 0 && item.variants.every((variant) => variant.platform_key === "official_site");
@@ -154,6 +189,13 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						<div className={deliveryComplete ? styles.done : reviewComplete ? styles.current : ""}><span>3</span><b>{isWebsiteAsset ? "官网交付" : "平台草稿"}</b><small>{isWebsiteAsset ? websiteHandoffReady ? "交付记录已建立" : reviewComplete ? "可建立交付记录" : "尚未开放" : draftComplete ? `${item.saved_draft_count}/${item.total_draft_targets} 已回读` : reviewComplete ? "可打开同步助手" : "尚未开放"}</small></div>
 						<div className={publishedCount > 0 ? styles.done : deliveryComplete ? styles.current : ""}><span>4</span><b>{isWebsiteAsset ? "人工上线" : "人工发布"}</b><small>{publishedCount > 0 ? `${publishedCount}/${item.total_draft_targets} 已记录 URL` : deliveryComplete ? isWebsiteAsset ? "等待网站负责人上线" : "等待平台人工确认" : "尚未开放"}</small></div>
 					</div>}
+					{visualAssets.length ? <section className={styles.visualAssets} aria-label="已归档官网素材">
+						<header><div><b>已归档官网素材</b><span>{visualAssets.length} 张真实截图，已校验来源与文件哈希</span></div><small>仅用于人工审核与配图选择</small></header>
+						<div>{visualAssets.map((visual) => <figure key={visual.artifactId}>
+							<a href={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} target="_blank" rel="noreferrer" aria-label={`查看${visual.altText}原图`}><img src={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} alt={visual.altText} loading="lazy" /></a>
+							<figcaption><b>{visual.purpose}</b><span>{sourceHost(visual.sourceUrl)} · SHA-256 {visual.sha256.slice(0, 10)}…</span>{visual.sourceUrl ? <a href={visual.sourceUrl} target="_blank" rel="noreferrer">查看官方来源</a> : null}</figcaption>
+						</figure>)}</div>
+					</section> : null}
 					{item.draft_targets.some((target) => target.draft_url) ? <div className={styles.draftLinks}><b>已回读草稿</b>{item.draft_targets.filter((target) => target.draft_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.draft_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}打开{meta?.label || target.platform_key}草稿</a>; })}</div> : null}
 					{publishedCount > 0 ? <div className={styles.publicLinks}><b>人工发布记录</b>{item.draft_targets.filter((target) => target.public_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.public_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}查看{meta?.label || target.platform_key}公开文章</a>; })}</div> : null}
 					<details className={styles.details}>

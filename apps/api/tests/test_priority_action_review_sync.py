@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -1026,6 +1027,44 @@ def test_worker_honors_cancellation_won_during_queue_handoff(review_client: Test
         assert result.status == "cancelled"
         assert result.stage == "cancelled"
         assert action.stage == "reviewing"
+
+
+def test_visual_artifact_content_is_scoped_and_integrity_checked(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent-runs"
+    screenshot = root / "1" / "1" / "visuals" / "official-page-1.png"
+    screenshot.parent.mkdir(parents=True)
+    payload = b"\x89PNG\r\n\x1a\nverified-visual"
+    screenshot.write_bytes(payload)
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add(
+            GeoAgentArtifact(
+                id=1,
+                workspace_id=1,
+                agent_run_id=1,
+                artifact_kind="official_page_screenshot",
+                uri=str(screenshot),
+                sha256=sha256(payload).hexdigest(),
+                size_bytes=len(payload),
+                metadata_json={"media_type": "image/png"},
+            )
+        )
+        db.commit()
+    monkeypatch.setattr(routes, "AGENT_ARTIFACT_ROOT", root)
+
+    response = review_client.get("/api/v1/workspaces/1/agent-artifacts/1/content")
+    assert response.status_code == 200
+    assert response.content == payload
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["cache-control"] == "private, max-age=3600"
+
+    screenshot.write_bytes(b"tampered")
+    tampered = review_client.get("/api/v1/workspaces/1/agent-artifacts/1/content")
+    assert tampered.status_code == 409
 
 
 def test_agent_timeout_is_persisted_as_a_recoverable_failure(review_client: TestClient) -> None:

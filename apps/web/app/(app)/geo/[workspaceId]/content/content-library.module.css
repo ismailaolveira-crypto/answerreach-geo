@@ -56,6 +56,22 @@
 .draftLinks{align-items:center;background:#f4f8ff;border-block:1px solid #e1e9f6;display:flex;gap:8px;padding:10px 20px}
 .draftLinks>b{color:#50617a;font-size:10px;margin-right:4px}
 .draftLinks a{align-items:center;background:#fff;border:1px solid #d9e3f1;border-radius:7px;color:#2862c8;display:inline-flex;font-size:10px;font-weight:720;gap:5px;padding:6px 8px}
+.visualAssets{background:#f8faff;border-block:1px solid #e3e9f2;padding:14px 20px 16px}
+.visualAssets>header{align-items:center;display:flex;gap:18px;justify-content:space-between;margin-bottom:11px}
+.visualAssets>header div{display:grid;gap:3px}
+.visualAssets>header b{font-size:11px}
+.visualAssets>header span,.visualAssets>header small{color:#7d8ca0;font-size:9px;line-height:1.45}
+.visualAssets>div{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr));max-width:860px}
+.visualAssets figure{align-items:center;display:grid;gap:12px;grid-template-columns:132px minmax(0,1fr);margin:0;min-width:0}
+.visualAssets figure>a{background:#e9eef5;border:1px solid #dce4ee;border-radius:10px;display:block;overflow:hidden}
+.visualAssets img{aspect-ratio:16/10;display:block;height:auto;object-fit:cover;transition:transform .22s ease;width:100%}
+.visualAssets figure>a:hover img{transform:scale(1.025)}
+.visualAssets figure>a:active{transform:scale(.985)}
+.visualAssets figure>a:focus-visible{outline:3px solid rgb(36 103 232 / 22%);outline-offset:2px}
+.visualAssets figcaption{display:grid;gap:5px;min-width:0}
+.visualAssets figcaption b{font-size:10px;line-height:1.45}
+.visualAssets figcaption span{color:#8492a4;font-size:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.visualAssets figcaption a{color:#2865ce;font-size:9px;font-weight:740;width:max-content}
 .details{border-top:1px solid #e9edf3}
 .details>summary{align-items:center;color:#465870;cursor:pointer;display:flex;font-size:11px;font-weight:750;justify-content:space-between;list-style:none;min-height:44px;padding:13px 20px}
 .details>summary::-webkit-details-marker{display:none}
@@ -108,8 +124,10 @@
 .documentActions button{padding-inline:8px}
 .item>footer{align-items:flex-start;flex-direction:column;gap:10px}
 .item>footer a{width:100%;text-align:center}
+.visualAssets>header{align-items:flex-start;flex-direction:column;gap:4px}
+.visualAssets>div{grid-template-columns:1fr}
 }
-@media(prefers-reduced-motion:reduce){.details>summary span{transition:none}
+@media(prefers-reduced-motion:reduce){.details>summary span,.visualAssets img{transition:none}
 }
 @media(prefers-reduced-transparency:reduce){.toolbar{backdrop-filter:none;background:#fff}
 }
