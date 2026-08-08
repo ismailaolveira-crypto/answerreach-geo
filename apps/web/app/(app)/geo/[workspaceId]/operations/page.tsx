@@ -1,8 +1,8 @@
 import Link from "next/link";
 import type { Route } from "next";
-import { getLLMProviderReadiness, getLLMProviders, type LLMProvider, type LLMProviderDiagnostic, type LLMProviderTestResult } from "@/lib/geo-provider-api";
+import { getLLMProviderReadiness, getLLMProviders, type LLMProvider, type LLMProviderReadiness } from "@/lib/geo-provider-api";
 import { BrandLogo } from "@/components/brand-logo";
-import { getCleanroomEvidence } from "@/lib/cleanroom-v1-api";
+import { getCleanroomEvidence, getOfficialProviderObservationBatches } from "@/lib/cleanroom-v1-api";
 
 type Props = { params: Promise<{ workspaceId: string }> };
 type PlatformDefinition = {
@@ -21,6 +21,18 @@ const PLATFORMS: PlatformDefinition[] = [
   { key: "kimi", label: "Kimi", providerTypes: ["kimi_web_search"], platformKey: "kimi", note: "Moonshot 官方工具 · 联网搜索" },
   { key: "hunyuan", label: "腾讯混元", providerTypes: ["hunyuan_web_search"], platformKey: "hunyuan", note: "腾讯混元官方 API · 强制搜索增强" },
 ];
+
+const BATCH_STATUS_LABELS = {
+  pending: "等待中",
+  running: "运行中",
+  success: "已成功",
+  partial: "部分失败",
+  failed: "已失败",
+};
+
+function formatOperationTime(value: string) {
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
 
 function providerFor(definition: PlatformDefinition, providers: LLMProvider[]) {
   const matches = (item: LLMProvider) => {
@@ -42,22 +54,26 @@ function providerFor(definition: PlatformDefinition, providers: LLMProvider[]) {
   return undefined;
 }
 
-function connectionState(provider: LLMProvider | undefined, diagnostic: LLMProviderDiagnostic | null, latestTest: LLMProviderTestResult | null) {
+function connectionState(provider: LLMProvider | undefined, readiness?: LLMProviderReadiness | null) {
   if (!provider) return { tone: "waiting", label: "待接入", hint: "尚未创建 API 连接" };
+  const diagnostic = readiness?.diagnostic ?? null;
+  const latestTest = readiness?.latest_test ?? null;
   if (!diagnostic?.auth_ready) return { tone: "needs-key", label: "需要 API Key", hint: "连接已创建，密钥尚未配置" };
+  if (readiness?.collection_ready) return { tone: "verified", label: "联网门禁可用", hint: "当前配置已通过真实联网测试" };
+  if (readiness && !readiness.test_fresh && latestTest) return { tone: "unverified", label: "需要重新测试", hint: readiness.collection_blocker || "配置已变更，旧测试不再证明当前渠道可用" };
   if (latestTest?.ok === false) return { tone: "unverified", label: "测试未通过", hint: latestTest.error_message || "模型未通过联网证据门禁" };
   if (!latestTest) return { tone: "unverified", label: "待真实测试", hint: "需通过联网调用、来源 URL 与最终回答三项验证" };
-  if (diagnostic.ready && diagnostic.supports_web_search) return { tone: "verified", label: "联网门禁可用", hint: "API 与搜索能力已配置" };
-  if (diagnostic.auth_ready) return { tone: "unverified", label: "尚未证明联网", hint: diagnostic.last_blocker || "普通 API 可用，但不计入联网观测" };
+  if (diagnostic.auth_ready) return { tone: "unverified", label: "尚未达到门禁", hint: readiness?.collection_blocker || diagnostic.last_blocker || "普通 API 可用，但不计入联网观测" };
   return { tone: "waiting", label: "待配置", hint: "完成连接后即可测试" };
 }
 
 export default async function OperationsPage({ params }: Props) {
   const { workspaceId } = await params;
-  const [evidence, providers, readinessRows] = await Promise.all([
+  const [evidence, providers, readinessRows, recentBatches] = await Promise.all([
     getCleanroomEvidence(workspaceId),
     getLLMProviders(),
-    getLLMProviderReadiness().catch(() => []),
+    getLLMProviderReadiness(),
+    getOfficialProviderObservationBatches(workspaceId, { page: 1, pageSize: 5 }),
   ]);
   const readinessByProvider = new Map(readinessRows.map((item) => [item.provider_id, item]));
   const rows = PLATFORMS.map((definition) => {
@@ -76,14 +92,14 @@ export default async function OperationsPage({ params }: Props) {
       && Boolean(item.raw_artifact_uri)
       && (!providerUpdatedAt || Date.parse(item.captured_at) >= providerUpdatedAt)
     ) : undefined;
-    const connection = connectionState(provider, diagnostic, latestTest);
+    const connection = connectionState(provider, readiness);
     const accepted = connection.tone === "verified" && Boolean(providerEvidence);
     const state = accepted
       ? { tone: "verified", label: "产品闭环通过", hint: `真实回答、联网来源和原始工件已归档（证据 #${providerEvidence?.id}）` }
       : connection.tone === "verified"
         ? { tone: "unverified", label: "待完成观测", hint: "API 联网测试已通过，还需从决策地图生成一条完整证据" }
         : connection;
-    return { definition, provider, diagnostic, latestTest, providerEvidence, accepted, testedAvailable: connection.tone === "verified", state };
+    return { definition, provider, diagnostic, latestTest, providerEvidence, accepted, testedAvailable: readiness?.collection_ready === true, state };
   });
   const testedAvailableCount = rows.filter((item) => item.testedAvailable).length;
   const needsConfigurationCount = rows.length - testedAvailableCount;
@@ -95,8 +111,8 @@ export default async function OperationsPage({ params }: Props) {
 
       <section className="sy-api-summary" aria-label="模型连接摘要">
         <div className="is-total"><span>模型平台</span><strong>{PLATFORMS.length}</strong><small>家已纳入观测</small></div>
-        <div className="is-ready"><span>测试可用</span><strong>{testedAvailableCount}</strong><small>家通过联网门禁</small></div>
-        <div className="is-config"><span>需要配置</span><strong>{needsConfigurationCount}</strong><small>家尚未通过测试</small></div>
+        <div className="is-ready"><span>可发起观测</span><strong>{testedAvailableCount}</strong><small>家当前通过联网门禁</small></div>
+        <div className="is-config"><span>需要处理</span><strong>{needsConfigurationCount}</strong><small>家需配置、重测或排障</small></div>
       </section>
 
       <section className="sy-provider-section">
@@ -114,6 +130,27 @@ export default async function OperationsPage({ params }: Props) {
             </article>;
           })}
         </div>
+      </section>
+
+      <section className="sy-runtime-section" aria-labelledby="recent-runtime-heading">
+        <div className="sy-section-heading">
+          <div><h2 id="recent-runtime-heading">最近真实运行</h2><p>来自后台任务队列的持久化批次；进度、失败数与证据在刷新后仍可恢复。</p></div>
+          <Link href={`/geo/${workspaceId}/batches`}>查看全部 {recentBatches.pagination.total} 个批次</Link>
+        </div>
+        {recentBatches.items.length ? <div className="sy-batch-list sy-runtime-list" aria-label="最近真实观测批次">
+          <div className="sy-batch-list-head"><span>批次与创建时间</span><span>任务矩阵</span><span>执行结果</span><span>整体状态</span></div>
+          {recentBatches.items.map((batch) => <Link
+            aria-label={`查看批次 ${batch.batch_id} 的任务、失败原因与证据`}
+            className={`sy-batch-list-row is-${batch.status}`}
+            href={`/geo/${workspaceId}/batches/${batch.batch_id}`}
+            key={batch.batch_id}
+          >
+            <div><b>批次 #{batch.batch_id}</b><small>{formatOperationTime(batch.created_at)}</small></div>
+            <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条真实任务</small></div>
+            <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
+            <div><em className={`is-${batch.status}`}>{BATCH_STATUS_LABELS[batch.status]}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}% · 查看任务详情</small></div>
+          </Link>)}
+        </div> : <div className="sy-runtime-empty"><b>还没有真实观测批次</b><span>从决策地图发起第一轮联网观测后，后台任务会显示在这里。</span><Link href={`/geo/${workspaceId}`}>返回决策地图开始观测 →</Link></div>}
       </section>
 
       <details className="sy-advanced-settings">
