@@ -582,6 +582,9 @@ export type AgentRuntime = {
 	login_status: string;
 	default_model?: string | null;
 	available_models: string[];
+	connection_status: "cold" | "warm";
+	connected_since?: string | null;
+	reuse_count: number;
 	active_run_count: number;
 	max_concurrent_runs: number;
 	capacity_available: boolean;
@@ -1567,6 +1570,17 @@ export function getCleanroomContentAssets(workspaceId: string | number, actionId
 
 export function getCleanroomContentReviewPackage(workspaceId: string | number, assetId: number) {
 	return apiRequest<CleanroomContentReviewPackage>(`/workspaces/${workspaceId}/content-assets/${assetId}/review-package`);
+}
+
+export function updateCleanroomPlatformVariant(
+	workspaceId: string | number,
+	variantId: number,
+	payload: { title: string; summary: string; body_markdown: string; tags?: string[]; category?: string | null },
+) {
+	return apiRequest<CleanroomPlatformVariant>(`/workspaces/${workspaceId}/platform-variants/${variantId}`, {
+		method: "PATCH",
+		body: JSON.stringify(payload),
+	});
 }
 
 export function getCleanroomContentLibrary(workspaceId: string | number) {

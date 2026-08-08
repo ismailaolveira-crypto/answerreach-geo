@@ -7,6 +7,7 @@ import pytest
 from app.services.codex_agent_runtime import (
     CodexRunTimedOut,
     LocalCodexRuntime,
+    reset_local_codex_client,
 )
 from app.services import codex_agent_runtime
 from app.v1.agent_orchestration import _validate_verified_brand_claims
@@ -66,10 +67,25 @@ class FakeThread:
         return self.handle
 
 
-def install_fake_codex(monkeypatch: pytest.MonkeyPatch, handle: FakeHandle) -> None:
+@pytest.fixture(autouse=True)
+def reset_warm_codex_client():
+    reset_local_codex_client()
+    yield
+    reset_local_codex_client()
+
+
+def install_fake_codex(
+    monkeypatch: pytest.MonkeyPatch,
+    handle: FakeHandle,
+) -> dict[str, int]:
     import openai_codex
 
+    lifecycle = {"created": 0, "closed": 0}
+
     class FakeCodex:
+        def __init__(self) -> None:
+            lifecycle["created"] += 1
+
         def __enter__(self):
             return self
 
@@ -82,9 +98,13 @@ def install_fake_codex(monkeypatch: pytest.MonkeyPatch, handle: FakeHandle) -> N
         def thread_resume(self, *_args, **_kwargs) -> FakeThread:
             return FakeThread(handle)
 
+        def close(self) -> None:
+            lifecycle["closed"] += 1
+
     monkeypatch.setattr(openai_codex, "Codex", FakeCodex)
     monkeypatch.setattr(openai_codex, "ApprovalMode", SimpleNamespace(deny_all="deny"))
     monkeypatch.setattr(openai_codex, "Sandbox", SimpleNamespace(workspace_write="workspace"))
+    return lifecycle
 
 
 def run_runtime(tmp_path: Path, *, timeout_seconds: float) -> object:
@@ -148,6 +168,23 @@ def test_completed_turn_disarms_timeout_watchdog(
     assert result.final_response == '{"ok": true}'
     assert result.thread_id == "thread-test"
     assert handle.interrupt_calls == 0
+
+
+def test_completed_turns_reuse_one_warm_codex_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    handle = FakeHandle(complete_immediately=True)
+    lifecycle = install_fake_codex(monkeypatch, handle)
+
+    run_runtime(tmp_path, timeout_seconds=0.1)
+    run_runtime(tmp_path, timeout_seconds=0.1)
+
+    assert lifecycle == {"created": 1, "closed": 0}
+    snapshot = codex_agent_runtime._warm_codex_client.snapshot()
+    assert snapshot["connection_status"] == "warm"
+    assert snapshot["connected_since"]
+    assert snapshot["reuse_count"] == 2
 
 
 def test_verified_brand_claims_must_copy_stored_statement_exactly() -> None:

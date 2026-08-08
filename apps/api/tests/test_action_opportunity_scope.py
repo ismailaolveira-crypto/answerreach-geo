@@ -16,7 +16,7 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoWorkspace,
 )
-from app.v1.action_opportunities import discover_opportunities, valid_action_evidence
+from app.v1.action_opportunities import _fingerprint, discover_opportunities, valid_action_evidence
 from app.v1.routes import get_action_opportunity_scope
 
 
@@ -185,6 +185,111 @@ def test_discovery_requires_search_event_and_respects_model_scope() -> None:
         selected = db.scalar(select(GeoActionOpportunity).where(GeoActionOpportunity.id == rows[0].id))
         assert selected is not None
         assert selected.status == "selected"
+
+
+def test_discovery_persists_operable_source_and_competitor_context() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        workspace, valid, _missing_search = _seed(db)
+        valid.source_items = [
+            {
+                "url": "https://www.zhihu.com/question/123/answer/456",
+                "title": "企业级 Token 平台选型",
+            },
+            {
+                "url": "https://developer.example.net/article/7",
+                "title": "不可控第三方资料",
+            },
+        ]
+        valid.competitor_positions = [{"name": "竞品甲", "position": 1}]
+        valid.answer_text = "竞品甲提供统一策略和审计说明，回答没有提到春秋元泉。"
+        db.commit()
+
+        [opportunity] = discover_opportunities(
+            db,
+            workspace,
+            batch_id=1,
+            question_plan_ids=[1],
+            model_keys=["deepseek"],
+        )
+
+        assert opportunity.rule_version == "opportunity.v2"
+        assert opportunity.recommended_platforms == ["zhihu"]
+        assert opportunity.scope_snapshot["source_strategy"] == "direct_operable_source"
+        primary = opportunity.scope_snapshot["primary_source"]
+        assert primary["platform_key"] == "zhihu"
+        assert primary["controllability"] == "operable_platform"
+        assert primary["competitors"] == ["竞品甲"]
+        assert primary["competitor_answer_excerpts"][0]["evidence_id"] == valid.id
+        external = next(
+            item
+            for item in opportunity.scope_snapshot["source_candidates"]
+            if item["host"] == "developer.example.net"
+        )
+        assert external["controllability"] == "external_reference"
+
+
+def test_discovery_does_not_claim_external_reference_is_editable() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        workspace, valid, _missing_search = _seed(db)
+        workspace.website_url = "https://brand.example"
+        valid.source_items = [{"url": "https://developer.volcengine.com/articles/1"}]
+        db.commit()
+
+        [opportunity] = discover_opportunities(
+            db,
+            workspace,
+            batch_id=1,
+            question_plan_ids=[1],
+            model_keys=["deepseek"],
+        )
+
+        assert opportunity.scope_snapshot["source_strategy"] == "build_controlled_alternative"
+        assert opportunity.scope_snapshot["primary_source"]["controllability"] == "external_reference"
+        assert opportunity.recommended_platforms == ["zhihu", "juejin"]
+        assert "不可控第三方" in opportunity.summary
+
+
+def test_discovery_upgrades_legacy_opportunity_without_creating_a_duplicate() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        workspace, valid, _missing_search = _seed(db)
+        [opportunity] = discover_opportunities(
+            db,
+            workspace,
+            batch_id=1,
+            question_plan_ids=[1],
+            model_keys=["deepseek"],
+        )
+        original_id = opportunity.id
+        opportunity.fingerprint = _fingerprint(
+            workspace.id,
+            1,
+            "brand_absent",
+            valid.source_items[0]["url"],
+            ("deepseek",),
+            "opportunity.v1",
+        )
+        opportunity.rule_version = "opportunity.v1"
+        opportunity.status = "selected"
+        db.commit()
+
+        [upgraded] = discover_opportunities(
+            db,
+            workspace,
+            batch_id=1,
+            question_plan_ids=[1],
+            model_keys=["deepseek"],
+        )
+
+        assert upgraded.id == original_id
+        assert upgraded.status == "selected"
+        assert upgraded.rule_version == "opportunity.v2"
+        assert db.query(GeoActionOpportunity).count() == 1
 
 
 def test_scope_exposes_only_batches_and_models_with_complete_evidence_gate() -> None:

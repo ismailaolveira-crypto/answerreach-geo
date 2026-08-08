@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from hashlib import sha256
 import json
 from typing import Iterable
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,9 +23,17 @@ from app.models.cleanroom_v1 import (
 )
 
 
-RULE_VERSION = "opportunity.v1"
+RULE_VERSION = "opportunity.v2"
 WEBSITE_RULE_VERSION = "website-opportunity.v1"
 POSITIVE_BRAND_STATUSES = {"mentioned", "shortlisted", "recommended", "cited"}
+OPERABLE_SOURCE_PLATFORMS = {
+    "zhihu.com": "zhihu",
+    "juejin.cn": "juejin",
+    "csdn.net": "csdn",
+    "51cto.com": "51cto",
+    "mp.weixin.qq.com": "wechat",
+}
+FALLBACK_OPERABLE_PLATFORMS = ["zhihu", "juejin"]
 
 
 def _fingerprint(*parts: object) -> str:
@@ -39,6 +48,121 @@ def _source_url(source: object) -> str | None:
     if isinstance(value, str) and value.startswith(("http://", "https://")):
         return value[:1500]
     return None
+
+
+def _source_host(value: str | None) -> str:
+    try:
+        return (urlsplit(str(value or "")).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return ""
+
+
+def _host_matches(host: str, domain: str) -> bool:
+    return bool(host and domain and (host == domain or host.endswith(f".{domain}")))
+
+
+def _platform_for_host(host: str) -> str | None:
+    return next(
+        (platform for domain, platform in OPERABLE_SOURCE_PLATFORMS.items() if _host_matches(host, domain)),
+        None,
+    )
+
+
+def _competitor_names(row: GeoEvidence) -> list[str]:
+    return sorted(
+        {
+            str(item.get("name") or item.get("label") or item.get("brand") or "").strip()
+            for item in (row.competitor_positions or [])
+            if isinstance(item, dict)
+            and (item.get("name") or item.get("label") or item.get("brand"))
+        }
+    )
+
+
+def _source_candidates(
+    rows: list[GeoEvidence],
+    *,
+    official_website: str | None,
+) -> list[dict]:
+    """Aggregate observed URLs without claiming that third-party pages are editable."""
+
+    official_host = _source_host(official_website)
+    candidates: dict[str, dict] = {}
+    for row in rows:
+        row_competitors = _competitor_names(row)
+        for source in row.source_items or []:
+            url = _source_url(source)
+            if not url:
+                continue
+            host = _source_host(url)
+            platform_key = _platform_for_host(host)
+            if official_host and _host_matches(host, official_host):
+                controllability = "owned"
+                platform_key = "official_site"
+            elif platform_key:
+                controllability = "operable_platform"
+            else:
+                controllability = "external_reference"
+            candidate = candidates.setdefault(
+                url,
+                {
+                    "url": url,
+                    "host": host,
+                    "title": "",
+                    "platform_key": platform_key,
+                    "controllability": controllability,
+                    "citation_count": 0,
+                    "model_keys": [],
+                    "competitors": [],
+                    "competitor_answer_excerpts": [],
+                },
+            )
+            candidate["citation_count"] += 1
+            title = (
+                str(source.get("title") or source.get("name") or "").strip()
+                if isinstance(source, dict)
+                else ""
+            )
+            if title and not candidate["title"]:
+                candidate["title"] = title[:240]
+            if row.model_key not in candidate["model_keys"]:
+                candidate["model_keys"].append(row.model_key)
+            for competitor in row_competitors:
+                if competitor not in candidate["competitors"]:
+                    candidate["competitors"].append(competitor)
+            if row_competitors and len(candidate["competitor_answer_excerpts"]) < 3:
+                candidate["competitor_answer_excerpts"].append(
+                    {
+                        "evidence_id": row.id,
+                        "model_key": row.model_key,
+                        "competitors": row_competitors[:8],
+                        "answer_excerpt": row.answer_text[:700],
+                    }
+                )
+    rank = {"operable_platform": 0, "owned": 1, "external_reference": 2}
+    return sorted(
+        candidates.values(),
+        key=lambda item: (
+            rank.get(str(item["controllability"]), 9),
+            -int(item["citation_count"]),
+            str(item["host"]),
+            str(item["url"]),
+        ),
+    )[:12]
+
+
+def _source_strategy(candidates: list[dict]) -> tuple[str, list[str], dict | None]:
+    direct = [item for item in candidates if item.get("controllability") == "operable_platform"]
+    owned = [item for item in candidates if item.get("controllability") == "owned"]
+    if direct:
+        platforms = list(
+            dict.fromkeys(str(item["platform_key"]) for item in direct if item.get("platform_key"))
+        )
+        return "direct_operable_source", platforms, direct[0]
+    if owned:
+        return "official_site_handoff", ["official_site"], owned[0]
+    primary = candidates[0] if candidates else None
+    return "build_controlled_alternative", list(FALLBACK_OPERABLE_PLATFORMS), primary
 
 
 def valid_action_evidence(row: GeoEvidence) -> bool:
@@ -65,11 +189,28 @@ def _task_for_evidence(db: Session, evidence_id: int, batch_id: int | None) -> G
     return db.scalar(query.order_by(GeoObservationTask.id.desc()))
 
 
-def _candidate_summary(workspace: GeoWorkspace, question: GeoQuestionPlan, absent: int, total: int) -> str:
+def _candidate_summary(
+    workspace: GeoWorkspace,
+    question: GeoQuestionPlan,
+    absent: int,
+    total: int,
+    *,
+    source_strategy: str,
+    primary_source: dict | None,
+) -> str:
     ratio = absent / total if total else 0
+    source_note = (
+        f"模型引用了可运营的 {primary_source.get('host')}，可在该平台补充针对性内容。"
+        if source_strategy == "direct_operable_source" and primary_source
+        else "模型主要引用不可控第三方页面，应建立我们可维护的替代信源，而不是修改第三方原文。"
+        if source_strategy == "build_controlled_alternative"
+        else "模型已引用品牌官网，可由开发团队补齐服务端可读信息。"
+        if source_strategy == "official_site_handoff"
+        else ""
+    )
     return (
         f"在“{question.question_text}”的真实观测中，{workspace.brand_name}有 {absent}/{total} 个回答未被提及"
-        f"（{ratio:.0%}）。建议围绕该问题补齐可引用的权威内容，并在复测中验证变化。"
+        f"（{ratio:.0%}）。{source_note}"
     )
 
 
@@ -273,14 +414,12 @@ def discover_opportunities(
             if (url := _source_url(source))
         )
         top_source = source_counts.most_common(1)[0][0] if source_counts else None
-        competitor_names = sorted(
-            {
-                str(item.get("name") or item.get("label") or item.get("brand") or "")
-                for row in absent_rows
-                for item in (row.competitor_positions or [])
-                if isinstance(item, dict) and (item.get("name") or item.get("label") or item.get("brand"))
-            }
+        source_candidates = _source_candidates(
+            absent_rows,
+            official_website=workspace.website_url,
         )
+        source_strategy, recommended_platforms, primary_source = _source_strategy(source_candidates)
+        competitor_names = sorted({name for row in absent_rows for name in _competitor_names(row)})
         absent_ratio = len(absent_rows) / len(rows)
         evidence_strength = min(1.0, len(rows) / 6) * (0.8 if source_counts else 0.4)
         score = min(
@@ -293,21 +432,46 @@ def discover_opportunities(
             workspace.id,
             question.id,
             opportunity_type,
-            top_source or "no-source",
+            str((primary_source or {}).get("url") or top_source or "no-source"),
             selected_models or ("all_models",),
             RULE_VERSION,
         )
-        title = (
-            f"补齐“{question.question_text[:62]}”中的品牌答案"
-            if opportunity_type == "brand_absent"
-            else f"在“{question.question_text[:54]}”中建立品牌对比依据"
-        )
+        primary_platform = str((primary_source or {}).get("platform_key") or "")
+        platform_label = {
+            "official_site": "官网",
+            "zhihu": "知乎",
+            "juejin": "掘金",
+            "csdn": "CSDN",
+            "51cto": "51CTO",
+            "wechat": "公众号",
+        }.get(primary_platform)
+        if source_strategy in {"direct_operable_source", "official_site_handoff"} and platform_label:
+            title = f"在{platform_label}补齐“{question.question_text[:48]}”相关内容"
+        elif opportunity_type == "competitor_gap":
+            title = f"围绕“{question.question_text[:50]}”建立可控品牌对比信源"
+        else:
+            title = f"围绕“{question.question_text[:54]}”建立可控品牌信源"
         opportunity = db.scalar(
             select(GeoActionOpportunity).where(
                 GeoActionOpportunity.workspace_id == workspace.id,
                 GeoActionOpportunity.fingerprint == fingerprint,
             )
         )
+        if opportunity is None:
+            legacy_fingerprint = _fingerprint(
+                workspace.id,
+                question.id,
+                opportunity_type,
+                top_source or "no-source",
+                selected_models or ("all_models",),
+                "opportunity.v1",
+            )
+            opportunity = db.scalar(
+                select(GeoActionOpportunity).where(
+                    GeoActionOpportunity.workspace_id == workspace.id,
+                    GeoActionOpportunity.fingerprint == legacy_fingerprint,
+                )
+            )
         scope_snapshot = {
             "batch_id": batch.id if batch else None,
             "batch_status": batch.status if batch else None,
@@ -318,6 +482,15 @@ def discover_opportunities(
             "absent_ratio": round(absent_ratio, 4),
             "competitors": competitor_names[:8],
             "top_source_url": top_source,
+            "source_candidates": source_candidates,
+            "source_strategy": source_strategy,
+            "primary_source": primary_source,
+            "recommended_carrier": (
+                platform_label
+                if source_strategy in {"direct_operable_source", "official_site_handoff"}
+                and platform_label
+                else "可运营平台的独立原创内容"
+            ),
             "model_keys": list(selected_models),
             "eligibility": (
                 "completed_task+real_answer+search_event+source_url+raw_artifact"
@@ -329,13 +502,20 @@ def discover_opportunities(
                 fingerprint=fingerprint,
                 opportunity_type=opportunity_type,
                 title=title,
-                summary=_candidate_summary(workspace, question, len(absent_rows), len(rows)),
+                summary=_candidate_summary(
+                    workspace,
+                    question,
+                    len(absent_rows),
+                    len(rows),
+                    source_strategy=source_strategy,
+                    primary_source=primary_source,
+                ),
                 priority_score=round(score, 2),
                 priority_label=priority,
                 evidence_strength=round(evidence_strength, 4),
                 source_gap_type="missing_brand_citation" if top_source else "missing_authority_source",
                 recommended_asset_type="article",
-                recommended_platforms=["zhihu", "juejin", "csdn", "51cto"],
+                recommended_platforms=recommended_platforms,
                 scope_snapshot=scope_snapshot,
                 rule_version=RULE_VERSION,
                 status="open",
@@ -345,11 +525,21 @@ def discover_opportunities(
             db.add(opportunity)
             db.flush()
         else:
+            opportunity.fingerprint = fingerprint
+            opportunity.rule_version = RULE_VERSION
             opportunity.title = title
-            opportunity.summary = _candidate_summary(workspace, question, len(absent_rows), len(rows))
+            opportunity.summary = _candidate_summary(
+                workspace,
+                question,
+                len(absent_rows),
+                len(rows),
+                source_strategy=source_strategy,
+                primary_source=primary_source,
+            )
             opportunity.priority_score = round(score, 2)
             opportunity.priority_label = priority
             opportunity.evidence_strength = round(evidence_strength, 4)
+            opportunity.recommended_platforms = recommended_platforms
             opportunity.scope_snapshot = scope_snapshot
             opportunity.latest_seen_batch_id = batch.id if batch else opportunity.latest_seen_batch_id
             if opportunity.status == "stale":

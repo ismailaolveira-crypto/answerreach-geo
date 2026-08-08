@@ -20,6 +20,7 @@ from app.models.company import Company
 from app.models.cleanroom_v1 import (
     GeoActionOpportunity,
     GeoActionOpportunityEvidence,
+    GeoActionEvent,
     GeoAgentArtifact,
     GeoAgentEvent,
     GeoContentAsset,
@@ -375,6 +376,60 @@ def test_review_gate_and_browser_client_draft_readback(
     assert library.json()[0]["saved_draft_count"] == 1
     assert library.json()[0]["draft_targets"][0]["draft_url"].startswith("https://www.zhihu.com/")
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
+
+
+def test_platform_variant_can_be_edited_before_review_with_audit(
+    review_client: TestClient,
+) -> None:
+    updated = review_client.patch(
+        "/api/v1/workspaces/1/platform-variants/1",
+        json={
+            "title": "知乎人工修订标题",
+            "summary": "审核员根据平台语气调整后的摘要",
+            "body_markdown": "# 修订正文\n\n保留真实来源，删除未经核验的表述。",
+            "tags": ["Token 管理", "GEO"],
+            "category": "技术",
+        },
+    )
+
+    assert updated.status_code == 200
+    payload = updated.json()
+    assert payload["title"] == "知乎人工修订标题"
+    assert payload["body_markdown"].startswith("# 修订正文")
+    assert payload["content_fingerprint"] != "c" * 64
+    assert payload["adaptation_contract"]["manual_edit"]["editor_user_id"] == 1
+
+    with review_client.app.state.review_session_factory() as db:
+        event = db.query(GeoActionEvent).filter_by(
+            event_type="platform_variant_edited"
+        ).one()
+        assert event.detail["variant_id"] == 1
+        assert "body_markdown" not in event.detail
+
+
+def test_platform_variant_edit_is_blocked_after_human_approval(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
+    )
+    assert approved.status_code == 201
+
+    blocked = review_client.patch(
+        "/api/v1/workspaces/1/platform-variants/1",
+        json={
+            "title": "不应写入",
+            "summary": "审核后不应被覆盖",
+            "body_markdown": "审核后不应被覆盖",
+        },
+    )
+    assert blocked.status_code == 409
 
 
 def test_browser_draft_link_requires_explicit_human_readback_confirmation(

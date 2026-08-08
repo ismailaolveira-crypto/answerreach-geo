@@ -1050,6 +1050,9 @@ class AgentRuntimeRead(BaseModel):
     login_status: str
     default_model: str | None = None
     available_models: list[str] = Field(default_factory=list)
+    connection_status: Literal["cold", "warm"] = "cold"
+    connected_since: datetime | None = None
+    reuse_count: int = 0
     active_run_count: int = 0
     max_concurrent_runs: int = 1
     capacity_available: bool = True
@@ -1232,6 +1235,14 @@ class PlatformVariantCreate(BaseModel):
     ] = Field(
         default_factory=lambda: ["official_site", "zhihu", "wechat"]
     )
+
+
+class PlatformVariantUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    summary: str = Field(min_length=1, max_length=4000)
+    body_markdown: str = Field(min_length=1, max_length=200_000)
+    tags: list[str] = Field(default_factory=list, max_length=20)
+    category: str | None = Field(default=None, max_length=80)
 
 
 class PlatformVariantRead(BaseModel):

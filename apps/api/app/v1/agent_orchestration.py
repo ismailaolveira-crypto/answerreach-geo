@@ -360,6 +360,7 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
             "id": item.id,
             "model": item.model_label,
             "brand_status": item.brand_status,
+            "competitor_positions": item.competitor_positions or [],
             "answer_excerpt": item.answer_text[:900],
             "source_items": item.source_items[:8],
         }
@@ -395,6 +396,21 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
                     "website_audit"
                     if website_audit
                     else "model_observation"
+                ),
+                "source_opportunity": (
+                    {
+                        "strategy": (opportunity.scope_snapshot or {}).get("source_strategy"),
+                        "primary_source": (opportunity.scope_snapshot or {}).get("primary_source"),
+                        "source_candidates": (opportunity.scope_snapshot or {}).get("source_candidates", []),
+                        "competitors": (opportunity.scope_snapshot or {}).get("competitors", []),
+                        "boundary": (
+                            "Only owned or explicitly operable platform sources are destinations. "
+                            "External-reference pages cannot be edited; use them only to understand "
+                            "the cited topic and build a controlled alternative."
+                        ),
+                    }
+                    if opportunity and not website_audit
+                    else None
                 ),
             },
             "brief": {
@@ -512,12 +528,16 @@ Mandatory order:
 3. Read archived observation excerpts as problem evidence, not as authoritative brand facts. If
 website_audit_evidence is present, treat its raw capture and findings as official-site remediation
 evidence only; never convert its score into a model citation, ranking or GEO-effect claim.
-4. Propose one or two useful screenshot candidates from the exact official-website host. Prefer product,
+4. For an external-platform task, inspect action.source_opportunity. Compare the competitor topics and
+answer excerpts associated with the same cited source/platform, then fill the missing reader need with
+an original brand-supported article. Never claim that an external-reference page can be edited. If the
+strategy is build_controlled_alternative, explain why the selected platform is a controllable replacement.
+5. Propose one or two useful screenshot candidates from the exact official-website host. Prefer product,
 capability or solution pages that support this draft. Explain the purpose and alt text. If no relevant
 official page exists, return an empty visual_assets array. Do not claim that a screenshot was captured.
-5. Write a useful master draft that directly answers the target question and separates sourced facts from judgment.
-6. Produce a materially different variant for every requested platform. Respect title length, paragraph rhythm, promotion restrictions and audience expectations found in step 1.
-7. Enumerate factual claims. A claim without a public URL must be marked pending.
+6. Write a useful master draft that directly answers the target question and separates sourced facts from judgment.
+7. Produce a materially different variant for every requested platform. Respect title length, paragraph rhythm, promotion restrictions and audience expectations found in step 1.
+8. Enumerate factual claims. A claim without a public URL must be marked pending.
 
 Do not create or edit files; the host persists the validated JSON. Do not publish or submit anything.
 """ + revision_instruction + """

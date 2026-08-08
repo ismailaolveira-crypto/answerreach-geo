@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import atexit
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import threading
@@ -27,6 +30,67 @@ _diagnostic_cache: tuple[float, dict] | None = None
 _diagnostic_cache_lock = threading.Lock()
 
 
+class _WarmCodexClient:
+    """Keep one serialized SDK client alive per API/worker process."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._client: object | None = None
+        self._connected_since: datetime | None = None
+        self._reuse_count = 0
+
+    @contextmanager
+    def use(self):
+        with self._lock:
+            if self._client is None:
+                from openai_codex import Codex
+
+                self._client = Codex()
+                self._connected_since = datetime.now(timezone.utc)
+                self._reuse_count = 0
+            self._reuse_count += 1
+            try:
+                yield self._client
+            except BaseException:
+                self._close_locked()
+                raise
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "connection_status": "warm" if self._client is not None else "cold",
+                "connected_since": (
+                    self._connected_since.isoformat() if self._connected_since else None
+                ),
+                "reuse_count": self._reuse_count,
+            }
+
+    def reset(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def _close_locked(self) -> None:
+        client = self._client
+        self._client = None
+        self._connected_since = None
+        self._reuse_count = 0
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
+_warm_codex_client = _WarmCodexClient()
+atexit.register(_warm_codex_client.reset)
+
+
+def reset_local_codex_client() -> None:
+    """Discard the warm SDK process after a fault or during deterministic tests."""
+
+    _warm_codex_client.reset()
+
+
 @dataclass(slots=True)
 class CodexTurnResult:
     thread_id: str
@@ -47,7 +111,6 @@ def _probe_local_codex() -> dict:
 
     try:
         import openai_codex
-        from openai_codex import Codex
     except ImportError as exc:
         return {
             "runtime_key": "local_codex",
@@ -58,7 +121,7 @@ def _probe_local_codex() -> dict:
         }
 
     try:
-        with Codex() as codex:
+        with _warm_codex_client.use() as codex:
             account_response = codex.account()
             model_response = codex.models()
             account = getattr(account_response, "account", None)
@@ -79,6 +142,7 @@ def _probe_local_codex() -> dict:
                 "default_model": default_model,
                 "available_models": [getattr(item, "id", "") for item in models if getattr(item, "id", "")],
                 "error": None,
+                **_warm_codex_client.snapshot(),
             }
     except Exception as exc:
         return {
@@ -88,6 +152,7 @@ def _probe_local_codex() -> dict:
             "ready": False,
             "login_status": "runtime_error",
             "error": str(exc)[:500],
+            **_warm_codex_client.snapshot(),
         }
 
 
@@ -139,7 +204,7 @@ class LocalCodexRuntime:
         cancellation_requested: Callable[[], bool] | None = None,
         timeout_seconds: float | None = 900.0,
     ) -> CodexTurnResult:
-        from openai_codex import ApprovalMode, Codex, Sandbox
+        from openai_codex import ApprovalMode, Sandbox
 
         task_directory = task_directory.resolve()
         task_directory.mkdir(parents=True, exist_ok=True)
@@ -148,7 +213,7 @@ class LocalCodexRuntime:
         compact_events: list[dict] = []
         interrupted = False
 
-        with Codex() as codex:
+        with _warm_codex_client.use() as codex:
             if thread_id:
                 thread = codex.thread_resume(
                     thread_id,
@@ -236,20 +301,25 @@ class LocalCodexRuntime:
                     timeout_thread.join(timeout=1)
 
         if timeout_reached.is_set():
+            reset_local_codex_client()
             raise CodexRunTimedOut(
                 f"Codex turn exceeded {float(timeout_seconds or 0):g} seconds"
             ) from stream_error
         if stream_error is not None:
+            reset_local_codex_client()
             raise stream_error
         if interrupted or completed_status in {"interrupted", "cancelled", "canceled"}:
             raise CodexRunInterrupted("Codex turn was interrupted by the user")
         if completed_status != "completed":
+            reset_local_codex_client()
             raise CodexRuntimeUnavailable(f"Codex turn ended with status: {completed_status or 'unknown'}")
         if not final_response.strip():
+            reset_local_codex_client()
             raise CodexRuntimeUnavailable("Codex returned no final structured response")
         try:
             json.loads(final_response)
         except json.JSONDecodeError as exc:
+            reset_local_codex_client()
             raise CodexRuntimeUnavailable("Codex final response is not valid JSON") from exc
         return CodexTurnResult(
             thread_id=thread.id,

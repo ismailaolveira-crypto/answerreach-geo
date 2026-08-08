@@ -100,6 +100,7 @@ from app.v1.schemas import (
     HumanDraftReadbackRecord,
     PlatformVariantCreate,
     PlatformVariantRead,
+    PlatformVariantUpdate,
     DecisionMapRead,
     EvidenceRead,
     QuestionLibraryRead,
@@ -4880,6 +4881,102 @@ def create_platform_variants(
     )
     db.commit()
     return variants
+
+
+@router.patch(
+    "/workspaces/{workspace_id}/platform-variants/{variant_id}",
+    response_model=PlatformVariantRead,
+)
+def update_platform_variant(
+    workspace_id: int,
+    variant_id: int,
+    payload: PlatformVariantUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    variant = scoped_or_404(db, GeoPlatformVariant, workspace_id, variant_id)
+    asset = scoped_or_404(db, GeoContentAsset, workspace_id, variant.content_asset_id)
+    brief = scoped_or_404(db, GeoContentBrief, workspace_id, asset.brief_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, brief.action_id)
+
+    started_distribution = db.scalar(
+        select(GeoDistributionTarget.id).where(
+            GeoDistributionTarget.platform_variant_id == variant.id
+        )
+    )
+    approved_review = db.scalar(
+        select(GeoContentReview.id).where(
+            GeoContentReview.workspace_id == workspace_id,
+            GeoContentReview.subject_type == "platform_variant",
+            GeoContentReview.subject_id == variant.id,
+            GeoContentReview.verdict == "approved",
+        )
+    )
+    if started_distribution or approved_review or asset.status == "approved":
+        raise HTTPException(
+            status_code=409,
+            detail="Approved or distributed drafts cannot be edited; generate a new version instead",
+        )
+
+    normalized = {
+        "title": payload.title.strip(),
+        "summary": payload.summary.strip(),
+        "body_markdown": payload.body_markdown.strip(),
+        "tags": list(dict.fromkeys(tag.strip() for tag in payload.tags if tag.strip())),
+        "category": payload.category.strip() if payload.category and payload.category.strip() else None,
+    }
+    if not all(normalized[key] for key in ("title", "summary", "body_markdown")):
+        raise HTTPException(status_code=422, detail="Title, summary, and body are required")
+
+    previous_fingerprint = variant.content_fingerprint
+    content_fingerprint = sha256(
+        json.dumps(
+            {
+                "platform_key": variant.platform_key,
+                **normalized,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    variant.title = normalized["title"]
+    variant.summary = normalized["summary"]
+    variant.body_markdown = normalized["body_markdown"]
+    variant.tags = normalized["tags"]
+    variant.category = normalized["category"]
+    variant.content_fingerprint = content_fingerprint
+    variant.status = "ready"
+    variant.adaptation_contract = {
+        **(variant.adaptation_contract or {}),
+        "manual_edit": {
+            "edited_at": datetime.now(timezone.utc).isoformat(),
+            "editor_user_id": user.id,
+            "previous_content_fingerprint": previous_fingerprint,
+            "source_asset_fingerprint": asset.content_fingerprint,
+        },
+    }
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=action.id,
+            event_type="platform_variant_edited",
+            from_stage=action.stage,
+            to_stage=action.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "asset_id": asset.id,
+                "variant_id": variant.id,
+                "platform_key": variant.platform_key,
+                "previous_content_fingerprint": previous_fingerprint,
+                "content_fingerprint": content_fingerprint,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(variant)
+    return variant
 
 
 def _distribution_read(db: Session, run: GeoDistributionRun) -> dict:

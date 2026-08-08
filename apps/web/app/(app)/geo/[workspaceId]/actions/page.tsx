@@ -22,6 +22,7 @@ import {
 	recordCleanroomHumanPublication,
 	resumeCleanroomAgentRun,
 	reviseCleanroomAgentRun,
+	updateCleanroomPlatformVariant,
 	createWebsiteAudit,
 	getLatestWebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
@@ -157,6 +158,17 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return result;
 	}
 
+	async function savePlatformVariant(
+		variantId: number,
+		payload: { title: string; summary: string; body_markdown: string; tags?: string[]; category?: string | null },
+	) {
+		"use server";
+		const result = await updateCleanroomPlatformVariant(workspaceId, variantId, payload);
+		revalidatePath(`/geo/${workspaceId}/actions`);
+		revalidatePath(`/geo/${workspaceId}/content`);
+		return result;
+	}
+
 	async function createDistribution(assetId: number, platformKeys: string[]) {
 		"use server";
 		const deliveryMode = platformKeys.length === 1 && platformKeys[0] === "official_site"
@@ -220,5 +232,5 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
 		fact.status === "active"
 		&& fact.source_verification?.status === "source_and_statement_verified"
-	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
+	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialWebsiteAudit={websiteAuditOverview.latest ?? null} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} runWebsiteAudit={runWebsiteAudit} discoverActions={discoverActions} />;
 }

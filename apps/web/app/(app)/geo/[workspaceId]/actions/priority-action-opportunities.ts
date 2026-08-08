@@ -15,6 +15,9 @@ export type PriorityActionOpportunity = {
 	summary: string;
 	recommendedAsset: string;
 	recommendedPlatforms: string[];
+	sourceStrategy?: "direct_operable_source" | "official_site_handoff" | "build_controlled_alternative";
+	sourceTargetLabel?: string;
+	sourceTargetDetail?: string;
 	generationReady: boolean;
 	requiresSourcedBrandFacts: boolean;
 	proof: string;
@@ -37,6 +40,22 @@ export function mapBackendPriorityActionOpportunities(
 		const findingCodes = Array.isArray(row.scope_snapshot.finding_codes)
 			? row.scope_snapshot.finding_codes.map(String)
 			: [];
+		const sourceStrategy = typeof row.scope_snapshot.source_strategy === "string"
+			? row.scope_snapshot.source_strategy as PriorityActionOpportunity["sourceStrategy"]
+			: undefined;
+		const primarySource = row.scope_snapshot.primary_source && typeof row.scope_snapshot.primary_source === "object"
+			? row.scope_snapshot.primary_source as Record<string, unknown>
+			: undefined;
+		const primaryHost = String(primarySource?.host ?? "");
+		const primaryPlatform = String(primarySource?.platform_key ?? "");
+		const platformLabel: Record<string, string> = {
+			official_site: "春秋元泉官网",
+			zhihu: "知乎",
+			juejin: "掘金",
+			csdn: "CSDN",
+			"51cto": "51CTO",
+			wechat: "微信公众号",
+		};
 		const type = row.opportunity_type === "website_citation_readiness"
 			? "website"
 			: row.opportunity_type === "competitor_gap"
@@ -59,6 +78,17 @@ export function mapBackendPriorityActionOpportunities(
 			summary: row.summary,
 			recommendedAsset: String(row.scope_snapshot.recommended_carrier ?? row.recommended_asset_type),
 			recommendedPlatforms: row.recommended_platforms,
+			sourceStrategy,
+			sourceTargetLabel: sourceStrategy === "build_controlled_alternative"
+				? "新建可控信源"
+				: platformLabel[primaryPlatform] || primaryHost || undefined,
+			sourceTargetDetail: sourceStrategy === "direct_operable_source"
+				? `可在 ${platformLabel[primaryPlatform] || primaryHost} 直接发布针对性原创内容`
+				: sourceStrategy === "official_site_handoff"
+					? "Codex 给出开发修改建议，网站上线由开发团队完成"
+					: sourceStrategy === "build_controlled_alternative"
+						? `${primaryHost || "第三方页面"}只用作参考，改在可运营平台建立我们的信源`
+						: undefined,
 			generationReady: sourceType !== "website_audit"
 				|| (row.scope_snapshot.website_audit_status !== "blocked" && Boolean(websiteAuditHash)),
 			requiresSourcedBrandFacts: sourceType === "website_audit" && findingCodes.some((code) => [

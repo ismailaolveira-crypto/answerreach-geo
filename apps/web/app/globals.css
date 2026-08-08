@@ -1799,3 +1799,30 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
   .pa-current-action-collapse > button { transition: none; }
   .pa-current-action-collapse > button:active { transform: none; }
 }
+
+.pa-review-document-head { align-items: center; display: flex; justify-content: space-between; gap: 12px; }
+.pa-review-document-head > small { color: #7d8ca0; font-size: 10px; font-weight: 760; letter-spacing: .05em; text-transform: uppercase; }
+.pa-review-document-head > button { background: #fff; border: 1px solid #cfdbee; border-radius: 8px; color: #2864d5; cursor: pointer; font: inherit; font-size: 11px; font-weight: 760; min-height: 38px; padding: 0 13px; }
+.pa-review-document-head > button:hover { background: #f3f7ff; border-color: #9cb8ea; }
+.pa-review-document-head > span { color: #26805f; font-size: 10px; font-weight: 740; }
+.pa-variant-editor { display: grid; gap: 17px; }
+.pa-variant-editor > header { align-items: flex-start; border-bottom: 1px solid #e5eaf2; display: flex; justify-content: space-between; padding-bottom: 16px; }
+.pa-variant-editor > header > div { display: grid; gap: 5px; }
+.pa-variant-editor > header small { color: #2864d5; font-size: 10px; font-weight: 780; }
+.pa-variant-editor > header b { color: #213149; font-size: 16px; }
+.pa-variant-editor > header > span { color: #8290a3; font-size: 10px; }
+.pa-variant-editor > label { display: grid; gap: 7px; }
+.pa-variant-editor > label > span { color: #53647a; font-size: 11px; font-weight: 760; }
+.pa-variant-editor input,.pa-variant-editor textarea { background: #fff; border: 1px solid #d6e0ed; border-radius: 9px; color: #25364d; font: inherit; font-size: 13px; line-height: 1.65; outline: 0; padding: 10px 12px; resize: vertical; width: 100%; }
+.pa-variant-editor input:focus,.pa-variant-editor textarea:focus { border-color: #79a2ef; box-shadow: 0 0 0 3px rgb(36 103 223 / 10%); }
+.pa-variant-editor textarea.is-body { min-height: 430px; }
+.pa-variant-editor > footer { display: flex; gap: 9px; justify-content: flex-end; }
+.pa-variant-editor > footer button { background: #fff; border: 1px solid #d2dcea; border-radius: 8px; color: #52647b; cursor: pointer; font: inherit; font-size: 11px; font-weight: 760; min-height: 40px; padding: 0 16px; }
+.pa-variant-editor > footer button.is-primary { background: #2467df; border-color: #2467df; color: #fff; }
+.pa-variant-editor > footer button:disabled { cursor: wait; opacity: .6; }
+@media(max-width:600px) {
+  .pa-review-document-head,.pa-variant-editor > header { align-items: flex-start; flex-direction: column; }
+  .pa-variant-editor textarea.is-body { min-height: 350px; }
+  .pa-variant-editor > footer { flex-direction: column-reverse; }
+  .pa-variant-editor > footer button { width: 100%; }
+}
