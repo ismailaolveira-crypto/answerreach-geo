@@ -17,6 +17,8 @@ from app.db.session import Base, get_db
 from app.main import create_app
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
+    GeoActionOpportunity,
+    GeoActionOpportunityEvidence,
     GeoAgentArtifact,
     GeoAgentEvent,
     GeoContentAsset,
@@ -25,8 +27,11 @@ from app.models.cleanroom_v1 import (
     GeoContentBrief,
     GeoContentClaim,
     GeoContentReview,
+    GeoEvidence,
+    GeoObservationRun,
     GeoOptimizationAction,
     GeoPlatformVariant,
+    GeoQuestionPlan,
     GeoWorkspace,
 )
 from app.models.job import QueueJob
@@ -1151,11 +1156,81 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
 ) -> None:
     session_factory = review_client.app.state.review_session_factory
     with session_factory() as db:
+        question = GeoQuestionPlan(
+            id=1,
+            workspace_id=1,
+            question_text="企业如何评估 Token 统一管控平台？",
+            status="active",
+            active=True,
+        )
+        observation_run = GeoObservationRun(
+            id=1,
+            workspace_id=1,
+            adapter_key="test-official-search",
+            status="completed",
+        )
+        db.add_all([question, observation_run])
+        db.flush()
+        evidence = GeoEvidence(
+            id=1,
+            workspace_id=1,
+            run_id=observation_run.id,
+            question_plan_id=question.id,
+            model_key="qwen",
+            model_label="通义千问",
+            sample_mode="official_api",
+            evidence_level="auditable",
+            collection_method="official_api_web_search",
+            evidence_kind="answer",
+            is_real_provider_evidence=True,
+            brand_status="absent",
+            answer_text="真实联网回答未提及品牌。",
+            answer_hash=sha256(b"capacity-evidence").hexdigest(),
+            source_items=[{"title": "公开来源", "url": "https://example.com/source"}],
+            sampling_environment={"search_verified": True, "search_event_count": 1},
+            raw_artifact_uri="file:///tmp/capacity-evidence.json",
+            captured_at=datetime.now(timezone.utc),
+        )
+        db.add(evidence)
+        db.flush()
+        opportunity = GeoActionOpportunity(
+            id=1,
+            workspace_id=1,
+            fingerprint=sha256(b"capacity-opportunity").hexdigest(),
+            opportunity_type="brand_absent",
+            title="补齐品牌答案",
+            summary="由完整真实观测证据生成。",
+            priority_score=90,
+            priority_label="high",
+            evidence_strength=1,
+            recommended_asset_type="article",
+            recommended_platforms=["zhihu", "wechat"],
+            status="open",
+        )
+        db.add(opportunity)
+        db.flush()
+        db.add(
+            GeoActionOpportunityEvidence(
+                id=1,
+                opportunity_id=opportunity.id,
+                workspace_id=1,
+                evidence_id=evidence.id,
+                question_plan_id=question.id,
+                model_key="qwen",
+                signal_type="brand_absent",
+                signal_value={"brand_status": "absent"},
+                evidence_hash=evidence.answer_hash,
+                source_url="https://example.com/source",
+            )
+        )
         db.add_all(
             [
                 GeoOptimizationAction(
                     id=2,
                     workspace_id=1,
+                    question_plan_id=question.id,
+                    source_evidence_id=evidence.id,
+                    opportunity_id=opportunity.id,
                     title="第二个行动",
                     rationale="验证容量限制",
                     priority="high",
@@ -1165,6 +1240,9 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
                 GeoOptimizationAction(
                     id=3,
                     workspace_id=1,
+                    question_plan_id=question.id,
+                    source_evidence_id=evidence.id,
+                    opportunity_id=opportunity.id,
                     title="第三个行动",
                     rationale="验证容量释放",
                     priority="medium",

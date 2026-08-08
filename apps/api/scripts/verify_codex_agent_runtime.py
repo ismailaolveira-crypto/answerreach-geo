@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -106,14 +107,20 @@ def main() -> None:
         from app.main import create_app
         from app.models import Company, User
         from app.models.cleanroom_v1 import (
+            GeoActionOpportunity,
+            GeoActionOpportunityEvidence,
             GeoAgentArtifact,
             GeoAgentEvent,
             GeoAgentRun,
             GeoContentAsset,
+            GeoContentBrief,
             GeoContentClaim,
             GeoDistributionRun,
+            GeoEvidence,
+            GeoObservationRun,
             GeoOptimizationAction,
             GeoPlatformVariant,
+            GeoQuestionPlan,
             GeoWorkspace,
         )
         from app.services.auth import create_access_token, hash_password
@@ -158,25 +165,173 @@ def main() -> None:
             )
             db.add_all([workspace, other_workspace])
             db.flush()
+            question = GeoQuestionPlan(
+                workspace_id=workspace.id,
+                question_text="企业如何评估 Token 统一管控平台？",
+                status="active",
+                active=True,
+            )
+            observation_run = GeoObservationRun(
+                workspace_id=workspace.id,
+                adapter_key="test-official-search",
+                status="completed",
+            )
+            db.add_all([question, observation_run])
+            db.flush()
+            evidence = GeoEvidence(
+                workspace_id=workspace.id,
+                run_id=observation_run.id,
+                question_plan_id=question.id,
+                model_key="qwen",
+                model_label="通义千问",
+                sample_mode="official_api",
+                evidence_level="auditable",
+                collection_method="official_api_web_search",
+                evidence_kind="answer",
+                is_real_provider_evidence=True,
+                brand_status="absent",
+                answer_text="企业选型应验证凭据隔离、成本归因、权限和审计能力。",
+                answer_hash="a" * 64,
+                source_items=[
+                    {
+                        "title": "春秋元泉 GEO 工作台",
+                        "url": "https://icqtoken.ichunqiu.com/",
+                    }
+                ],
+                sampling_environment={"search_verified": True, "search_event_count": 1},
+                raw_artifact_uri="file:///tmp/agent-evidence.json",
+                captured_at=datetime.now(timezone.utc),
+            )
+            db.add(evidence)
+            db.flush()
+            incomplete_evidence = GeoEvidence(
+                workspace_id=workspace.id,
+                run_id=observation_run.id,
+                question_plan_id=question.id,
+                model_key="qwen",
+                model_label="通义千问",
+                sample_mode="official_api",
+                evidence_level="auditable",
+                collection_method="official_api_web_search",
+                evidence_kind="answer",
+                is_real_provider_evidence=True,
+                brand_status="absent",
+                answer_text="这条回答缺少真实搜索事件和原始工件。",
+                answer_hash="d" * 64,
+                source_items=[{"title": "公开来源", "url": "https://example.com/source"}],
+                sampling_environment={"search_verified": False, "search_event_count": 0},
+                raw_artifact_uri=None,
+                captured_at=datetime.now(timezone.utc),
+            )
+            db.add(incomplete_evidence)
+            db.flush()
+            opportunity = GeoActionOpportunity(
+                workspace_id=workspace.id,
+                fingerprint="b" * 64,
+                opportunity_type="brand_absent",
+                title="补齐 Token 统一管控选型内容",
+                summary="真实联网回答尚未提及品牌，需要补齐可引用内容。",
+                priority_score=90,
+                priority_label="high",
+                evidence_strength=1,
+                recommended_asset_type="article",
+                recommended_platforms=["zhihu", "wechat"],
+                status="open",
+            )
+            incomplete_opportunity = GeoActionOpportunity(
+                workspace_id=workspace.id,
+                fingerprint="e" * 64,
+                opportunity_type="brand_absent",
+                title="不完整证据机会",
+                summary="仅用于验证 Agent 创建前的证据门禁。",
+                priority_score=20,
+                priority_label="low",
+                evidence_strength=0,
+                recommended_asset_type="article",
+                recommended_platforms=["zhihu"],
+                status="open",
+            )
+            db.add_all([opportunity, incomplete_opportunity])
+            db.flush()
+            db.add_all(
+                [GeoActionOpportunityEvidence(
+                    opportunity_id=opportunity.id,
+                    workspace_id=workspace.id,
+                    evidence_id=evidence.id,
+                    question_plan_id=question.id,
+                    model_key="qwen",
+                    signal_type="brand_absent",
+                    signal_value={"brand_status": "absent"},
+                    evidence_hash=evidence.answer_hash,
+                    source_url="https://icqtoken.ichunqiu.com/",
+                ), GeoActionOpportunityEvidence(
+                    opportunity_id=incomplete_opportunity.id,
+                    workspace_id=workspace.id,
+                    evidence_id=incomplete_evidence.id,
+                    question_plan_id=question.id,
+                    model_key="qwen",
+                    signal_type="brand_absent",
+                    signal_value={"brand_status": "absent"},
+                    evidence_hash=incomplete_evidence.answer_hash,
+                    source_url="https://example.com/source",
+                )]
+            )
             action = GeoOptimizationAction(
                 workspace_id=workspace.id,
+                question_plan_id=question.id,
+                source_evidence_id=evidence.id,
+                opportunity_id=opportunity.id,
                 title="补齐 Token 统一管控选型内容",
                 rationale="真实观测中缺少品牌答案",
                 priority="high",
             )
             action_two = GeoOptimizationAction(
                 workspace_id=workspace.id,
+                question_plan_id=question.id,
+                source_evidence_id=evidence.id,
+                opportunity_id=opportunity.id,
                 title="第二个 Agent 任务",
                 rationale="验证中止状态",
                 priority="medium",
             )
-            db.add_all([action, action_two])
+            blocked_action = GeoOptimizationAction(
+                workspace_id=workspace.id,
+                question_plan_id=question.id,
+                source_evidence_id=incomplete_evidence.id,
+                opportunity_id=incomplete_opportunity.id,
+                title="无证据任务",
+                rationale="验证后端不会排队执行不完整任务",
+                priority="medium",
+            )
+            db.add_all([action, action_two, blocked_action])
+            db.flush()
+            db.add(
+                GeoContentBrief(
+                    workspace_id=workspace.id,
+                    action_id=action.id,
+                    question_plan_id=question.id,
+                    audience="企业技术与采购决策者",
+                    intent="decision",
+                    asset_type="article",
+                    required_sections=[],
+                    brand_fact_ids=[],
+                    evidence_ids=[],
+                    source_urls=[],
+                    required_claims=[],
+                    forbidden_claims=[],
+                    open_questions=[],
+                    input_fingerprint="c" * 64,
+                    status="blocked",
+                )
+            )
             db.commit()
             ids = {
                 "workspace": workspace.id,
                 "other_workspace": other_workspace.id,
                 "action": action.id,
                 "action_two": action_two.id,
+                "blocked_action": blocked_action.id,
+                "evidence": evidence.id,
                 "user": user.id,
                 "other_user": other_user.id,
             }
@@ -195,6 +350,15 @@ def main() -> None:
         client = TestClient(create_app())
         headers = {"Authorization": f"Bearer {create_access_token(ids['user'])}"}
         other_headers = {"Authorization": f"Bearer {create_access_token(ids['other_user'])}"}
+        blocked = client.post(
+            f"/api/v1/workspaces/{ids['workspace']}/actions/{ids['blocked_action']}/agent-runs",
+            headers=headers,
+            json={"selected_platforms": ["zhihu"]},
+        )
+        assert blocked.status_code == 409, blocked.text
+        assert "没有完整的真实观测证据" in blocked.text
+        with SessionLocal() as db:
+            assert db.scalar(select(func.count()).select_from(GeoAgentRun)) == 0
         created = client.post(
             f"/api/v1/workspaces/{ids['workspace']}/actions/{ids['action']}/agent-runs",
             headers=headers,
@@ -223,6 +387,8 @@ def main() -> None:
             assert db.scalar(select(func.count()).select_from(GeoAgentArtifact).where(GeoAgentArtifact.agent_run_id == run.id)) == 1
             asset = db.scalar(select(GeoContentAsset).where(GeoContentAsset.id == run.result_snapshot["asset_id"]))
             assert asset and asset.status == "draft"
+            brief = db.get(GeoContentBrief, run.result_snapshot["brief_id"])
+            assert brief and brief.status == "ready" and ids["evidence"] in brief.evidence_ids
             assert db.scalar(select(func.count()).select_from(GeoPlatformVariant).where(GeoPlatformVariant.content_asset_id == asset.id)) == 2
             assert db.scalar(select(func.count()).select_from(GeoContentClaim).where(GeoContentClaim.content_asset_id == asset.id)) == 2
             assert db.scalar(select(func.count()).select_from(GeoDistributionRun)) == 0
@@ -239,7 +405,7 @@ def main() -> None:
             headers=headers,
         )
         assert interrupted.status_code == 200, interrupted.text
-        assert interrupted.json()["status"] == "cancelling"
+        assert interrupted.json()["status"] == "cancelled"
         with SessionLocal() as db:
             row = db.get(GeoAgentRun, second_id)
             row.status = "cancelled"
@@ -265,6 +431,8 @@ def main() -> None:
                     "distribution_runs": 0,
                     "workspace_isolation": True,
                     "interrupt_resume": True,
+                    "missing_evidence_preflight": True,
+                    "blocked_brief_recovered": True,
                 },
                 ensure_ascii=False,
             )

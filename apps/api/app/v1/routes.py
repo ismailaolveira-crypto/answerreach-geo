@@ -176,7 +176,12 @@ from app.services.codex_agent_runtime import (
     invalidate_local_codex_diagnostic_cache,
 )
 from app.db.session import SessionLocal
-from app.v1.agent_orchestration import ARTIFACT_ROOT, append_agent_event, capture_agent_visuals
+from app.v1.agent_orchestration import (
+    ARTIFACT_ROOT,
+    action_evidence_inputs,
+    append_agent_event,
+    capture_agent_visuals,
+)
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
     ARTICLE_SYNC_MCP_SERVER_PATH,
@@ -5839,6 +5844,11 @@ def create_agent_run(
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    if opportunity is None or opportunity.workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=409,
+            detail="当前行动未关联已持久化的真实机会，请重新选择当前机会后再启动 Agent。",
+        )
     website_audit = None
     if opportunity and opportunity.opportunity_type == "website_citation_readiness":
         website_audit_id = int((opportunity.scope_snapshot or {}).get("website_audit_id") or 0)
@@ -5853,6 +5863,21 @@ def create_agent_run(
             raise HTTPException(
                 status_code=409,
                 detail="Website audit is incomplete; resolve access and run the audit again before drafting",
+            )
+    else:
+        if action.question_plan_id is None:
+            raise HTTPException(
+                status_code=409,
+                detail="当前机会已缺少目标问题，请按最新观测范围重新发现机会后再生成。",
+            )
+        evidence_ids, _source_urls = action_evidence_inputs(db, action, opportunity)
+        if not evidence_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "当前机会没有完整的真实观测证据。生成前必须同时具备最终回答、"
+                    "已验证搜索事件、公开来源 URL 和原始工件。"
+                ),
             )
     invalidate_local_codex_diagnostic_cache()
     diagnostic = diagnose_local_codex()

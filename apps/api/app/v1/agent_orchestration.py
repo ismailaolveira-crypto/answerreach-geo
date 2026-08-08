@@ -37,6 +37,7 @@ from app.services.codex_agent_runtime import (
     LocalCodexRuntime,
 )
 from app.services.official_site_capture import CaptureOutcome, OfficialSiteCapture
+from app.v1.action_opportunities import valid_action_evidence
 from app.v1.content_generation import PLATFORM_CONTRACTS
 
 
@@ -204,14 +205,62 @@ def append_agent_event(
     return event
 
 
+def action_evidence_inputs(
+    db: Session,
+    action: GeoOptimizationAction,
+    opportunity: GeoActionOpportunity | None = None,
+) -> tuple[list[int], list[str]]:
+    """Return only complete, workspace-scoped evidence that may enter an Agent brief."""
+
+    opportunity = opportunity or (
+        db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    )
+    links = list(
+        db.scalars(
+            select(GeoActionOpportunityEvidence)
+            .where(GeoActionOpportunityEvidence.opportunity_id == opportunity.id)
+            .order_by(GeoActionOpportunityEvidence.id.desc())
+            .limit(20)
+        )
+    ) if opportunity is not None else []
+    candidate_ids = list(
+        dict.fromkeys(
+            [
+                *[int(link.evidence_id) for link in links],
+                *([int(action.source_evidence_id)] if action.source_evidence_id else []),
+            ]
+        )
+    )
+    rows = list(
+        db.scalars(
+            select(GeoEvidence).where(
+                GeoEvidence.workspace_id == action.workspace_id,
+                GeoEvidence.id.in_(candidate_ids or [-1]),
+            )
+        )
+    )
+    valid_rows = {row.id: row for row in rows if valid_action_evidence(row)}
+    evidence_ids = [evidence_id for evidence_id in candidate_ids if evidence_id in valid_rows]
+    source_urls: list[str] = []
+    for link in links:
+        if link.evidence_id not in valid_rows:
+            continue
+        if str(link.source_url or "").startswith(("http://", "https://")):
+            source_urls.append(str(link.source_url))
+    for evidence_id in evidence_ids:
+        for item in valid_rows[evidence_id].source_items or []:
+            value = str(item.get("url") or "") if isinstance(item, dict) else ""
+            if value.startswith(("http://", "https://")):
+                source_urls.append(value)
+    return evidence_ids, list(dict.fromkeys(source_urls))
+
+
 def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief:
     existing = db.scalar(
         select(GeoContentBrief)
         .where(GeoContentBrief.action_id == action.id)
         .order_by(GeoContentBrief.id.desc())
     )
-    if existing:
-        return existing
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
     website_audit = None
     if opportunity and opportunity.opportunity_type == "website_citation_readiness":
@@ -219,18 +268,7 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         website_audit = db.get(GeoWebsiteAudit, audit_id) if audit_id else None
         if website_audit is None or website_audit.workspace_id != action.workspace_id:
             raise ValueError("Website audit evidence is no longer available")
-    evidence_links = []
-    if opportunity:
-        evidence_links = list(
-            db.scalars(
-                select(GeoActionOpportunityEvidence)
-                .where(GeoActionOpportunityEvidence.opportunity_id == opportunity.id)
-                .order_by(GeoActionOpportunityEvidence.id.desc())
-                .limit(20)
-            )
-        )
-    evidence_ids = [row.evidence_id for row in evidence_links]
-    source_urls = list(dict.fromkeys(row.source_url for row in evidence_links if row.source_url))
+    evidence_ids, source_urls = action_evidence_inputs(db, action, opportunity)
     if website_audit:
         source_urls = list(
             dict.fromkeys(
@@ -244,6 +282,24 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         and website_audit.raw_html_sha256
         and website_audit.artifact_manifest
     )
+    input_fingerprint = _hash(
+        {
+            "action_id": action.id,
+            "evidence_ids": evidence_ids,
+            "website_audit_id": website_audit.id if website_audit else None,
+            "website_audit_hash": website_audit.raw_html_sha256 if website_audit else None,
+            "question": question.question_text if question else None,
+        }
+    )
+    if existing:
+        if existing.status == "blocked" and (evidence_ids or website_ready):
+            existing.evidence_ids = evidence_ids
+            existing.source_urls = source_urls
+            existing.input_fingerprint = input_fingerprint
+            existing.status = "ready"
+            db.add(existing)
+            db.flush()
+        return existing
     brief = GeoContentBrief(
         workspace_id=action.workspace_id,
         action_id=action.id,
@@ -269,15 +325,7 @@ def _ensure_brief(db: Session, action: GeoOptimizationAction) -> GeoContentBrief
         ),
         forbidden_claims=["未有来源支持的绝对化承诺", "伪造客户案例", "声称已发布或已改善 GEO 效果"],
         open_questions=[],
-        input_fingerprint=_hash(
-            {
-                "action_id": action.id,
-                "evidence_ids": evidence_ids,
-                "website_audit_id": website_audit.id if website_audit else None,
-                "website_audit_hash": website_audit.raw_html_sha256 if website_audit else None,
-                "question": question.question_text if question else None,
-            }
-        ),
+        input_fingerprint=input_fingerprint,
         status="ready" if evidence_ids or website_ready else "blocked",
     )
     db.add(brief)
