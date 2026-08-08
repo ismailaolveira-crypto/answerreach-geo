@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { DetailsCollapseButton } from "@/components/details-collapse-button";
 import type { CleanroomContentLibraryItem } from "@/lib/cleanroom-v1-api";
+import { capturedVisualPurpose } from "@/lib/captured-visual";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
 import { getContentLibraryItemState } from "./content-library-state";
 import styles from "./content-library.module.css";
@@ -194,7 +195,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 						<header><div><b>已归档官网素材</b><span>{visualAssets.length} 张真实截图，已校验来源与文件哈希</span></div><small>仅用于人工审核与配图选择</small></header>
 						<div>{visualAssets.map((visual) => <figure key={visual.artifactId}>
 							<a href={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} target="_blank" rel="noreferrer" aria-label={`查看${visual.altText}原图`}><img src={`/api/geo/${workspaceId}/agent-artifacts/${visual.artifactId}/content`} alt={visual.altText} loading="lazy" /></a>
-							<figcaption><b>{visual.purpose}</b><span>{sourceHost(visual.sourceUrl)} · SHA-256 {visual.sha256.slice(0, 10)}…</span>{visual.sourceUrl ? <a href={visual.sourceUrl} target="_blank" rel="noreferrer">查看官方来源</a> : null}</figcaption>
+							<figcaption><b>{capturedVisualPurpose(visual.purpose)}</b><span>{sourceHost(visual.sourceUrl)} · SHA-256 {visual.sha256.slice(0, 10)}…</span>{visual.sourceUrl ? <a href={visual.sourceUrl} target="_blank" rel="noreferrer">查看官方来源</a> : null}</figcaption>
 						</figure>)}</div>
 					</section> : null}
 					{item.draft_targets.some((target) => target.draft_url) ? <div className={styles.draftLinks}><b>已回读草稿</b>{item.draft_targets.filter((target) => target.draft_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.draft_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}打开{meta?.label || target.platform_key}草稿</a>; })}</div> : null}

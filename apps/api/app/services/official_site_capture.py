@@ -126,6 +126,18 @@ def _valid_png(path: Path) -> bool:
         return False
 
 
+def captured_visual_purpose(value: str) -> str:
+    """Turn an Agent's pre-capture proposal into truthful post-capture copy."""
+    purpose = value.strip()
+    sentences = [item.strip() for item in re.split(r"(?<=[。！？.!?])", purpose) if item.strip()]
+    forward_looking = re.compile(r"(未执行截图|未完成截图|尚未截图|待截图|建议截取|建议截图)")
+    factual = [sentence for sentence in sentences if not forward_looking.search(sentence)]
+    result = "".join(factual).strip()
+    result = re.sub(r"^候选截图", "该官网截图", result)
+    result = re.sub(r"^截图候选", "该官网截图", result)
+    return result[:500] or "已从官网真实采集，供内容审核与配图选择。"
+
+
 class OfficialSiteCapture:
     """Capture public official pages in isolated Chrome, with OpenCLI as fallback."""
 
@@ -202,7 +214,7 @@ class OfficialSiteCapture:
                             path=target,
                             source_url=candidate["source_url"],
                             alt_text=candidate["alt_text"],
-                            purpose=candidate["purpose"],
+                            purpose=captured_visual_purpose(candidate["purpose"]),
                             recommended_platforms=candidate["recommended_platforms"],
                             sha256=sha256(payload).hexdigest(),
                             size_bytes=len(payload),
@@ -335,7 +347,7 @@ class OfficialSiteCapture:
                         path=target,
                         source_url=candidate["source_url"],
                         alt_text=candidate["alt_text"],
-                        purpose=candidate["purpose"],
+                        purpose=captured_visual_purpose(candidate["purpose"]),
                         recommended_platforms=candidate["recommended_platforms"],
                         sha256=sha256(payload).hexdigest(),
                         size_bytes=len(payload),

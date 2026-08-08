@@ -2,7 +2,11 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from app.services.official_site_capture import CommandResult, OfficialSiteCapture
+from app.services.official_site_capture import (
+    CommandResult,
+    OfficialSiteCapture,
+    captured_visual_purpose,
+)
 
 
 class FakeRunner:
@@ -105,6 +109,33 @@ def test_capture_archives_png_with_isolated_chrome(tmp_path: Path) -> None:
     assert item.capture_engine == "playwright_chrome"
     assert runner.commands[0][0:2] == ["playwright", "screenshot"]
     assert not any(command[0] == "opencli" for command in runner.commands)
+
+
+def test_captured_purpose_removes_pre_capture_disclaimer() -> None:
+    value = (
+        "候选截图用于支撑首段产品定位。"
+        "建议截取官网中对应的能力说明区域；本任务未执行截图。"
+    )
+
+    assert captured_visual_purpose(value) == "该官网截图用于支撑首段产品定位。"
+
+
+def test_capture_persists_truthful_post_capture_purpose(tmp_path: Path) -> None:
+    outcome = OfficialSiteCapture(runner=FakeRunner()).capture(
+        run_id=10,
+        official_website="https://brand.example.com/",
+        candidates=[
+            {
+                "source_url": "https://brand.example.com/product",
+                "alt_text": "产品能力页",
+                "purpose": "建议截取官网产品区域；本任务未执行截图。",
+                "recommended_platforms": ["official_site"],
+            }
+        ],
+        output_directory=tmp_path / "visuals",
+    )
+
+    assert outcome.items[0].purpose == "已从官网真实采集，供内容审核与配图选择。"
 
 
 def test_capture_falls_back_to_connected_browser_and_closes(tmp_path: Path) -> None:

@@ -25,6 +25,7 @@ import {
 	type ArticleSyncAccount,
 	type ArticleSyncPageApi,
 } from "@/lib/article-sync-page-bridge";
+import { capturedVisualPurpose } from "@/lib/captured-visual";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
 
@@ -125,7 +126,7 @@ function reviewVisualAssets(variants: CleanroomPlatformVariant[]): ReviewVisualA
 			items.set(artifactId, {
 				artifactId,
 				altText: typeof manifest.alt_text === "string" ? manifest.alt_text : "官网归档素材",
-				purpose: typeof manifest.purpose === "string" ? manifest.purpose : "供内容审核与配图选择",
+				purpose: capturedVisualPurpose(manifest.purpose),
 				sourceHost,
 				sourceUrl,
 				sha256: typeof manifest.sha256 === "string" ? manifest.sha256 : "",
