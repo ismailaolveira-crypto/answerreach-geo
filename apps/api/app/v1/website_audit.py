@@ -22,6 +22,9 @@ MAX_DISCOVERY_BYTES = 128 * 1024
 USER_AGENT = "ChunqiuYuanquan-GEO-Audit/1.0 (+website citation readiness)"
 PUBLICATION_VERIFY_MAX_BYTES = 128 * 1024
 BRAND_FACT_VERIFY_MAX_BYTES = 512 * 1024
+BRAND_FACT_SCRIPT_MAX_BYTES = 2 * 1024 * 1024
+BRAND_FACT_SCRIPT_TOTAL_BYTES = 5 * 1024 * 1024
+BRAND_FACT_SCRIPT_MAX_FILES = 8
 
 
 class WebsiteAuditTargetError(ValueError):
@@ -323,14 +326,25 @@ def verify_brand_fact_source(
     resolver: Resolver = _default_resolver,
     client: httpx.Client | None = None,
 ) -> dict[str, Any]:
-    """Verify that public server-rendered HTML contains the submitted statement."""
+    """Verify a statement in public HTML or bounded same-origin frontend resources."""
 
-    owned_client = client is None
-    active_client = client or httpx.Client(
-        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
-        timeout=httpx.Timeout(12.0, connect=8.0),
-        follow_redirects=False,
-    )
+    if client is None:
+        with httpx.Client(
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/javascript",
+            },
+            timeout=httpx.Timeout(12.0, connect=8.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as owned_client:
+            return verify_brand_fact_source(
+                url,
+                statement,
+                resolver=resolver,
+                client=owned_client,
+            )
+    active_client = client
     try:
         document = _fetch(
             active_client,
@@ -342,10 +356,6 @@ def verify_brand_fact_source(
         raise
     except (httpx.HTTPError, OSError) as exc:
         raise BrandFactSourceVerificationError("brand_fact_source_request_failed") from exc
-    finally:
-        if owned_client:
-            active_client.close()
-
     status_code = int(document.get("status_code") or 0)
     if status_code < 200 or status_code >= 300:
         raise BrandFactSourceVerificationError(
@@ -355,23 +365,104 @@ def verify_brand_fact_source(
     if content_type not in {"text/html", "application/xhtml+xml"}:
         raise BrandFactSourceVerificationError("brand_fact_source_not_html")
 
+    normalized_statement = re.sub(r"\s+", "", statement.strip())
+    if not normalized_statement:
+        raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
+
     parser = _PageParser()
     parser.feed(str(document.get("body") or ""))
     visible_text = re.sub(r"\s+", "", parser.page.body_text)
-    normalized_statement = re.sub(r"\s+", "", statement.strip())
-    if not normalized_statement or normalized_statement not in visible_text:
-        raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
+    evidence = document
+    verification_mode = "server_rendered_html"
+
+    if normalized_statement not in visible_text:
+        source_origin = urlsplit(str(document["url"]))
+        source_port = source_origin.port or (443 if source_origin.scheme == "https" else 80)
+        queued = [urljoin(str(document["url"]), item) for item in parser.page.script_sources]
+        seen: set[str] = set()
+        total_bytes = 0
+        evidence = None
+
+        while queued and len(seen) < BRAND_FACT_SCRIPT_MAX_FILES:
+            candidate = queued.pop(0)
+            candidate_url = urlsplit(candidate)
+            candidate_port = candidate_url.port or (
+                443 if candidate_url.scheme == "https" else 80
+            )
+            if (
+                candidate_url.scheme != source_origin.scheme
+                or candidate_url.hostname != source_origin.hostname
+                or candidate_port != source_port
+                or candidate in seen
+            ):
+                continue
+            seen.add(candidate)
+            remaining = BRAND_FACT_SCRIPT_TOTAL_BYTES - total_bytes
+            if remaining <= 0:
+                break
+            try:
+                script = _fetch(
+                    active_client,
+                    candidate,
+                    resolver=resolver,
+                    max_bytes=min(BRAND_FACT_SCRIPT_MAX_BYTES, remaining),
+                )
+            except (httpx.HTTPError, WebsiteAuditTargetError, OSError):
+                continue
+            total_bytes += int(script.get("size_bytes") or 0)
+            script_origin = urlsplit(str(script.get("url") or ""))
+            script_port = script_origin.port or (
+                443 if script_origin.scheme == "https" else 80
+            )
+            script_status = int(script.get("status_code") or 0)
+            script_type = (
+                str(script.get("content_type") or "").split(";", 1)[0].strip().lower()
+            )
+            if (
+                script_origin.scheme != source_origin.scheme
+                or script_origin.hostname != source_origin.hostname
+                or script_port != source_port
+                or script_status < 200
+                or script_status >= 300
+                or script_type
+                not in {
+                "application/javascript",
+                "application/ecmascript",
+                "text/javascript",
+                "text/ecmascript",
+                }
+            ):
+                continue
+            script_body = str(script.get("body") or "")
+            if normalized_statement in re.sub(r"\s+", "", script_body):
+                evidence = script
+                verification_mode = "same_origin_public_javascript"
+                break
+            for path in re.findall(r'["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', script_body):
+                nested = urljoin(str(script["url"]), path)
+                if nested not in seen and nested not in queued:
+                    queued.append(nested)
+
+        if evidence is None:
+            raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
 
     return {
         "status": "source_and_statement_verified",
         "verified_url": document["url"],
-        "status_code": status_code,
-        "content_type": content_type,
-        "source_sha256": document["sha256"],
+        "verification_mode": verification_mode,
+        "evidence_url": evidence["url"],
+        "status_code": int(evidence.get("status_code") or 0),
+        "content_type": str(evidence.get("content_type") or "")
+        .split(";", 1)[0]
+        .strip()
+        .lower(),
+        "source_sha256": evidence["sha256"],
+        "source_page_sha256": document["sha256"],
         "statement_sha256": sha256(statement.strip().encode("utf-8")).hexdigest(),
-        "size_bytes": document["size_bytes"],
-        "truncated": bool(document.get("truncated")),
-        "redirect_count": len(document.get("redirects") or []),
+        "size_bytes": evidence["size_bytes"],
+        "truncated": bool(evidence.get("truncated")),
+        "redirect_count": len(document.get("redirects") or [])
+        + (0 if evidence is document else len(evidence.get("redirects") or [])),
         "verified_at": datetime.now(timezone.utc).isoformat(),
     }
 

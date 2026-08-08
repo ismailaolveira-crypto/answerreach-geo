@@ -113,8 +113,74 @@ def test_brand_fact_source_verification_requires_visible_exact_statement() -> No
             )
 
     assert result["status"] == "source_and_statement_verified"
+    assert result["verification_mode"] == "server_rendered_html"
+    assert result["evidence_url"] == "https://brand.example/product"
     assert result["statement_sha256"] == sha256(statement.encode("utf-8")).hexdigest()
     assert "body" not in result
+
+
+def test_brand_fact_source_verification_follows_bounded_same_origin_scripts() -> None:
+    statement = "企业 AI 系统的统一 Token 管理与模型调度平台"
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text='<html><body><div id="app"></div><script type="module" src="/assets/app.js"></script></body></html>',
+            )
+        if request.url.path == "/assets/app.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text='const chunks=["./brand-copy.js"];',
+            )
+        if request.url.path == "/assets/brand-copy.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text=f'export const positioning="{statement}";',
+            )
+        return httpx.Response(404, headers={"content-type": "text/plain"})
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        result = verify_brand_fact_source(
+            "https://brand.example/",
+            statement,
+            resolver=public_resolver,
+            client=client,
+        )
+
+    assert result["status"] == "source_and_statement_verified"
+    assert result["verification_mode"] == "same_origin_public_javascript"
+    assert result["verified_url"] == "https://brand.example/"
+    assert result["evidence_url"] == "https://brand.example/assets/brand-copy.js"
+    assert result["source_sha256"] != result["source_page_sha256"]
+
+
+def test_brand_fact_source_verification_ignores_cross_origin_scripts() -> None:
+    statement = "不应由第三方脚本证明的品牌陈述。"
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text=(
+                '<html><body><div id="app"></div>'
+                f'<script src="https://cdn.example/app.js">{statement}</script></body></html>'
+            ),
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        with pytest.raises(
+            BrandFactSourceVerificationError,
+            match="brand_fact_statement_not_found",
+        ):
+            verify_brand_fact_source(
+                "https://brand.example/",
+                statement,
+                resolver=public_resolver,
+                client=client,
+            )
 
 
 def test_brand_fact_source_verification_rejects_private_targets() -> None:

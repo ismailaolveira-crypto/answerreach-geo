@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { CleanroomBrandFact } from "@/lib/cleanroom-v1-api";
-import { saveBrandFact, setBrandFactStatus, verifyBrandFactSource } from "./actions";
+import { saveBrandFact, saveEditedBrandFact, setBrandFactStatus, verifyBrandFactSource } from "./actions";
 import styles from "./settings.module.css";
 
 type Feedback = { kind: "success" | "error"; message: string } | null;
@@ -21,6 +21,10 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 	const [title, setTitle] = useState("");
 	const [statement, setStatement] = useState("");
 	const [sourceUrl, setSourceUrl] = useState("");
+	const [editingId, setEditingId] = useState<number | null>(null);
+	const [editTitle, setEditTitle] = useState("");
+	const [editStatement, setEditStatement] = useState("");
+	const [editSourceUrl, setEditSourceUrl] = useState("");
 	const [busyId, setBusyId] = useState<number | "new" | null>(null);
 	const [feedback, setFeedback] = useState<Feedback>(null);
 	const sourcedActiveFacts = useMemo(
@@ -62,7 +66,7 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 
 	async function verifyFact(fact: CleanroomBrandFact) {
 		if (!fact.source_url) {
-			setFeedback({ kind: "error", message: "该记录缺少公开来源，请停用后重新创建。" });
+			setFeedback({ kind: "error", message: "该记录缺少公开来源，请编辑后重新核验。" });
 			return;
 		}
 		setBusyId(fact.id);
@@ -73,6 +77,51 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 			setFeedback({ kind: "success", message: `「${next.title}」已通过公网可访问与原文一致性核验。` });
 		} catch (error) {
 			setFeedback({ kind: "error", message: error instanceof Error ? error.message : "公开来源核验失败。" });
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	function beginEdit(fact: CleanroomBrandFact) {
+		setEditingId(fact.id);
+		setEditTitle(fact.title);
+		setEditStatement(fact.statement);
+		setEditSourceUrl(fact.source_url ?? "");
+		setFeedback(null);
+	}
+
+	function cancelEdit() {
+		setEditingId(null);
+		setEditTitle("");
+		setEditStatement("");
+		setEditSourceUrl("");
+	}
+
+	async function saveEdit(fact: CleanroomBrandFact) {
+		const cleanTitle = editTitle.trim();
+		const cleanStatement = editStatement.trim();
+		const cleanSourceUrl = editSourceUrl.trim();
+		if (!cleanTitle || !cleanStatement || !cleanSourceUrl) {
+			setFeedback({ kind: "error", message: "请完整填写事实名称、可公开陈述和公开来源。" });
+			return;
+		}
+		if (!isPublicHttpUrl(cleanSourceUrl)) {
+			setFeedback({ kind: "error", message: "公开来源必须是可访问的 http 或 https 地址。" });
+			return;
+		}
+		setBusyId(fact.id);
+		setFeedback(null);
+		try {
+			const next = await saveEditedBrandFact(workspaceId, fact.id, {
+				title: cleanTitle,
+				statement: cleanStatement,
+				source_url: cleanSourceUrl,
+			});
+			setFacts((current) => current.map((item) => item.id === next.id ? next : item));
+			cancelEdit();
+			setFeedback({ kind: "success", message: `「${next.title}」已按新原文重新核验并启用。` });
+		} catch (error) {
+			setFeedback({ kind: "error", message: error instanceof Error ? error.message : "无法保存并核验这条事实。" });
 		} finally {
 			setBusyId(null);
 		}
@@ -107,9 +156,9 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 		<div className={styles.brandFactsLayout}>
 			<div className={styles.brandFactForm}>
 				<label>事实名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：产品定位" maxLength={255} /></label>
-				<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="粘贴来源页服务端正文中确实可见的完整原文。" rows={4} /></label>
+				<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="粘贴官网页面实际展示的完整原文。" rows={4} /></label>
 				<label>公开来源 URL<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" autoComplete="off" spellCheck={false} /></label>
-				<p>后端会安全读取公网 HTML，确认原文存在后才保存哈希证明。内部口头信息不应在这里伪装成公开证据。</p>
+				<p>后端会先核验公网 HTML；如果官网依赖 JavaScript，只继续核验受限的同域公开前端资源。内部口头信息不应在这里伪装成公开证据。</p>
 				<button type="button" onClick={createFact} disabled={busyId !== null} aria-busy={busyId === "new"}>{busyId === "new" ? "正在核验来源…" : "核验并保存"}</button>
 			</div>
 			<div className={styles.brandFactList}>
@@ -117,9 +166,18 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 				{facts.length ? <div>{facts.map((fact) => {
 					const verified = fact.source_verification?.status === "source_and_statement_verified";
 					const inactive = fact.status !== "active";
+					if (editingId === fact.id) return <article key={fact.id} className={styles.factEditing}>
+						<div className={styles.brandFactEditor}>
+							<label>事实名称<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={255} /></label>
+							<label>可公开陈述<textarea value={editStatement} onChange={(event) => setEditStatement(event.target.value)} rows={4} /></label>
+							<label>公开来源 URL<input type="url" value={editSourceUrl} onChange={(event) => setEditSourceUrl(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+							<small>保存时会重新读取公网来源；只有完整原文存在才会更新并启用。</small>
+						</div>
+						<div className={styles.brandFactActions}><button type="button" onClick={() => saveEdit(fact)} disabled={busyId !== null}>{busyId === fact.id ? "正在核验…" : "核验并保存"}</button><button type="button" onClick={cancelEdit} disabled={busyId !== null}>取消</button></div>
+					</article>;
 					return <article key={fact.id} className={inactive ? styles.isInactive : ""}>
-						<div><span className={inactive ? styles.factStatusInactive : verified ? styles.factStatusVerified : styles.factStatusPending}>{inactive ? "已停用" : verified ? "已核验" : "待核验"}</span><b>{fact.title}</b><p>{fact.statement}</p>{fact.source_url ? <a href={fact.source_url} target="_blank" rel="noreferrer">查看公开来源 ↗</a> : <em>缺少公开来源，不满足官网成稿门禁</em>}{!inactive && !verified ? <em>历史记录尚未完成公网与原文核验，当前不会交给 Agent。</em> : null}</div>
-						<div className={styles.brandFactActions}>{!inactive && !verified ? <button type="button" onClick={() => verifyFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "正在核验…" : "核验来源"}</button> : null}<button type="button" onClick={() => toggleFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "处理中…" : inactive ? "恢复并核验" : "停用"}</button></div>
+						<div><span className={inactive ? styles.factStatusInactive : verified ? styles.factStatusVerified : styles.factStatusPending}>{inactive ? "已停用" : verified ? "已核验" : "待核验"}</span><b>{fact.title}</b><p>{fact.statement}</p>{fact.source_url ? <a href={fact.source_url} target="_blank" rel="noreferrer">查看公开来源 ↗</a> : <em>缺少公开来源，不满足官网成稿门禁</em>}{verified && fact.source_verification?.verification_mode === "same_origin_public_javascript" ? <em className={styles.factVerificationNote}>原文来自官网同域公开前端资源；可作为 Agent 事实输入，但不代表搜索引擎能直接抓取首页正文。</em> : null}{!inactive && !verified ? <em>历史记录尚未完成公网与原文核验，当前不会交给 Agent。</em> : null}</div>
+						<div className={styles.brandFactActions}>{!inactive && !verified ? <button type="button" onClick={() => verifyFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "正在核验…" : "核验来源"}</button> : null}<button type="button" onClick={() => beginEdit(fact)} disabled={busyId !== null || editingId !== null}>编辑</button><button type="button" onClick={() => toggleFact(fact)} disabled={busyId !== null || editingId !== null}>{busyId === fact.id ? "处理中…" : inactive ? "恢复并核验" : "停用"}</button></div>
 					</article>;
 				})}</div> : <div className={styles.brandFactEmpty}><b>还没有可用品牌事实</b><p>官网当前无法回读产品正文。先补充至少一条通过公网与原文核验的事实，再启动官网成稿。</p></div>}
 			</div>

@@ -7122,7 +7122,7 @@ def _verify_brand_fact_source_or_http_error(source_url: str, statement: str) -> 
     except BrandFactSourceVerificationError as exc:
         reason = str(exc)
         if reason == "brand_fact_statement_not_found":
-            detail = "来源页的服务端公开正文中没有找到这段完整陈述；请粘贴页面中确实可见的原文。"
+            detail = "来源页公开正文及其同域前端资源中都没有找到这段完整陈述；请粘贴页面实际展示的原文。"
             status_code = 422
         elif reason == "brand_fact_source_not_html":
             detail = "当前只支持可公开读取的 HTML 来源页。"

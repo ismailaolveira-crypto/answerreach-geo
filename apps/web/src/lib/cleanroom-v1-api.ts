@@ -918,10 +918,13 @@ export type CleanroomBrandFact = {
 	status: string;
 	source_verification?: {
 		status: "source_and_statement_verified";
+		verification_mode?: "server_rendered_html" | "same_origin_public_javascript";
 		verified_url: string;
+		evidence_url?: string;
 		status_code: number;
 		content_type: string;
 		source_sha256: string;
+		source_page_sha256?: string;
 		statement_sha256: string;
 		size_bytes: number;
 		truncated: boolean;

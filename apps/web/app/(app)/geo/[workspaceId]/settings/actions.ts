@@ -89,6 +89,20 @@ export async function verifyBrandFactSource(
 	return fact;
 }
 
+export async function saveEditedBrandFact(
+	workspaceId: number,
+	factId: number,
+	payload: { title: string; statement: string; source_url: string },
+) {
+	const fact = await updateCleanroomBrandFact(workspaceId, factId, {
+		...payload,
+		status: "active",
+	});
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	revalidatePath(`/geo/${workspaceId}/actions`);
+	return fact;
+}
+
 export async function saveWorkspaceSettings(
   _previous: SettingsActionState,
   formData: FormData,
