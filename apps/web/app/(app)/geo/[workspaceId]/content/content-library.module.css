@@ -9,13 +9,13 @@
 .summary>div:last-child{border:0}
 .summary small{color:#8290a3;display:block;font-size:10px;line-height:1.35}
 .summary strong{display:block;font-size:24px;letter-spacing:-.05em;margin-top:5px}
-.toolbar{align-items:center;background:rgb(255 255 255 / 86%);backdrop-filter:blur(18px) saturate(150%);border:1px solid var(--line);border-radius:14px;display:flex;gap:20px;justify-content:space-between;margin-bottom:14px;padding:8px 10px;position:sticky;top:14px;z-index:5}
-.segmented{display:flex;gap:3px}
-.segmented button{background:transparent;border:0;border-radius:9px;color:#6d7d93;cursor:pointer;font:inherit;font-size:11px;font-weight:730;min-height:44px;padding:0 11px}
+.toolbar{align-items:flex-start;background:rgb(255 255 255 / 86%);backdrop-filter:blur(18px) saturate(150%);border:1px solid var(--line);border-radius:14px;display:flex;gap:16px;justify-content:space-between;margin-bottom:14px;padding:8px 10px;position:sticky;top:14px;z-index:5}
+.segmented{display:flex;flex:1 1 auto;flex-wrap:wrap;gap:3px;min-width:0}
+.segmented button{background:transparent;border:0;border-radius:9px;color:#6d7d93;cursor:pointer;flex:0 0 auto;font:inherit;font-size:11px;font-weight:730;min-height:44px;padding:0 11px;white-space:nowrap}
 .segmented button span{background:#edf2f8;border-radius:999px;font-size:9px;margin-left:6px;padding:2px 5px}
 .segmented button.active{background:#eaf1ff;color:#1c5fd9}
 .segmented button.active span{background:#fff;color:#1c5fd9}
-.toolbar label{align-items:center;color:#8491a3;display:flex;font-size:10px;font-weight:720;gap:8px}
+.toolbar label{align-items:center;color:#8491a3;display:flex;flex:0 0 auto;font-size:10px;font-weight:720;gap:8px;min-height:44px}
 .toolbar select{background:#fff;border:1px solid #dbe3ed;border-radius:9px;color:#405169;font:inherit;font-size:11px;font-weight:680;height:44px;outline:0;padding:0 30px 0 11px}
 .toolbar select:focus{border-color:#78a1ee;box-shadow:0 0 0 3px rgb(36 103 232 / 10%)}
 .list{display:grid;gap:13px}
@@ -115,8 +115,7 @@
 .summary>div:nth-child(2n){border-right:0}
 .summary>div:last-child{border-bottom:0;grid-column:1/-1}
 .toolbar{align-items:stretch;flex-direction:column}
-.segmented{overflow-x:auto}
-.segmented button{flex:0 0 auto}
+.segmented{overflow:visible}
 .toolbar label{justify-content:space-between}
 .platforms{justify-content:flex-start}
 .item>header{align-items:flex-start;flex-direction:column}

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { CleanroomContentLibraryItem } from "@/lib/cleanroom-v1-api";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
+import { getContentLibraryItemState } from "./content-library-state";
 import styles from "./content-library.module.css";
 
 const PLATFORM_META: Record<string, { label: string; logo?: string }> = {
@@ -28,18 +29,6 @@ const FILTERS = [
 	{ key: "published", label: "人工已发布" },
 	{ key: "superseded", label: "历史版本" },
 ] as const;
-
-function itemState(item: CleanroomContentLibraryItem) {
-	if (!item.is_latest_version || item.asset.status === "superseded") return "superseded";
-	if (item.draft_targets.some((target) => target.human_publish_status === "published" && target.public_url && target.publication_verification_status === "publicly_verified")) return "published";
-	if (item.draft_targets.some((target) => target.platform_key === "official_site" && target.adapter_version === "manual-website.v1" && target.request_status === "handoff_ready")) return "website_handoff";
-	if (item.draft_targets.some((target) => target.draft_readback_status === "awaiting_human_confirmation" && target.candidate_draft_url)) return "awaiting_confirmation";
-	if (item.saved_draft_count > 0) return "draft_saved";
-	if (item.latest_review_verdict === "changes_requested") return "revision";
-	if (item.brand_fact_snapshot_stale) return "stale";
-	if (item.approved_platform_keys.length > 0) return "approved";
-	return "review";
-}
 
 function stateLabel(state: string) {
 	return {
@@ -115,7 +104,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 	const [exportFeedback, setExportFeedback] = useState<Record<string, ExportFeedback>>({});
 	const platforms = useMemo(() => [...new Set(items.flatMap((item) => item.variants.map((variant) => variant.platform_key)))], [items]);
 	const visibleItems = useMemo(() => items.filter((item) => {
-		const state = itemState(item);
+		const state = getContentLibraryItemState(item);
 		const matchesStatus = status === "all" || state === status;
 		const matchesPlatform = platform === "all" || item.variants.some((variant) => variant.platform_key === platform);
 		return matchesStatus && matchesPlatform;
@@ -167,13 +156,13 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 
 	return <>
 		<section className={styles.toolbar} aria-label="内容筛选">
-			<div className={styles.segmented}>{FILTERS.map((filter) => <button type="button" key={filter.key} className={status === filter.key ? styles.active : ""} onClick={() => setStatus(filter.key)}>{filter.label}<span>{items.filter((item) => filter.key === "all" || itemState(item) === filter.key).length}</span></button>)}</div>
+			<div className={styles.segmented}>{FILTERS.map((filter) => <button type="button" key={filter.key} className={status === filter.key ? styles.active : ""} onClick={() => setStatus(filter.key)}>{filter.label}<span>{items.filter((item) => filter.key === "all" || getContentLibraryItemState(item) === filter.key).length}</span></button>)}</div>
 			<label><span>平台</span><select value={platform} onChange={(event) => setPlatform(event.target.value)}><option value="all">全部平台</option>{platforms.map((key) => <option key={key} value={key}>{PLATFORM_META[key]?.label || key}</option>)}</select></label>
 		</section>
 
 		<section className={styles.list} aria-live="polite">
 			{visibleItems.length ? visibleItems.map((item) => {
-				const state = itemState(item);
+				const state = getContentLibraryItemState(item);
 				const visualAssets = capturedVisualAssets(item);
 				const canExport = state !== "superseded" && state !== "stale";
 				const reviewComplete = item.approved_platform_keys.length > 0;
