@@ -4567,11 +4567,24 @@ def decide_content_review(
     if asset.status == "approved":
         raise HTTPException(status_code=409, detail="This content version was already approved")
     platform_keys = list(dict.fromkeys(payload.platform_keys))
+    reviewed_platform_keys = list(dict.fromkeys(payload.reviewed_platform_keys))
     missing_platforms = [key for key in platform_keys if key not in variants_by_key]
     if missing_platforms:
         raise HTTPException(status_code=422, detail=f"Platform variants not found: {', '.join(missing_platforms)}")
+    invalid_reviewed_platforms = [key for key in reviewed_platform_keys if key not in variants_by_key]
+    if invalid_reviewed_platforms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"已查看的平台稿不存在：{', '.join(invalid_reviewed_platforms)}",
+        )
     if payload.verdict == "approved" and not platform_keys:
         raise HTTPException(status_code=422, detail="Select at least one platform variant to approve")
+    unreviewed_platforms = [key for key in platform_keys if key not in reviewed_platform_keys]
+    if payload.verdict == "approved" and unreviewed_platforms:
+        raise HTTPException(
+            status_code=422,
+            detail=f"请先打开并审阅这些平台稿，再批准：{', '.join(unreviewed_platforms)}",
+        )
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
     if (
         payload.verdict == "approved"
@@ -4645,6 +4658,7 @@ def decide_content_review(
                 "confirmed_claim_ids": sorted(confirmed_ids & unresolved_ids),
                 "unverified_claim_ids": sorted(unverified_ids & unresolved_ids),
                 "platform_keys": platform_keys,
+                "reviewed_platform_keys": reviewed_platform_keys,
             },
             issues=[issue] if issue else [],
             reviewer_id=user.id,
@@ -4660,7 +4674,11 @@ def decide_content_review(
                 subject_id=variant.id,
                 review_type="human",
                 verdict=payload.verdict,
-                checks={"platform_key": platform_key, "content_fingerprint": variant.content_fingerprint},
+                checks={
+                    "platform_key": platform_key,
+                    "content_fingerprint": variant.content_fingerprint,
+                    "reviewed_before_approval": platform_key in reviewed_platform_keys,
+                },
                 issues=[issue] if issue else [],
                 reviewer_id=user.id,
             )

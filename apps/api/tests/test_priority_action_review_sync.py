@@ -22,6 +22,7 @@ from app.models.cleanroom_v1 import (
     GeoAgentRun,
     GeoContentBrief,
     GeoContentClaim,
+    GeoContentReview,
     GeoOptimizationAction,
     GeoPlatformVariant,
     GeoWorkspace,
@@ -209,9 +210,26 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
 
     blocked_review = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
-        json={"verdict": "approved", "confirmed_claim_ids": [], "platform_keys": ["zhihu"]},
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
     )
     assert blocked_review.status_code == 422
+
+    unreviewed_platform = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": [],
+        },
+    )
+    assert unreviewed_platform.status_code == 422
+    assert "请先打开并审阅" in unreviewed_platform.json()["detail"]
 
     approved = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
@@ -219,12 +237,27 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
             "verdict": "approved",
             "confirmed_claim_ids": [2],
             "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
             "note": "已与品牌负责人核对",
         },
     )
     assert approved.status_code == 201
-    assert approved.json()["approved_platform_keys"] == ["zhihu"]
-    assert approved.json()["pending_claim_count"] == 0
+    approved_payload = approved.json()
+    assert approved_payload["approved_platform_keys"] == ["zhihu"]
+    assert approved_payload["pending_claim_count"] == 0
+    asset_review = next(
+        review
+        for review in approved_payload["reviews"]
+        if review["subject_type"] == "content_asset"
+    )
+    assert asset_review["checks"]["reviewed_platform_keys"] == ["zhihu"]
+    with review_client.app.state.review_session_factory() as db:
+        variant_review = (
+            db.query(GeoContentReview)
+            .filter(GeoContentReview.subject_type == "platform_variant")
+            .one()
+        )
+        assert variant_review.checks["reviewed_before_approval"] is True
 
     blocked_platform = review_client.post(
         "/api/v1/workspaces/1/distribution-runs",
@@ -328,6 +361,7 @@ def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
             "confirmed_claim_ids": [2],
             "unverified_claim_ids": [2],
             "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
         },
     )
     assert conflicting.status_code == 422
@@ -339,6 +373,7 @@ def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
             "confirmed_claim_ids": [],
             "unverified_claim_ids": [2],
             "platform_keys": ["zhihu", "wechat"],
+            "reviewed_platform_keys": ["zhihu", "wechat"],
             "note": "稿件明确将该能力保留为待核验，不作为产品事实使用",
         },
     )
@@ -382,6 +417,7 @@ def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
             "verdict": "approved",
             "confirmed_claim_ids": [2],
             "platform_keys": ["zhihu", "wechat"],
+            "reviewed_platform_keys": ["zhihu", "wechat"],
         },
     )
     assert approved.status_code == 201
@@ -461,6 +497,7 @@ def test_later_platform_login_extends_the_same_distribution_run(
             "verdict": "approved",
             "confirmed_claim_ids": [2],
             "platform_keys": ["zhihu", "wechat"],
+            "reviewed_platform_keys": ["zhihu", "wechat"],
         },
     )
     assert approved.status_code == 201
@@ -545,6 +582,7 @@ def test_official_site_uses_manual_handoff_before_human_publication(
             "verdict": "approved",
             "confirmed_claim_ids": [2],
             "platform_keys": ["official_site"],
+            "reviewed_platform_keys": ["official_site"],
         },
     )
     assert approved.status_code == 201
@@ -734,6 +772,7 @@ def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(
             "verdict": "approved",
             "confirmed_claim_ids": [2],
             "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
         },
     )
     assert blocked_reapproval.status_code == 409

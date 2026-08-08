@@ -1526,6 +1526,7 @@ export function decideCleanroomContentReview(
 		confirmed_claim_ids?: number[];
 		unverified_claim_ids?: number[];
 		platform_keys?: string[];
+		reviewed_platform_keys?: string[];
 		note?: string | null;
 	},
 ) {

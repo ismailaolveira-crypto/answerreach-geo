@@ -40,7 +40,7 @@ type Props = {
 	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	reviseAgent: (runId: number, contentAssetId: number) => Promise<CleanroomAgentRun>;
 	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; progress: CleanroomAgentRunProgress | null }>;
-	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
+	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; reviewed_platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
 	recordDistributionResults: (runId: number, targets: Array<{ platform_key: string; request_status: "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>) => Promise<CleanroomDistributionRun>;
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
@@ -317,6 +317,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [confirmedClaimIds, setConfirmedClaimIds] = useState<number[]>([]);
 	const [unverifiedClaimIds, setUnverifiedClaimIds] = useState<number[]>([]);
 	const [reviewPlatformKeys, setReviewPlatformKeys] = useState<string[]>([]);
+	const [viewedPlatformKeys, setViewedPlatformKeys] = useState<string[]>([]);
 	const [reviewNote, setReviewNote] = useState("");
 	const [reviewFeedback, setReviewFeedback] = useState("");
 	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "wechat"]);
@@ -381,6 +382,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const unverifiedPendingClaimCount = pendingClaims.filter((claim) => unverifiedClaimIds.includes(claim.id)).length;
 	const reviewedPendingClaimCount = confirmedPendingClaimCount + unverifiedPendingClaimCount;
 	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - reviewedPendingClaimCount);
+	const selectedUnviewedPlatformCount = reviewPlatformKeys.filter((key) => !viewedPlatformKeys.includes(key)).length;
 	const currentDistribution = currentAssetId ? distributionRuns
 		.filter((run) => run.action_id === selected?.existingAction?.id && run.content_asset_id === currentAssetId)
 		.sort((a, b) => b.id - a.id)[0] : undefined;
@@ -711,10 +713,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setReviewTab("master");
 		setConfirmedClaimIds([]);
 		setUnverifiedClaimIds([]);
-		setReviewPlatformKeys(currentReviewPackage.variants.map((variant) => variant.platform_key));
+		setReviewPlatformKeys([]);
+		setViewedPlatformKeys(currentReviewPackage.approved_platform_keys);
 		setReviewNote("");
 		setReviewFeedback("");
 		setReviewOpen(true);
+	}
+
+	function openPlatformReview(platformKey: string) {
+		setReviewTab(platformKey);
+		setViewedPlatformKeys((current) => [...new Set([...current, platformKey])]);
 	}
 
 	function submitReview(verdict: "approved" | "changes_requested") {
@@ -727,6 +735,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					confirmed_claim_ids: confirmedClaimIds,
 					unverified_claim_ids: unverifiedClaimIds,
 					platform_keys: reviewPlatformKeys,
+					reviewed_platform_keys: viewedPlatformKeys,
 					note: reviewNote || null,
 				});
 				setReviewPackages((current) => [result, ...current.filter((item) => item.asset.id !== result.asset.id)]);
@@ -1064,12 +1073,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>
 			<section ref={reviewDialogRef} className="pa-review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-workbench-title" tabIndex={-1}>
-				<header><div><small>人工审核 · 内容资产 #{currentReviewPackage.asset.id}</small><h2 id="review-workbench-title">核对事实，再决定哪些平台稿可以同步</h2><p>每条未知信息都可以确认属实或保留未核验；系统不会逼你为未知事实背书。</p></div><button type="button" onClick={() => setReviewOpen(false)} disabled={isSaving} aria-label="关闭审核工作台">×</button></header>
+				<header><div><small>人工审核 · 内容资产 #{currentReviewPackage.asset.id}</small><h2 id="review-workbench-title">核对事实，再决定哪些平台稿进入后续流程</h2><p>每条未知信息都可以确认属实或保留未核验；系统不会逼你为未知事实背书。</p></div><button type="button" onClick={() => setReviewOpen(false)} disabled={isSaving} aria-label="关闭审核工作台">×</button></header>
 				<nav className="pa-review-tabs" aria-label="内容版本">
 					<button type="button" className={reviewTab === "master" ? "is-active" : ""} onClick={() => setReviewTab("master")}><Icon name="draft" />母稿</button>
 					{currentReviewPackage.variants.map((variant) => {
 						const platform = platformOptions.find((item) => item.key === variant.platform_key);
-						return <button key={variant.id} type="button" className={reviewTab === variant.platform_key ? "is-active" : ""} onClick={() => setReviewTab(variant.platform_key)}>{platform ? <img src={platform.logo} alt="" /> : null}{platform?.label || variant.platform_key}<span>{variant.status === "approved" ? "已通过" : "待审"}</span></button>;
+						const viewed = viewedPlatformKeys.includes(variant.platform_key);
+						return <button key={variant.id} type="button" className={reviewTab === variant.platform_key ? "is-active" : ""} onClick={() => openPlatformReview(variant.platform_key)}>{platform ? <img src={platform.logo} alt="" /> : null}{platform?.label || variant.platform_key}<span>{variant.status === "approved" ? "已通过" : viewed ? "已查看" : "待查看"}</span></button>;
 					})}
 				</nav>
 				{!websiteDraftReadyForApproval ? <div className="pa-review-readiness" role="status"><div><b>这版内容是整改框架，不是可上线的品牌成稿</b><p>生成时品牌事实库为空。请先在设置中补齐带公开来源的品牌事实，再退回并生成新版本；系统不会允许直接批准这版官网稿。</p></div><Link href={`/geo/${workspaceId}/settings`}>补齐品牌事实 →</Link></div> : null}
@@ -1092,12 +1102,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 								{needsHuman && !approvedPlatformKeys.length ? <div className="pa-claim-choice" role="group" aria-label={`审核主张：${claim.claim_text}`}><button type="button" aria-pressed={confirmed} className={confirmed ? "is-selected" : ""} onClick={() => setClaimReviewDecision(claim.id, "confirmed")}>确认属实</button><button type="button" aria-pressed={keptUnverified} className={keptUnverified ? "is-selected is-safe" : ""} onClick={() => setClaimReviewDecision(claim.id, "unverified")}>保持未核验</button></div> : null}
 							</div>;
 						})}</div></section>
-						<section><header><div><b>通过的平台稿</b><small>只有选中的版本会开放同步</small></div></header><div className="pa-review-platforms">{currentReviewPackage.variants.map((variant) => { const platform = platformOptions.find((item) => item.key === variant.platform_key); return <label key={variant.id}><input type="checkbox" checked={reviewPlatformKeys.includes(variant.platform_key) || approvedPlatformKeys.includes(variant.platform_key)} disabled={approvedPlatformKeys.includes(variant.platform_key)} onChange={() => setReviewPlatformKeys((current) => current.includes(variant.platform_key) ? current.filter((key) => key !== variant.platform_key) : [...current, variant.platform_key])} />{platform ? <img src={platform.logo} alt="" /> : null}<span><b>{platform?.label || variant.platform_key}</b><small>{variant.title}</small></span></label>; })}</div></section>
+						<section><header><div><b>通过的平台稿</b><small>先打开平台版本，再明确决定是否通过</small></div></header><div className="pa-review-platforms">{currentReviewPackage.variants.map((variant) => {
+							const platform = platformOptions.find((item) => item.key === variant.platform_key);
+							const viewed = viewedPlatformKeys.includes(variant.platform_key) || approvedPlatformKeys.includes(variant.platform_key);
+							return <div key={variant.id} className={viewed ? "is-viewed" : "is-unseen"}><label><input type="checkbox" checked={reviewPlatformKeys.includes(variant.platform_key) || approvedPlatformKeys.includes(variant.platform_key)} disabled={!viewed || approvedPlatformKeys.includes(variant.platform_key)} onChange={() => setReviewPlatformKeys((current) => current.includes(variant.platform_key) ? current.filter((key) => key !== variant.platform_key) : [...current, variant.platform_key])} />{platform ? <img src={platform.logo} alt="" /> : null}<span><b>{platform?.label || variant.platform_key}</b><small>{variant.title}</small></span></label><button type="button" onClick={() => openPlatformReview(variant.platform_key)}>{viewed ? "再看一遍" : "查看稿件"}</button></div>;
+						})}</div></section>
 						<label className="pa-review-note"><span>审核意见</span><textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="退回修改时必填；通过时可记录核对说明。" rows={3} /></label>
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已处理 ${reviewedPendingClaimCount}/${pendingClaims.length} 条待判断事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。选择“保持未核验”前，请确认稿件没有把它写成已证实事实。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需处理 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已处理 ${reviewedPendingClaimCount}/${pendingClaims.length} 条待判断事实 · 已查看 ${viewedPlatformKeys.length}/${currentReviewPackage.variants.length} 个平台稿 · 已选择 ${reviewPlatformKeys.length} 个通过。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || selectedUnviewedPlatformCount > 0 || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需处理 ${remainingPendingClaimCount} 条事实` : selectedUnviewedPlatformCount > 0 ? "先查看已选平台稿" : !reviewPlatformKeys.length ? "选择通过的平台稿" : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

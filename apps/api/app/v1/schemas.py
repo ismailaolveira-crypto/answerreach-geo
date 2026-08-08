@@ -1292,6 +1292,9 @@ class ContentReviewDecision(BaseModel):
     platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
         default_factory=list, max_length=4
     )
+    reviewed_platform_keys: list[
+        Literal["official_site", "zhihu", "wechat", "xiaohongshu"]
+    ] = Field(default_factory=list, max_length=4)
     note: str | None = Field(default=None, max_length=2000)
 
 

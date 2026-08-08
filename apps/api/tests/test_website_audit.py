@@ -461,6 +461,7 @@ def test_website_draft_requires_active_sourced_brand_fact(
             "verdict": "approved",
             "confirmed_claim_ids": [],
             "platform_keys": ["official_site"],
+            "reviewed_platform_keys": ["official_site"],
             "note": "规则来源已核对",
         },
     )
@@ -489,6 +490,7 @@ def test_website_draft_requires_active_sourced_brand_fact(
             "verdict": "approved",
             "confirmed_claim_ids": [],
             "platform_keys": ["official_site"],
+            "reviewed_platform_keys": ["official_site"],
             "note": "仅有运行元数据，不应绕过内容证据门禁",
         },
     )
@@ -521,6 +523,7 @@ def test_website_draft_requires_active_sourced_brand_fact(
             "verdict": "approved",
             "confirmed_claim_ids": [],
             "platform_keys": ["official_site"],
+            "reviewed_platform_keys": ["official_site"],
             "note": "规则与品牌事实均已核对",
         },
     )
