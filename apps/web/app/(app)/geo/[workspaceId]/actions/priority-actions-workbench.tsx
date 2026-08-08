@@ -341,11 +341,15 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const unselected = unresolved.filter((item) => !item.existingAction).length;
 	const inProgress = unresolved.filter((item) => item.existingAction).length;
 	const high = unresolved.filter((item) => item.priority === "high").length;
-	const pendingActions = agentRuns.filter((run) => {
-		const assetId = Number(run.result_snapshot.asset_id);
-		const reviewPackage = reviewPackages.find((item) => item.asset.id === assetId);
-		return run.status === "awaiting_review" && !reviewPackage?.approved_platform_keys.length;
-	}).length;
+	const pendingDraftPackages = agentRuns
+		.filter((run) => run.status === "awaiting_review")
+		.map((run) => reviewPackages.find((item) => item.asset.id === Number(run.result_snapshot.asset_id)))
+		.filter((reviewPackage): reviewPackage is CleanroomContentReviewPackage => Boolean(reviewPackage && !reviewPackage.approved_platform_keys.length));
+	const regenerationDraftCount = pendingDraftPackages.filter((reviewPackage) => (
+		reviewPackage.asset.status === "changes_requested"
+		|| (reviewPackage.available_sourced_brand_fact_count > 0 && reviewPackage.sourced_brand_fact_count === 0)
+	)).length;
+	const reviewReadyDraftCount = pendingDraftPackages.length - regenerationDraftCount;
 	const retestReady = retests.filter((item) => item.status === "completed").length;
 	const websiteAuditBlocked = websiteAudit?.status === "blocked";
 	const stage = actionStage(selected?.existingAction);
@@ -359,11 +363,6 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const agentCapacityAvailable = agentCapacityUsed < agentCapacityLimit;
 	const agentCanStart = Boolean(agentRuntime?.ready && agentCapacityAvailable);
 	const agentTimeoutMinutes = Math.max(1, Math.round((agentRuntime?.run_timeout_seconds ?? 900) / 60));
-	const generatedAssetCount = new Set(
-		agentRuns
-			.map((run) => Number(run.result_snapshot.asset_id))
-			.filter((assetId) => Number.isFinite(assetId) && assetId > 0),
-	).size;
 	const runActive = Boolean(currentRun && ["queued", "resuming", "running", "cancelling"].includes(currentRun.status));
 	const currentRunId = currentRun?.id;
 	const currentRunStatus = currentRun?.status;
@@ -972,7 +971,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			<section className="pa-summary" aria-label="行动状态摘要">
 				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>未闭环机会</small><strong>{isScopePending ? "—" : unresolved.length}</strong></div></article>
 				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>其中高优先级</small><strong>{isScopePending ? "—" : high}</strong></div></article>
-				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>草稿待确认</small><strong>{pendingActions}</strong></div></article>
+				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>待处理稿件</small><strong>{pendingDraftPackages.length}</strong><em>待审 {reviewReadyDraftCount} · 重生成 {regenerationDraftCount}</em></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
 		</section>
@@ -1071,8 +1070,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</section>
 
 			{actions.length > 0 ? <section className="pa-progress">
-				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
-				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工判断项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步或官网交付"}</p></div><div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div><div className={publicationReady && !allTargetsPublished ? "is-current" : ""}><b>{selected.type === "website" ? "人工上线" : "人工发布"}</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个目标已记录公开 URL` : selected.type === "website" ? "上线始终由网站负责人完成" : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "上线或发布完成后复用原问题与模型"}</p></div></div>
+				<header><div><h2>当前行动的内容与发布进度</h2><p>只显示当前选中行动的持久化状态；不会混入其他行动或历史稿件。</p></div></header>
+				<div className="pa-progress-lanes">
+					<div className={runActive ? "is-current" : ""}><b>Agent 生成</b><span>{currentAssetId ? 1 : 0}</span><p>{runActive ? "当前任务正在调研与生成" : currentAssetId ? "当前内容版本已持久化" : "当前行动还没有生成结果"}</p></div>
+					<div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工判断项分开记录</p></div>
+					<div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div>
+					<div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{approvedPlatformKeys.length || (currentReviewPackage ? 1 : 0)}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : reviewNeedsRevision || draftMissesAvailableBrandFacts ? "当前版本需重新生成，不能进入交付" : currentReviewPackage ? `${currentReviewPackage.pending_claim_count} 条主张待人工判断` : "等待当前行动生成可审核内容"}</p></div>
+					<div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : savedDraftCount}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div>
+					<div className={publicationReady && !allTargetsPublished ? "is-current" : ""}><b>{selected.type === "website" ? "人工上线" : "人工发布"}</b><span>{publishedTargetCount}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个目标已记录公开 URL` : selected.type === "website" ? "上线始终由网站负责人完成" : "发布始终由人工在平台完成"}</p></div>
+					<div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{currentRetest?.status === "completed" ? 1 : 0}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "上线或发布完成后复用原问题与模型"}</p></div>
+				</div>
 				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、交付、上线/发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={selected.type === "website" ? beginWebsiteHandoff : openSyncAssistant} disabled={selected.type === "website" ? !hasApprovedOfficialSiteDraft || websiteHandoffReady || isSaving : !syncableApprovedPlatformKeys.length || allDraftsSaved} title={selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "请先通过官网稿人工审核" : websiteHandoffReady ? "官网交付记录已建立，等待人工上线" : "建立官网人工交付记录" : allDraftsSaved ? "已审核平台稿均已完成草稿回读" : syncableApprovedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个外部平台稿"}>{selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "等待官网稿审核" : websiteHandoffReady ? "等待人工上线" : "建立官网交付" : allDraftsSaved ? "草稿已写入" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
