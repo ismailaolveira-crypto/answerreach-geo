@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import type {
 	AgentRuntime,
@@ -325,6 +325,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [isSaving, startSaving] = useTransition();
 	const [isScopePending, startScopeTransition] = useTransition();
 	const [isWebsiteAuditing, startWebsiteAuditTransition] = useTransition();
+	const reviewDialogRef = useRef<HTMLElement | null>(null);
+	const syncDialogRef = useRef<HTMLElement | null>(null);
 
 	const selectedBatch = opportunityScope.batches.find((batch) => batch.id === selectedBatchId);
 	const models = opportunityScope.models.filter((model) => selectedBatch?.model_keys.includes(model.key));
@@ -482,6 +484,41 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			document.removeEventListener("keydown", closeModal);
 		};
 	}, [isSaving, reviewOpen, syncOpen, syncPhase]);
+	useEffect(() => {
+		if (!reviewOpen && !syncOpen) return;
+		const dialog = reviewOpen ? reviewDialogRef.current : syncDialogRef.current;
+		const returnTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+		const focusFrame = window.requestAnimationFrame(() => {
+			const closeButton = dialog?.querySelector<HTMLElement>('button[aria-label^="关闭"]');
+			(closeButton ?? dialog)?.focus();
+		});
+		function keepFocusInside(event: KeyboardEvent) {
+			if (event.key !== "Tab" || !dialog) return;
+			const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+				'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+			)).filter((element) => element.getClientRects().length > 0);
+			if (!focusable.length) {
+				event.preventDefault();
+				dialog.focus();
+				return;
+			}
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+			if (event.shiftKey && document.activeElement === first) {
+				event.preventDefault();
+				last.focus();
+			} else if (!event.shiftKey && document.activeElement === last) {
+				event.preventDefault();
+				first.focus();
+			}
+		}
+		document.addEventListener("keydown", keepFocusInside);
+		return () => {
+			window.cancelAnimationFrame(focusFrame);
+			document.removeEventListener("keydown", keepFocusInside);
+			if (returnTarget?.isConnected) returnTarget.focus();
+		};
+	}, [reviewOpen, syncOpen]);
 
 	useEffect(() => {
 		const actionId = selected?.existingAction?.id;
@@ -1026,7 +1063,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>
-			<section className="pa-review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-workbench-title">
+			<section ref={reviewDialogRef} className="pa-review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-workbench-title" tabIndex={-1}>
 				<header><div><small>人工审核 · 内容资产 #{currentReviewPackage.asset.id}</small><h2 id="review-workbench-title">核对事实，再决定哪些平台稿可以同步</h2><p>每条未知信息都可以确认属实或保留未核验；系统不会逼你为未知事实背书。</p></div><button type="button" onClick={() => setReviewOpen(false)} disabled={isSaving} aria-label="关闭审核工作台">×</button></header>
 				<nav className="pa-review-tabs" aria-label="内容版本">
 					<button type="button" className={reviewTab === "master" ? "is-active" : ""} onClick={() => setReviewTab("master")}><Icon name="draft" />母稿</button>
@@ -1064,7 +1101,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>
-			<section className="pa-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-assistant-title">
+			<section ref={syncDialogRef} className="pa-sync-dialog" role="dialog" aria-modal="true" aria-labelledby="sync-assistant-title" tabIndex={-1}>
 				<header><div><small>文章同步助手</small><h2 id="sync-assistant-title">选择平台并确认写入</h2></div><button type="button" onClick={() => setSyncOpen(false)} disabled={syncPhase === "syncing"} aria-label="关闭同步助手">×</button></header>
 				<div className="pa-sync-body">
 					<div className="pa-sync-summary"><b>{currentReviewPackage?.asset.title || syncAction?.title}</b><p>将按平台分别使用已审核的标题和正文；只保存草稿，不执行发布。</p></div>

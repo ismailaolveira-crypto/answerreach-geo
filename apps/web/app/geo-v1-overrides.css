@@ -266,3 +266,17 @@
 
 /* Keep the evidence-page atmosphere inside its content boundary. */
 .sy-detail-main::before { inset: 0 0 auto; }
+
+/* Modal focus remains visible and contained within the active workflow. */
+.pa-review-dialog:focus-visible,
+.pa-sync-dialog:focus-visible,
+.pa-review-dialog button:focus-visible,
+.pa-review-dialog a:focus-visible,
+.pa-review-dialog input:focus-visible,
+.pa-review-dialog textarea:focus-visible,
+.pa-sync-dialog button:focus-visible,
+.pa-sync-dialog a:focus-visible,
+.pa-sync-dialog input:focus-visible {
+  outline: 2px solid #2467df;
+  outline-offset: 2px;
+}
