@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
 	createCleanroomBrandFact,
+	discoverCleanroomBrandFactSourceCandidates,
 	getAgentRuntime,
 	getCleanroomBrandFacts,
 	getWorkspaceIntegrations,
@@ -12,6 +13,7 @@ import {
 	updateCleanroomBrandFact,
 	updateWorkspaceIntegrations,
 	type CleanroomBrandFact,
+	type CleanroomBrandFactSourceCandidates,
 	type WorkspaceIntegrationSettings,
 	type AgentRuntime,
 } from "@/lib/cleanroom-v1-api";
@@ -87,6 +89,13 @@ export async function verifyBrandFactSource(
 	revalidatePath(`/geo/${workspaceId}/settings`);
 	revalidatePath(`/geo/${workspaceId}/actions`);
 	return fact;
+}
+
+export async function findBrandFactSourceCandidates(
+	workspaceId: number,
+	factId: number,
+): Promise<CleanroomBrandFactSourceCandidates> {
+	return discoverCleanroomBrandFactSourceCandidates(workspaceId, factId);
 }
 
 export async function saveEditedBrandFact(

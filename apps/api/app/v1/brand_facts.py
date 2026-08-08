@@ -13,6 +13,7 @@ from app.models.cleanroom_v1 import GeoBrandFact
 
 BRAND_FACT_VERIFICATION_ACTION = "workspace.brand_fact.source_verified"
 BRAND_FACT_VERIFICATION_FAILED_ACTION = "workspace.brand_fact.source_verification_failed"
+BRAND_FACT_CANDIDATES_DISCOVERED_ACTION = "workspace.brand_fact.source_candidates_discovered"
 
 
 def statement_fingerprint(statement: str) -> str:

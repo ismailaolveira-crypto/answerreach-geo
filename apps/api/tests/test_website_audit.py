@@ -37,6 +37,7 @@ from app.v1.website_audit import (
     PublicationVerificationError,
     WebsiteAuditTargetError,
     audit_website,
+    discover_brand_fact_source_candidates,
     verify_brand_fact_source,
     verify_publication_page,
 )
@@ -190,6 +191,119 @@ def test_brand_fact_source_verification_rejects_private_targets() -> None:
             "不应读取的内部文本。",
             resolver=lambda _host, _port: ["127.0.0.1"],
         )
+
+
+def test_brand_fact_candidates_prefer_visible_public_copy() -> None:
+    visible_statement = "春秋元泉面向企业提供 Token 统一管理、调用审计与成本治理能力。"
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=f"<html><head><title>春秋元泉</title></head><body><main><p>{visible_statement}</p><p>联系我们</p></main></body></html>",
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        result = discover_brand_fact_source_candidates(
+            "https://brand.example/",
+            brand_name="春秋元泉",
+            resolver=public_resolver,
+            client=client,
+        )
+
+    assert result["candidate_count"] == 1
+    assert result["candidates"][0]["statement"] == visible_statement
+    assert result["candidates"][0]["verification_mode"] == "server_rendered_html"
+    assert "body" not in result
+
+
+def test_brand_fact_candidates_follow_nearest_same_origin_copy_chunk() -> None:
+    candidate_statement = "所有 AI 调用都通过春秋元泉实现统一接入、统一管理、统一统计和统一监控。"
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text='<html><body><div id="app"></div><script src="/assets/index.js"></script><script src="https://cdn.example/tracker.js"></script></body></html>',
+            )
+        if request.url.path == "/assets/index.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text='const routes=["./HomeView.js","./Noise.js"];',
+            )
+        if request.url.path == "/assets/HomeView.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text='import data from "./BrandCopy.js";',
+            )
+        if request.url.path == "/assets/BrandCopy.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text=f'const page={{desc:"{candidate_statement}",title:"功能暂未开放"}};',
+            )
+        if request.url.path == "/assets/Noise.js":
+            return httpx.Response(
+                200,
+                headers={"content-type": "application/javascript"},
+                text='const x={desc:"webpack function sourceMappingURL"};',
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        result = discover_brand_fact_source_candidates(
+            "https://brand.example/",
+            brand_name="春秋元泉",
+            resolver=public_resolver,
+            client=client,
+        )
+
+    assert result["candidate_count"] == 1
+    candidate = result["candidates"][0]
+    assert candidate["statement"] == candidate_statement
+    assert candidate["verification_mode"] == "same_origin_public_javascript"
+    assert candidate["evidence_url"] == "https://brand.example/assets/BrandCopy.js"
+    assert candidate["source_url"] == "https://brand.example/"
+
+
+def test_brand_fact_candidate_with_unicode_escapes_can_be_selected_and_verified() -> None:
+    statement = "春秋元泉统一管理模型调用、Token 成本与权限审计。"
+    escaped = "".join(
+        f"\\u{ord(character):04x}" if ord(character) > 127 else character
+        for character in statement
+    )
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/":
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/html"},
+                text='<html><body><script src="/assets/copy.js"></script></body></html>',
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/javascript"},
+            text=f'const page={{desc:"{escaped}"}};',
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        candidates = discover_brand_fact_source_candidates(
+            "https://brand.example/",
+            brand_name="春秋元泉",
+            resolver=public_resolver,
+            client=client,
+        )
+        proof = verify_brand_fact_source(
+            "https://brand.example/",
+            statement,
+            resolver=public_resolver,
+            client=client,
+        )
+
+    assert candidates["candidates"][0]["statement"] == statement
+    assert proof["verification_mode"] == "same_origin_public_javascript"
 
 
 def _transport(request: httpx.Request) -> httpx.Response:
@@ -517,6 +631,73 @@ def test_failed_brand_fact_reverification_is_audited_and_invalidates_old_proof(
         assert failure_log.detail_json["verification"]["status"] == "failed"
         assert failure_log.detail_json["verification"]["http_status"] == 422
         assert failure_log.detail_json["statement_sha256"] == sha256(
+            "春秋元泉面向企业提供 Token 统一管控能力。".encode("utf-8")
+        ).hexdigest()
+
+
+def test_brand_fact_candidate_discovery_is_scoped_and_audited(
+    website_audit_api: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client: TestClient = website_audit_api.client
+    created = client.post(
+        "/api/v1/workspaces/1/brand-facts",
+        json={
+            "title": "产品定位",
+            "statement": "春秋元泉面向企业提供 Token 统一管控能力。",
+            "source_url": "https://brand.example/product",
+        },
+    )
+    assert created.status_code == 201
+    fact_id = created.json()["id"]
+    candidate_statement = "春秋元泉帮助企业统一管理模型调用、Token 成本与权限审计。"
+    checked_at = datetime.now(timezone.utc).isoformat()
+    monkeypatch.setattr(
+        routes,
+        "discover_brand_fact_source_candidates",
+        lambda _url, *, brand_name: {
+            "source_url": "https://brand.example/product",
+            "checked_at": checked_at,
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "statement": candidate_statement,
+                    "source_url": "https://brand.example/product",
+                    "evidence_url": "https://brand.example/assets/copy.js",
+                    "verification_mode": "same_origin_public_javascript",
+                    "source_field": "desc",
+                    "source_sha256": "b" * 64,
+                    "source_page_sha256": "c" * 64,
+                    "score": 73,
+                }
+            ],
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/workspaces/1/brand-facts/{fact_id}/source-candidates"
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["fact_id"] == fact_id
+    assert payload["candidate_count"] == 1
+    assert payload["candidates"][0]["statement"] == candidate_statement
+    assert client.post(
+        "/api/v1/workspaces/1/brand-facts/999/source-candidates"
+    ).status_code == 404
+
+    with website_audit_api.session_factory() as db:
+        log = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "workspace.brand_fact.source_candidates_discovered",
+                AuditLog.resource_id == fact_id,
+            )
+        )
+        assert log is not None
+        assert log.resource_type == "geo_brand_fact"
+        assert log.detail_json["candidate_count"] == 1
+        assert log.detail_json["candidates"][0]["statement"] == candidate_statement
+        assert log.detail_json["statement_sha256"] == sha256(
             "春秋元泉面向企业提供 Token 统一管控能力。".encode("utf-8")
         ).hexdigest()
 

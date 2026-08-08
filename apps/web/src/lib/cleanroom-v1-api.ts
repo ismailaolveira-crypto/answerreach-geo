@@ -944,6 +944,25 @@ export type CleanroomBrandFact = {
 	} | null;
 };
 
+export type CleanroomBrandFactSourceCandidate = {
+	statement: string;
+	source_url: string;
+	evidence_url: string;
+	verification_mode: "server_rendered_html" | "same_origin_public_javascript";
+	source_field: string;
+	source_sha256: string;
+	source_page_sha256: string;
+	score: number;
+};
+
+export type CleanroomBrandFactSourceCandidates = {
+	fact_id: number;
+	source_url: string;
+	checked_at: string;
+	candidate_count: number;
+	candidates: CleanroomBrandFactSourceCandidate[];
+};
+
 export type CleanroomContentAudit = {
 	id: number;
 	workspace_id: number;
@@ -1658,6 +1677,16 @@ export function queueCleanroomContentGeneration(
 export function getCleanroomBrandFacts(workspaceId: string | number) {
 	return apiRequest<CleanroomBrandFact[]>(
 		`/workspaces/${workspaceId}/brand-facts`,
+	);
+}
+
+export function discoverCleanroomBrandFactSourceCandidates(
+	workspaceId: string | number,
+	factId: number,
+) {
+	return apiRequest<CleanroomBrandFactSourceCandidates>(
+		`/workspaces/${workspaceId}/brand-facts/${factId}/source-candidates`,
+		{ method: "POST" },
 	);
 }
 

@@ -1524,3 +1524,22 @@ class BrandFactRead(BrandFactCreate):
     source_verification: dict | None = None
     source_verification_failure: dict | None = None
     model_config = ConfigDict(from_attributes=True)
+
+
+class BrandFactSourceCandidate(BaseModel):
+    statement: str
+    source_url: str
+    evidence_url: str
+    verification_mode: Literal["server_rendered_html", "same_origin_public_javascript"]
+    source_field: str
+    source_sha256: str
+    source_page_sha256: str
+    score: int = Field(ge=0)
+
+
+class BrandFactSourceCandidatesRead(BaseModel):
+    fact_id: int
+    source_url: str
+    checked_at: datetime
+    candidate_count: int = Field(ge=0)
+    candidates: list[BrandFactSourceCandidate] = Field(default_factory=list)

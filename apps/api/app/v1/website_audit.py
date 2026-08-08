@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from hashlib import sha256
+import html
 from html.parser import HTMLParser
 import ipaddress
 import json
@@ -25,6 +26,20 @@ BRAND_FACT_VERIFY_MAX_BYTES = 512 * 1024
 BRAND_FACT_SCRIPT_MAX_BYTES = 2 * 1024 * 1024
 BRAND_FACT_SCRIPT_TOTAL_BYTES = 5 * 1024 * 1024
 BRAND_FACT_SCRIPT_MAX_FILES = 8
+BRAND_FACT_CANDIDATE_LIMIT = 10
+BRAND_FACT_CANDIDATE_MIN_HAN = 8
+BRAND_FACT_CANDIDATE_MAX_CHARS = 220
+_NON_FACTUAL_CANDIDATE_PHRASES = (
+    "登录",
+    "注册",
+    "下载",
+    "忘记密码",
+    "欢迎回来",
+    "联系我们",
+    "申请产品体验",
+    "开始使用",
+    "功能暂未开放",
+)
 
 
 class WebsiteAuditTargetError(ValueError):
@@ -376,72 +391,18 @@ def verify_brand_fact_source(
     verification_mode = "server_rendered_html"
 
     if normalized_statement not in visible_text:
-        source_origin = urlsplit(str(document["url"]))
-        source_port = source_origin.port or (443 if source_origin.scheme == "https" else 80)
-        queued = [urljoin(str(document["url"]), item) for item in parser.page.script_sources]
-        seen: set[str] = set()
-        total_bytes = 0
         evidence = None
-
-        while queued and len(seen) < BRAND_FACT_SCRIPT_MAX_FILES:
-            candidate = queued.pop(0)
-            candidate_url = urlsplit(candidate)
-            candidate_port = candidate_url.port or (
-                443 if candidate_url.scheme == "https" else 80
-            )
-            if (
-                candidate_url.scheme != source_origin.scheme
-                or candidate_url.hostname != source_origin.hostname
-                or candidate_port != source_port
-                or candidate in seen
-            ):
-                continue
-            seen.add(candidate)
-            remaining = BRAND_FACT_SCRIPT_TOTAL_BYTES - total_bytes
-            if remaining <= 0:
-                break
-            try:
-                script = _fetch(
-                    active_client,
-                    candidate,
-                    resolver=resolver,
-                    max_bytes=min(BRAND_FACT_SCRIPT_MAX_BYTES, remaining),
-                )
-            except (httpx.HTTPError, WebsiteAuditTargetError, OSError):
-                continue
-            total_bytes += int(script.get("size_bytes") or 0)
-            script_origin = urlsplit(str(script.get("url") or ""))
-            script_port = script_origin.port or (
-                443 if script_origin.scheme == "https" else 80
-            )
-            script_status = int(script.get("status_code") or 0)
-            script_type = (
-                str(script.get("content_type") or "").split(";", 1)[0].strip().lower()
-            )
-            if (
-                script_origin.scheme != source_origin.scheme
-                or script_origin.hostname != source_origin.hostname
-                or script_port != source_port
-                or script_status < 200
-                or script_status >= 300
-                or script_type
-                not in {
-                "application/javascript",
-                "application/ecmascript",
-                "text/javascript",
-                "text/ecmascript",
-                }
-            ):
-                continue
+        for script in _same_origin_script_documents(
+            document,
+            parser,
+            client=active_client,
+            resolver=resolver,
+        ):
             script_body = str(script.get("body") or "")
-            if normalized_statement in re.sub(r"\s+", "", script_body):
+            if _script_contains_statement(script_body, normalized_statement):
                 evidence = script
                 verification_mode = "same_origin_public_javascript"
                 break
-            for path in re.findall(r'["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', script_body):
-                nested = urljoin(str(script["url"]), path)
-                if nested not in seen and nested not in queued:
-                    queued.append(nested)
 
         if evidence is None:
             raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
@@ -464,6 +425,309 @@ def verify_brand_fact_source(
         "redirect_count": len(document.get("redirects") or [])
         + (0 if evidence is document else len(evidence.get("redirects") or [])),
         "verified_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+_JS_STRING_PROPERTY = re.compile(
+    r"(?P<key>title|desc|subtitle|badge|pain|solution)\s*:\s*"
+    r"(?P<quote>[\"'])(?P<value>(?:\\.|(?!\2).)*)\2",
+    re.DOTALL,
+)
+_JS_PATH = re.compile(r'["\']([^"\']+\.js(?:\?[^"\']*)?)["\']')
+_PRODUCT_TERMS = (
+    "Token",
+    "AI",
+    "模型",
+    "调用",
+    "权限",
+    "审计",
+    "私有化",
+    "成本",
+    "调度",
+    "安全",
+    "治理",
+    "数据",
+    "密钥",
+    "监控",
+    "Gateway",
+)
+
+
+def _decode_js_string(value: str) -> str:
+    def replace_escape(match: re.Match[str]) -> str:
+        token = match.group(1)
+        if token.startswith("u") and len(token) == 5:
+            try:
+                return chr(int(token[1:], 16))
+            except ValueError:
+                return match.group(0)
+        if token.startswith("x") and len(token) == 3:
+            try:
+                return chr(int(token[1:], 16))
+            except ValueError:
+                return match.group(0)
+        return {
+            "n": "\n",
+            "r": "\r",
+            "t": "\t",
+            "b": "\b",
+            "f": "\f",
+            "v": "\v",
+            "0": "\0",
+            "/": "/",
+            "\\": "\\",
+            '"': '"',
+            "'": "'",
+        }.get(token, token)
+
+    decoded = re.sub(r"\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)", replace_escape, value)
+    return re.sub(r"\s+", " ", html.unescape(decoded)).strip()
+
+
+def _script_contains_statement(script_body: str, normalized_statement: str) -> bool:
+    if normalized_statement in re.sub(r"\s+", "", script_body):
+        return True
+    return any(
+        normalized_statement in re.sub(r"\s+", "", _decode_js_string(match.group("value")))
+        for match in _JS_STRING_PROPERTY.finditer(script_body)
+    )
+
+
+def _same_origin_script_documents(
+    document: dict[str, Any],
+    parser: _PageParser,
+    *,
+    client: httpx.Client,
+    resolver: Resolver,
+) -> list[dict[str, Any]]:
+    source_origin = urlsplit(str(document["url"]))
+    source_port = source_origin.port or (443 if source_origin.scheme == "https" else 80)
+    queued = [urljoin(str(document["url"]), item) for item in parser.page.script_sources]
+    seen: set[str] = set()
+    total_bytes = 0
+    scripts: list[dict[str, Any]] = []
+
+    while queued and len(seen) < BRAND_FACT_SCRIPT_MAX_FILES:
+        candidate = queued.pop(0)
+        candidate_url = urlsplit(candidate)
+        candidate_port = candidate_url.port or (
+            443 if candidate_url.scheme == "https" else 80
+        )
+        if (
+            candidate_url.scheme != source_origin.scheme
+            or candidate_url.hostname != source_origin.hostname
+            or candidate_port != source_port
+            or candidate in seen
+        ):
+            continue
+        seen.add(candidate)
+        remaining = BRAND_FACT_SCRIPT_TOTAL_BYTES - total_bytes
+        if remaining <= 0:
+            break
+        try:
+            script = _fetch(
+                client,
+                candidate,
+                resolver=resolver,
+                max_bytes=min(BRAND_FACT_SCRIPT_MAX_BYTES, remaining),
+            )
+        except (httpx.HTTPError, WebsiteAuditTargetError, OSError):
+            continue
+        total_bytes += int(script.get("size_bytes") or 0)
+        script_origin = urlsplit(str(script.get("url") or ""))
+        script_port = script_origin.port or (
+            443 if script_origin.scheme == "https" else 80
+        )
+        script_status = int(script.get("status_code") or 0)
+        script_type = str(script.get("content_type") or "").split(";", 1)[0].strip().lower()
+        if (
+            script_origin.scheme != source_origin.scheme
+            or script_origin.hostname != source_origin.hostname
+            or script_port != source_port
+            or script_status < 200
+            or script_status >= 300
+            or script_type
+            not in {
+                "application/javascript",
+                "application/ecmascript",
+                "text/javascript",
+                "text/ecmascript",
+            }
+        ):
+            continue
+        scripts.append(script)
+        nested_urls = [urljoin(str(script["url"]), path) for path in _JS_PATH.findall(str(script.get("body") or ""))]
+        # Follow the dependency closest to the current page first. This keeps an SPA's
+        # public copy chunk inside the same fixed file/byte budget.
+        for nested in reversed(nested_urls):
+            if nested not in seen and nested not in queued:
+                queued.insert(0, nested)
+
+    return scripts
+
+
+def _candidate_score(text: str, *, brand_name: str, source_field: str, server_visible: bool) -> int:
+    score = 30 if server_visible else 10
+    if brand_name and brand_name.lower() in text.lower():
+        score += 35
+    term_hits = sum(1 for term in _PRODUCT_TERMS if term.lower() in text.lower())
+    score += min(term_hits, 6) * 5
+    score += {"desc": 8, "solution": 7, "subtitle": 6, "title": 5, "pain": 4}.get(source_field, 0)
+    if 24 <= len(text) <= 150:
+        score += 5
+    if re.search(r"[。！？；，]", text):
+        score += 3
+    return score
+
+
+def _brand_fact_candidate(
+    text: str,
+    *,
+    brand_name: str,
+    source_url: str,
+    evidence: dict[str, Any],
+    source_page_sha256: str,
+    verification_mode: str,
+    source_field: str,
+) -> dict[str, Any] | None:
+    value = re.sub(r"\s+", " ", html.unescape(text)).strip(" \t\r\n-–—·")
+    if not value or len(value) > BRAND_FACT_CANDIDATE_MAX_CHARS:
+        return None
+    if (
+        verification_mode == "same_origin_public_javascript"
+        and source_field == "title"
+        and len(value) < 18
+    ):
+        return None
+    if any(phrase in value for phrase in _NON_FACTUAL_CANDIDATE_PHRASES):
+        return None
+    if re.search(r"<[^>]+>|https?://|sourceMappingURL|webpack|function\s*\(", value, re.I):
+        return None
+    if len(re.findall(r"[\u4e00-\u9fff]", value)) < BRAND_FACT_CANDIDATE_MIN_HAN:
+        return None
+    term_hits = sum(1 for term in _PRODUCT_TERMS if term.lower() in value.lower())
+    mentions_brand = bool(brand_name and brand_name.lower() in value.lower())
+    if (mentions_brand and term_hits < 1) or (not mentions_brand and term_hits < 2):
+        return None
+    return {
+        "statement": value,
+        "source_url": source_url,
+        "evidence_url": str(evidence["url"]),
+        "verification_mode": verification_mode,
+        "source_field": source_field,
+        "source_sha256": str(evidence["sha256"]),
+        "source_page_sha256": source_page_sha256,
+        "score": _candidate_score(
+            value,
+            brand_name=brand_name,
+            source_field=source_field,
+            server_visible=verification_mode == "server_rendered_html",
+        ),
+    }
+
+
+def discover_brand_fact_source_candidates(
+    url: str,
+    *,
+    brand_name: str,
+    resolver: Resolver = _default_resolver,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Return bounded public-copy suggestions for human selection, never auto-save them."""
+
+    if client is None:
+        with httpx.Client(
+            headers={
+                "User-Agent": USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml,application/javascript",
+            },
+            timeout=httpx.Timeout(12.0, connect=8.0),
+            follow_redirects=False,
+            trust_env=False,
+        ) as owned_client:
+            return discover_brand_fact_source_candidates(
+                url,
+                brand_name=brand_name,
+                resolver=resolver,
+                client=owned_client,
+            )
+    try:
+        document = _fetch(
+            client,
+            url,
+            resolver=resolver,
+            max_bytes=BRAND_FACT_VERIFY_MAX_BYTES,
+        )
+    except WebsiteAuditTargetError:
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise BrandFactSourceVerificationError("brand_fact_source_request_failed") from exc
+    status_code = int(document.get("status_code") or 0)
+    if status_code < 200 or status_code >= 300:
+        raise BrandFactSourceVerificationError(f"brand_fact_source_http_{status_code or 'unknown'}")
+    content_type = str(document.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        raise BrandFactSourceVerificationError("brand_fact_source_not_html")
+
+    parser = _PageParser()
+    parser.feed(str(document.get("body") or ""))
+    candidate_rows: list[dict[str, Any]] = []
+    visible_values = [
+        (parser.page.title, "title"),
+        (parser.page.meta_description, "description"),
+        *[(value, "heading") for value in parser.page.headings["h1"]],
+        *[(value, "heading") for value in parser.page.headings["h2"]],
+        *[(value, "visible_text") for value in parser.page.body_text_parts],
+    ]
+    for value, source_field in visible_values:
+        candidate = _brand_fact_candidate(
+            value,
+            brand_name=brand_name,
+            source_url=str(document["url"]),
+            evidence=document,
+            source_page_sha256=str(document["sha256"]),
+            verification_mode="server_rendered_html",
+            source_field=source_field,
+        )
+        if candidate:
+            candidate_rows.append(candidate)
+
+    scripts = _same_origin_script_documents(
+        document,
+        parser,
+        client=client,
+        resolver=resolver,
+    )
+    for script in scripts:
+        for match in _JS_STRING_PROPERTY.finditer(str(script.get("body") or "")):
+            value = _decode_js_string(match.group("value"))
+            candidate = _brand_fact_candidate(
+                value,
+                brand_name=brand_name,
+                source_url=str(document["url"]),
+                evidence=script,
+                source_page_sha256=str(document["sha256"]),
+                verification_mode="same_origin_public_javascript",
+                source_field=match.group("key"),
+            )
+            if candidate:
+                candidate_rows.append(candidate)
+
+    deduplicated: dict[str, dict[str, Any]] = {}
+    for candidate in candidate_rows:
+        identity = re.sub(r"\s+", "", str(candidate["statement"])).lower()
+        current = deduplicated.get(identity)
+        if current is None or int(candidate["score"]) > int(current["score"]):
+            deduplicated[identity] = candidate
+    candidates = sorted(
+        deduplicated.values(),
+        key=lambda item: (-int(item["score"]), str(item["statement"])),
+    )[:BRAND_FACT_CANDIDATE_LIMIT]
+    return {
+        "source_url": str(document["url"]),
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "candidate_count": len(candidates),
+        "candidates": candidates,
     }
 
 

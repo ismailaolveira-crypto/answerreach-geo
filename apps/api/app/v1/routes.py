@@ -73,6 +73,7 @@ from app.v1.schemas import (
     AgentRuntimeTestRead,
     BrandFactCreate,
     BrandFactRead,
+    BrandFactSourceCandidatesRead,
     BrandFactUpdate,
     ContentAuditCreate,
     BrowserAccountCreate,
@@ -163,6 +164,7 @@ from app.v1.action_opportunities import (
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
 from app.v1.brand_facts import (
+    BRAND_FACT_CANDIDATES_DISCOVERED_ACTION,
     BRAND_FACT_VERIFICATION_ACTION,
     BRAND_FACT_VERIFICATION_FAILED_ACTION,
     brand_fact_read,
@@ -175,6 +177,7 @@ from app.v1.website_audit import (
     PublicationVerificationError,
     WebsiteAuditTargetError,
     audit_website,
+    discover_brand_fact_source_candidates,
     verify_brand_fact_source,
     verify_publication_page,
 )
@@ -7243,6 +7246,61 @@ def list_brand_facts(
         )
     )
     return [brand_fact_read(db, fact) for fact in facts]
+
+
+@router.post(
+    "/workspaces/{workspace_id}/brand-facts/{fact_id}/source-candidates",
+    response_model=BrandFactSourceCandidatesRead,
+)
+def discover_brand_fact_candidates(
+    workspace_id: int,
+    fact_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace = workspace_or_404(db, user, workspace_id)
+    fact = scoped_or_404(db, GeoBrandFact, workspace_id, fact_id)
+    if not fact.source_url:
+        raise HTTPException(status_code=409, detail="请先为这条事实配置公开来源 URL。")
+    try:
+        result = discover_brand_fact_source_candidates(
+            fact.source_url,
+            brand_name=workspace.brand_name,
+        )
+    except WebsiteAuditTargetError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="公开来源必须是可从公网访问的 HTTP(S) 地址，不能指向本机或内网。",
+        ) from exc
+    except BrandFactSourceVerificationError as exc:
+        reason = str(exc)
+        if reason == "brand_fact_source_not_html":
+            detail = "当前只支持从可公开读取的 HTML 来源页查找原文。"
+            status_code = 422
+        else:
+            detail = "暂时无法读取该公开来源；本次没有生成或保存候选原文。"
+            status_code = 409
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    candidates = list(result.get("candidates") or [])
+    record_audit_log(
+        db,
+        user=user,
+        action=BRAND_FACT_CANDIDATES_DISCOVERED_ACTION,
+        resource_type="geo_brand_fact",
+        resource_id=fact.id,
+        company_id=workspace.company_id,
+        detail={
+            "workspace_id": workspace.id,
+            "source_url": result["source_url"],
+            "statement_sha256": statement_fingerprint(fact.statement),
+            "checked_at": result["checked_at"],
+            "candidate_count": len(candidates),
+            "candidates": candidates,
+        },
+    )
+    db.commit()
+    return {"fact_id": fact.id, **result}
 
 
 @router.post(
