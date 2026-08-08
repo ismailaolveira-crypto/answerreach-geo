@@ -4066,6 +4066,14 @@ def _normalized_fact_source(value: str | None) -> str:
     return str(value or "").strip().rstrip("/")
 
 
+REVIEW_RESOLVED_CLAIM_STATUSES = {
+    "source_linked",
+    "verified",
+    "human_confirmed",
+    "explicitly_unverified",
+}
+
+
 def _asset_sourced_brand_facts(
     db: Session,
     asset: GeoContentAsset,
@@ -4164,7 +4172,7 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
         "variants": variants,
         "reviews": reviews,
         "pending_claim_count": sum(
-            claim.verification_status not in {"source_linked", "verified", "human_confirmed"}
+            claim.verification_status not in REVIEW_RESOLVED_CLAIM_STATUSES
             for claim in claims
         ),
         "approved_platform_keys": list(dict.fromkeys(approved_platform_keys)),
@@ -4366,15 +4374,28 @@ def decide_content_review(
     unresolved = [
         claim
         for claim in claims
-        if claim.verification_status not in {"source_linked", "verified", "human_confirmed"}
+        if claim.verification_status not in REVIEW_RESOLVED_CLAIM_STATUSES
     ]
     confirmed_ids = set(payload.confirmed_claim_ids)
+    unverified_ids = set(payload.unverified_claim_ids)
     unresolved_ids = {claim.id for claim in unresolved}
-    if payload.verdict == "approved" and not unresolved_ids.issubset(confirmed_ids):
-        remaining = len(unresolved_ids - confirmed_ids)
+    if payload.verdict == "approved" and confirmed_ids & unverified_ids:
         raise HTTPException(
             status_code=422,
-            detail=f"{remaining} unsupported claims still require explicit human confirmation",
+            detail="A claim cannot be both confirmed and kept unverified",
+        )
+    reviewed_ids = confirmed_ids | unverified_ids
+    invalid_ids = reviewed_ids - unresolved_ids
+    if payload.verdict == "approved" and invalid_ids:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Claim decisions must target unresolved claims: {', '.join(map(str, sorted(invalid_ids)))}",
+        )
+    if payload.verdict == "approved" and not unresolved_ids.issubset(reviewed_ids):
+        remaining = len(unresolved_ids - reviewed_ids)
+        raise HTTPException(
+            status_code=422,
+            detail=f"{remaining} unsupported claims still require an explicit review decision",
         )
 
     note = (payload.note or "").strip()
@@ -4386,6 +4407,9 @@ def decide_content_review(
             if claim.id in confirmed_ids:
                 claim.verification_status = "human_confirmed"
                 claim.review_note = note or "人工审核时明确确认"
+            elif claim.id in unverified_ids:
+                claim.verification_status = "explicitly_unverified"
+                claim.review_note = "人工审核明确保留为未核验；所选稿件不得将其作为已证实事实"
         asset.status = "approved"
     else:
         asset.status = "changes_requested"
@@ -4401,6 +4425,7 @@ def decide_content_review(
             checks={
                 "claim_count": len(claims),
                 "confirmed_claim_ids": sorted(confirmed_ids & unresolved_ids),
+                "unverified_claim_ids": sorted(unverified_ids & unresolved_ids),
                 "platform_keys": platform_keys,
             },
             issues=[issue] if issue else [],
@@ -4439,6 +4464,7 @@ def decide_content_review(
                 "verdict": payload.verdict,
                 "platform_keys": platform_keys,
                 "confirmed_claim_count": len(confirmed_ids & unresolved_ids),
+                "unverified_claim_count": len(unverified_ids & unresolved_ids),
             },
         )
     )

@@ -1513,6 +1513,7 @@ export function decideCleanroomContentReview(
 	payload: {
 		verdict: "approved" | "changes_requested";
 		confirmed_claim_ids?: number[];
+		unverified_claim_ids?: number[];
 		platform_keys?: string[];
 		note?: string | null;
 	},

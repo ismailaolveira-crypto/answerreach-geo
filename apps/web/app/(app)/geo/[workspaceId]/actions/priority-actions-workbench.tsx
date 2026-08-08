@@ -40,7 +40,7 @@ type Props = {
 	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	reviseAgent: (runId: number, contentAssetId: number) => Promise<CleanroomAgentRun>;
 	readAgentProgress: (actionId: number) => Promise<{ runs: CleanroomAgentRun[]; progress: CleanroomAgentRunProgress | null }>;
-	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
+	decideReview: (assetId: number, payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; note?: string | null }) => Promise<CleanroomContentReviewPackage>;
 	createDistribution: (assetId: number, platformKeys: string[]) => Promise<CleanroomDistributionRun>;
 	recordDistributionResults: (runId: number, targets: Array<{ platform_key: string; request_status: "draft_saved" | "failed" | "cancelled"; draft_url?: string | null; external_draft_id?: string | null; message?: string | null }>) => Promise<CleanroomDistributionRun>;
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
@@ -315,6 +315,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [reviewOpen, setReviewOpen] = useState(false);
 	const [reviewTab, setReviewTab] = useState("master");
 	const [confirmedClaimIds, setConfirmedClaimIds] = useState<number[]>([]);
+	const [unverifiedClaimIds, setUnverifiedClaimIds] = useState<number[]>([]);
 	const [reviewPlatformKeys, setReviewPlatformKeys] = useState<string[]>([]);
 	const [reviewNote, setReviewNote] = useState("");
 	const [reviewFeedback, setReviewFeedback] = useState("");
@@ -372,9 +373,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
 	const hasApprovedOfficialSiteDraft = approvedPlatformKeys.includes("official_site");
-	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status)) ?? [];
+	const resolvedClaimStatuses = ["source_linked", "verified", "human_confirmed", "explicitly_unverified"];
+	const pendingClaims = currentReviewPackage?.claims.filter((claim) => !resolvedClaimStatuses.includes(claim.verification_status)) ?? [];
 	const confirmedPendingClaimCount = pendingClaims.filter((claim) => confirmedClaimIds.includes(claim.id)).length;
-	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - confirmedPendingClaimCount);
+	const unverifiedPendingClaimCount = pendingClaims.filter((claim) => unverifiedClaimIds.includes(claim.id)).length;
+	const reviewedPendingClaimCount = confirmedPendingClaimCount + unverifiedPendingClaimCount;
+	const remainingPendingClaimCount = Math.max(0, pendingClaims.length - reviewedPendingClaimCount);
 	const currentDistribution = distributionRuns
 		.filter((run) => run.action_id === selected?.existingAction?.id)
 		.sort((a, b) => b.id - a.id)[0];
@@ -667,6 +671,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		if (!currentReviewPackage) return;
 		setReviewTab("master");
 		setConfirmedClaimIds([]);
+		setUnverifiedClaimIds([]);
 		setReviewPlatformKeys(currentReviewPackage.variants.map((variant) => variant.platform_key));
 		setReviewNote("");
 		setReviewFeedback("");
@@ -681,6 +686,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				const result = await decideReview(currentReviewPackage.asset.id, {
 					verdict,
 					confirmed_claim_ids: confirmedClaimIds,
+					unverified_claim_ids: unverifiedClaimIds,
 					platform_keys: reviewPlatformKeys,
 					note: reviewNote || null,
 				});
@@ -695,6 +701,15 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				setReviewFeedback(error instanceof Error ? error.message : "无法保存审核结果");
 			}
 		});
+	}
+
+	function setClaimReviewDecision(claimId: number, decision: "confirmed" | "unverified") {
+		setConfirmedClaimIds((current) => decision === "confirmed"
+			? [...new Set([...current, claimId])]
+			: current.filter((id) => id !== claimId));
+		setUnverifiedClaimIds((current) => decision === "unverified"
+			? [...new Set([...current, claimId])]
+			: current.filter((id) => id !== claimId));
 	}
 
 	function updateSyncAccount(next: SyncAccount) {
@@ -979,7 +994,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							</div> : null}
 							{agentFeedback ? <p className="pa-agent-error" role="status">{agentFeedback}</p> : null}
 						</ActionStage>
-						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张需人工确认。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
+						<ActionStage index={3} label="人工审核" state={approvedPlatformKeys.length ? "done" : currentReviewPackage && !(reviewNeedsRevision && runActive) ? "active" : "idle"}>{currentReviewPackage ? <div className={`pa-stage-card${reviewNeedsRevision ? " is-revision" : ""}`}><b>{approvedPlatformKeys.length ? `已通过 ${approvedPlatformKeys.length} 个平台稿` : reviewNeedsRevision ? (runActive ? "正在根据意见修订" : "已退回，等待生成新版本") : "草稿已入库，等待你确认"}</b><p>内容资产 #{currentReviewPackage.asset.id} · v{currentReviewPackage.asset.version} · {currentReviewPackage.variants.length} 个平台版本 · {currentReviewPackage.pending_claim_count} 条主张待人工判断。</p>{reviewNeedsRevision && !runActive ? <button type="button" onClick={requestRevision} disabled={isSaving}>{isSaving ? "正在排队…" : "根据意见生成新版本"}</button> : <button type="button" onClick={openReviewWorkbench}>{approvedPlatformKeys.length ? "查看审核记录" : reviewNeedsRevision ? "查看退回意见" : "审阅内容与事实"}</button>}</div> : <p className="pa-stage-note">只有 Agent 成功生成并持久化内容后，审核才会开放。</p>}</ActionStage>
 						<ActionStage index={4} label={selected.type === "website" ? "交付官网稿" : "写入平台草稿"} state={deliveryComplete ? "done" : approvedPlatformKeys.length ? "active" : "idle"}>{approvedPlatformKeys.length ? hasApprovedOfficialSiteDraft && !syncableApprovedPlatformKeys.length ? <div className="pa-stage-card"><b>{websiteHandoffReady ? "官网交付记录已建立" : "官网稿已通过审核，可以交付"}</b><p>{websiteHandoffReady ? "稿件等待网站负责人部署。只有回填同域公开 URL 后，系统才会记录为已上线并开放复测。" : "先在内容库查看或导出已审核稿，再建立交付记录。建立记录不等于官网已经上线。"}</p><Link href={`/geo/${workspaceId}/content`}>查看并导出官网稿</Link>{!websiteHandoffReady ? <button type="button" onClick={beginWebsiteHandoff} disabled={isSaving}>{isSaving ? "正在建立…" : "建立官网交付记录"}</button> : null}{publicationMessage && !publicationReady ? <p className="pa-inline-feedback" role="status">{publicationMessage}</p> : null}</div> : <div className="pa-stage-card"><b>{allDraftsSaved ? `${savedDraftCount} 个草稿已回读` : "已通过的平台稿可写入"}</b><p>{currentDistribution ? `同步任务 #${currentDistribution.id} · ${savedDraftCount}/${currentDistribution.targets.length} 个平台返回真实草稿。` : "打开同步助手后，你选择平台并确认写入；系统不会发布。"}</p><button type="button" onClick={openSyncAssistant} disabled={allDraftsSaved || !syncableApprovedPlatformKeys.length}>{allDraftsSaved ? "已写入平台草稿" : "打开文章同步助手"}</button></div> : <p className="pa-stage-note">{selected.type === "website" ? "只有官网稿通过人工审核后，才能建立交付记录；当前不会计为已上线。" : "只允许写入草稿，最终发布仍由人工确认。"}</p>}</ActionStage>
 						<ActionStage index={5} label={selected.type === "website" ? "人工上线" : "人工发布"} state={allTargetsPublished ? "done" : publicationReady ? "active" : "idle"}>
 							{publicationReady && currentDistribution ? <div className="pa-publication-list">{currentDistribution.targets.map((target) => {
@@ -998,13 +1013,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 
 			{actions.length > 0 ? <section className="pa-progress">
 				<header><div><h2>内容与发布进度</h2><p>只由已持久化的 Agent 运行与人工状态推进；未运行不显示为生成中。</p></div></header>
-				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工确认项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步或官网交付"}</p></div><div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div><div className={publicationReady && !allTargetsPublished ? "is-current" : ""}><b>{selected.type === "website" ? "人工上线" : "人工发布"}</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个目标已记录公开 URL` : selected.type === "website" ? "上线始终由网站负责人完成" : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "上线或发布完成后复用原问题与模型"}</p></div></div>
+				<div className="pa-progress-lanes"><div className={activeAgentRunCount ? "is-current" : ""}><b>Agent 生成</b><span>{generatedAssetCount}</span><p>{activeAgentRunCount ? `${activeAgentRunCount} 个任务正在调研与生成` : generatedAssetCount ? "已生成内容进入后续流程" : "还没有已持久化的生成结果"}</p></div><div className={currentRun?.stage === "researching_brand" ? "is-current" : ""}><b>事实校验</b><span>{currentReviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0}</span><p>可追溯主张与待人工判断项分开记录</p></div><div className={currentRun?.stage === "adapting_platforms" ? "is-current" : ""}><b>平台适配</b><span>{currentReviewPackage?.variants.length ?? 0}</span><p>每个平台保留独立标题、结构和语气</p></div><div className={currentReviewPackage && !approvedPlatformKeys.length ? "is-current" : ""}><b>人工审核</b><span>{pendingActions}</span><p>{approvedPlatformKeys.length ? `${approvedPlatformKeys.length} 个平台稿已通过` : "审核前不会触发同步或官网交付"}</p></div><div className={(selected.type === "website" ? hasApprovedOfficialSiteDraft && !websiteHandoffReady : syncableApprovedPlatformKeys.length > 0 && !allDraftsSaved) ? "is-current" : ""}><b>{selected.type === "website" ? "官网交付" : "写入草稿"}</b><span>{selected.type === "website" ? (websiteHandoffReady ? 1 : 0) : distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.draft_readback_status === "draft_saved").length, 0)}</span><p>{selected.type === "website" ? websiteHandoffReady ? "交付记录已建立，等待网站负责人上线" : "审核通过后由人工建立官网交付记录" : currentDistribution ? `${savedDraftCount}/${currentDistribution.targets.length} 个目标有真实草稿回读` : "等待外部平台稿审核通过后人工触发"}</p></div><div className={publicationReady && !allTargetsPublished ? "is-current" : ""}><b>{selected.type === "website" ? "人工上线" : "人工发布"}</b><span>{distributionRuns.reduce((count, run) => count + run.targets.filter((target) => target.human_publish_status === "published").length, 0)}</span><p>{currentDistribution ? `${publishedTargetCount}/${currentDistribution.targets.length} 个目标已记录公开 URL` : selected.type === "website" ? "上线始终由网站负责人完成" : "发布始终由人工在平台完成"}</p></div><div className={retestActive ? "is-current" : ""}><b>同口径复测</b><span>{retests.filter((item) => item.status === "completed").length}</span><p>{currentRetest?.batch ? `真实队列 ${currentRetest.batch.progress_percent}%` : "上线或发布完成后复用原问题与模型"}</p></div></div>
 				<footer className="pa-progress-footer"><span><Icon name="eye" />生成、审核、交付、上线/发布与复测都使用独立真实状态</span><div><Link href={`/geo/${workspaceId}/content`}>查看内容库</Link><button type="button" onClick={currentReviewPackage ? openReviewWorkbench : () => setPreviewMessage("请先完成 Agent 调研与生成。")}>预览内容</button><button className="pa-sync-button" type="button" onClick={selected.type === "website" ? beginWebsiteHandoff : openSyncAssistant} disabled={selected.type === "website" ? !hasApprovedOfficialSiteDraft || websiteHandoffReady || isSaving : !syncableApprovedPlatformKeys.length || allDraftsSaved} title={selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "请先通过官网稿人工审核" : websiteHandoffReady ? "官网交付记录已建立，等待人工上线" : "建立官网人工交付记录" : allDraftsSaved ? "已审核平台稿均已完成草稿回读" : syncableApprovedPlatformKeys.length ? "打开文章同步助手" : "请先通过至少一个外部平台稿"}>{selected.type === "website" ? !hasApprovedOfficialSiteDraft ? "等待官网稿审核" : websiteHandoffReady ? "等待人工上线" : "建立官网交付" : allDraftsSaved ? "草稿已写入" : "打开同步助手"} <Icon name="arrow" /></button></div></footer>
 				{previewMessage ? <p className="pa-front-notice" role="status">{previewMessage}</p> : null}
 			</section> : null}
 		{reviewOpen && currentReviewPackage ? <div className="pa-review-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !isSaving) setReviewOpen(false); }}>
 			<section className="pa-review-dialog" role="dialog" aria-modal="true" aria-labelledby="review-workbench-title">
-				<header><div><small>人工审核 · 内容资产 #{currentReviewPackage.asset.id}</small><h2 id="review-workbench-title">确认事实，再决定哪些平台稿可以同步</h2><p>Agent 结果不会自动获得批准。平台稿可以分别通过或保留待修改。</p></div><button type="button" onClick={() => setReviewOpen(false)} disabled={isSaving} aria-label="关闭审核工作台">×</button></header>
+				<header><div><small>人工审核 · 内容资产 #{currentReviewPackage.asset.id}</small><h2 id="review-workbench-title">核对事实，再决定哪些平台稿可以同步</h2><p>每条未知信息都可以确认属实或保留未核验；系统不会逼你为未知事实背书。</p></div><button type="button" onClick={() => setReviewOpen(false)} disabled={isSaving} aria-label="关闭审核工作台">×</button></header>
 				<nav className="pa-review-tabs" aria-label="内容版本">
 					<button type="button" className={reviewTab === "master" ? "is-active" : ""} onClick={() => setReviewTab("master")}><Icon name="draft" />母稿</button>
 					{currentReviewPackage.variants.map((variant) => {
@@ -1022,17 +1037,22 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 						})()}
 					</article>
 					<aside className="pa-review-checks">
-						<section><header><div><b>事实与来源</b><small>{currentReviewPackage.claims.length - pendingClaims.length} 条已有来源 · {pendingClaims.length} 条待确认</small></div></header><div className="pa-claim-list">{currentReviewPackage.claims.map((claim) => {
-							const confirmed = ["source_linked", "verified", "human_confirmed"].includes(claim.verification_status) || confirmedClaimIds.includes(claim.id);
-							const needsHuman = !["source_linked", "verified", "human_confirmed"].includes(claim.verification_status);
-							return <label key={claim.id} className={confirmed ? "is-confirmed" : "is-pending"}><input type="checkbox" checked={confirmed} disabled={!needsHuman || approvedPlatformKeys.length > 0} onChange={() => setConfirmedClaimIds((current) => current.includes(claim.id) ? current.filter((id) => id !== claim.id) : [...current, claim.id])} /><span><b>{needsHuman ? "需要你确认" : "已关联来源"}</b><small>{claim.claim_text}</small>{claim.source_url ? <a href={claim.source_url} target="_blank" rel="noreferrer">查看来源</a> : <em>无外部来源，勾选表示你明确确认这条陈述</em>}</span></label>;
+						<section><header><div><b>事实与来源</b><small>{currentReviewPackage.claims.length - pendingClaims.length} 条已有处理结论 · {pendingClaims.length} 条待判断</small></div></header><div className="pa-claim-list">{currentReviewPackage.claims.map((claim) => {
+							const needsHuman = !resolvedClaimStatuses.includes(claim.verification_status);
+							const confirmed = claim.verification_status === "human_confirmed" || confirmedClaimIds.includes(claim.id);
+							const keptUnverified = claim.verification_status === "explicitly_unverified" || unverifiedClaimIds.includes(claim.id);
+							const sourceLinked = ["source_linked", "verified"].includes(claim.verification_status);
+							return <div key={claim.id} className={`pa-claim-item ${sourceLinked || confirmed ? "is-confirmed" : keptUnverified ? "is-unverified" : "is-pending"}`}>
+								<span><b>{sourceLinked ? "已关联来源" : confirmed ? "人工确认属实" : keptUnverified ? "明确保留未核验" : "需要你判断"}</b><small>{claim.claim_text}</small>{claim.source_url ? <a href={claim.source_url} target="_blank" rel="noreferrer">查看来源</a> : needsHuman ? <em>没有外部来源，请根据所选稿件中的实际表述作出判断。</em> : null}</span>
+								{needsHuman && !approvedPlatformKeys.length ? <div className="pa-claim-choice" role="group" aria-label={`审核主张：${claim.claim_text}`}><button type="button" aria-pressed={confirmed} className={confirmed ? "is-selected" : ""} onClick={() => setClaimReviewDecision(claim.id, "confirmed")}>确认属实</button><button type="button" aria-pressed={keptUnverified} className={keptUnverified ? "is-selected is-safe" : ""} onClick={() => setClaimReviewDecision(claim.id, "unverified")}>保持未核验</button></div> : null}
+							</div>;
 						})}</div></section>
 						<section><header><div><b>通过的平台稿</b><small>只有选中的版本会开放同步</small></div></header><div className="pa-review-platforms">{currentReviewPackage.variants.map((variant) => { const platform = platformOptions.find((item) => item.key === variant.platform_key); return <label key={variant.id}><input type="checkbox" checked={reviewPlatformKeys.includes(variant.platform_key) || approvedPlatformKeys.includes(variant.platform_key)} disabled={approvedPlatformKeys.includes(variant.platform_key)} onChange={() => setReviewPlatformKeys((current) => current.includes(variant.platform_key) ? current.filter((key) => key !== variant.platform_key) : [...current, variant.platform_key])} />{platform ? <img src={platform.logo} alt="" /> : null}<span><b>{platform?.label || variant.platform_key}</b><small>{variant.title}</small></span></label>; })}</div></section>
 						<label className="pa-review-note"><span>审核意见</span><textarea value={reviewNote} onChange={(event) => setReviewNote(event.target.value)} placeholder="退回修改时必填；通过时可记录核对说明。" rows={3} /></label>
 						{reviewFeedback ? <p className="pa-review-feedback" role="status">{reviewFeedback}</p> : null}
 					</aside>
 				</div>
-				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已确认 ${confirmedPendingClaimCount}/${pendingClaims.length} 条待确认事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。通过后仍不会写入草稿或发布。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需确认 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
+				<footer><span>{reviewNeedsRevision ? "旧版本和退回意见都会保留，新版本需重新审核。" : approvedPlatformKeys.length ? `审核已记录：${approvedPlatformKeys.length} 个平台稿已通过。` : !websiteDraftReadyForApproval ? "当前版本没有使用可追溯品牌事实，只能退回修改，不能批准上线。" : `已处理 ${reviewedPendingClaimCount}/${pendingClaims.length} 条待判断事实 · 已选择 ${reviewPlatformKeys.length} 个平台稿。选择“保持未核验”前，请确认稿件没有把它写成已证实事实。`}</span><div>{reviewNeedsRevision ? <button className="is-primary" type="button" onClick={requestRevision} disabled={isSaving || runActive}>{isSaving ? "正在排队…" : runActive ? "新版本生成中" : "根据意见生成新版本"}</button> : <><button type="button" onClick={() => submitReview("changes_requested")} disabled={isSaving || !reviewNote.trim()}>退回修改</button><button className="is-primary" type="button" onClick={() => submitReview("approved")} disabled={isSaving || !reviewPlatformKeys.length || remainingPendingClaimCount > 0 || approvedPlatformKeys.length > 0 || !websiteDraftReadyForApproval}>{isSaving ? "正在保存…" : approvedPlatformKeys.length ? "审核已记录" : !websiteDraftReadyForApproval ? "先补齐品牌事实并生成新版本" : remainingPendingClaimCount > 0 ? `还需处理 ${remainingPendingClaimCount} 条事实` : `通过 ${reviewPlatformKeys.length} 个平台稿`}</button></>}</div></footer>
 			</section>
 		</div> : null}
 		{syncOpen ? <div className="pa-sync-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && syncPhase !== "syncing") setSyncOpen(false); }}>

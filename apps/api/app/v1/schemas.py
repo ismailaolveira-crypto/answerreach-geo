@@ -1284,6 +1284,7 @@ class ContentReviewPackageRead(BaseModel):
 class ContentReviewDecision(BaseModel):
     verdict: Literal["approved", "changes_requested"]
     confirmed_claim_ids: list[int] = Field(default_factory=list, max_length=200)
+    unverified_claim_ids: list[int] = Field(default_factory=list, max_length=200)
     platform_keys: list[Literal["official_site", "zhihu", "wechat", "xiaohongshu"]] = Field(
         default_factory=list, max_length=4
     )

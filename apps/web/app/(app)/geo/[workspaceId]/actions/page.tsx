@@ -144,7 +144,7 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 
 	async function decideReview(
 		assetId: number,
-		payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; platform_keys: string[]; note?: string | null },
+		payload: { verdict: "approved" | "changes_requested"; confirmed_claim_ids: number[]; unverified_claim_ids: number[]; platform_keys: string[]; note?: string | null },
 	) {
 		"use server";
 		const result = await decideCleanroomContentReview(workspaceId, assetId, payload);

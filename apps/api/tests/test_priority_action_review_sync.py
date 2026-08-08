@@ -304,6 +304,61 @@ def test_review_gate_and_browser_client_draft_readback(review_client: TestClient
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
 
 
+def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
+    review_client: TestClient,
+) -> None:
+    conflicting = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "unverified_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+        },
+    )
+    assert conflicting.status_code == 422
+
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [],
+            "unverified_claim_ids": [2],
+            "platform_keys": ["zhihu", "wechat"],
+            "note": "稿件明确将该能力保留为待核验，不作为产品事实使用",
+        },
+    )
+    assert approved.status_code == 201
+    payload = approved.json()
+    assert payload["approved_platform_keys"] == ["wechat", "zhihu"]
+    assert payload["pending_claim_count"] == 0
+    pending_claim = next(claim for claim in payload["claims"] if claim["id"] == 2)
+    assert pending_claim["verification_status"] == "explicitly_unverified"
+    assert "不得将其作为已证实事实" in pending_claim["review_note"]
+    asset_review = next(
+        review
+        for review in payload["reviews"]
+        if review["subject_type"] == "content_asset"
+    )
+    assert asset_review["checks"]["confirmed_claim_ids"] == []
+    assert asset_review["checks"]["unverified_claim_ids"] == [2]
+
+    distribution = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu", "wechat"],
+            "idempotency_key": "asset-1-explicitly-unverified",
+        },
+    )
+    assert distribution.status_code == 201
+    assert distribution.json()["stage"] == "ready_for_client"
+    assert {target["platform_key"] for target in distribution.json()["targets"]} == {
+        "zhihu",
+        "wechat",
+    }
+
+
 def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
     review_client: TestClient,
 ) -> None:
