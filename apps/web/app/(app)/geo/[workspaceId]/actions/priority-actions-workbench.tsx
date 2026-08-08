@@ -1186,19 +1186,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	return <main className="pa-page">
 		<section className="pa-topline">
 			<header className="pa-hero">
-				<div><h1>优先行动</h1><span>从真实信源找到缺口 → Codex 生成平台稿 → 你修改并审核 → 写入草稿 → 人工发布。</span>
+				<div><h1>优先行动</h1><span>Codex 生成平台稿 → 你修改并审核 → 写入草稿 → 人工发布。</span>
 					<div className="pa-runtime-wrap">
 						<button type="button" className={`pa-runtime-status${!agentRuntime?.ready ? " is-warning" : agentCapacityAvailable ? " is-ready" : " is-busy"}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
 							<i />{!agentRuntime?.ready ? "Codex 需要处理" : agentCapacityAvailable ? agentRuntime.connection_status === "warm" ? "Codex 常驻已连接" : "Codex 已就绪" : `Codex 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}`}<Icon name="chevron" />
 						</button>
 						{runtimeExpanded ? <div className="pa-runtime-popover" role="status"><b>{!agentRuntime?.ready ? "本机 Agent 当前不可启动" : agentCapacityAvailable ? agentRuntime.connection_status === "warm" ? "常驻进程正在复用" : "首次任务时建立常驻连接" : "本机 Agent 正在处理其他任务"}</b><span>{agentRuntime?.default_model || "未检测到默认模型"}</span><small>{agentRuntime?.ready ? `当前进程已复用 ${agentRuntime.reuse_count ?? 0} 次 · 运行容量 ${agentCapacityUsed}/${agentCapacityLimit} · 单次最长 ${agentTimeoutMinutes} 分钟 · ${runtimeVersionLabel(agentRuntime.runtime_version)}` : agentRuntime?.error || "请在设置中完成登录或自检。"}</small><Link href={`/geo/${workspaceId}/settings`}>查看 Agent 设置</Link></div> : null}
 					</div>
-					<div className="pa-filters" aria-label="筛选行动机会">
-						<label><Icon name="calendar" /><select aria-label="观测批次" value={selectedBatchId ?? ""} disabled={isScopePending || !opportunityScope.batches.length} onChange={(event) => changeScope({ batchId: Number(event.target.value) || null })}><option value="">暂无可用批次</option>{opportunityScope.batches.map((batch) => <option key={batch.id} value={batch.id}>批次 #{batch.id} · {batch.eligible_evidence_count} 条有效证据</option>)}</select><Icon name="chevron" /></label>
-						<label><Icon name="filter" /><select aria-label="模型范围" value={selectedModel} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ modelKey: event.target.value })}><option value="all">全部模型</option>{models.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select><Icon name="chevron" /></label>
-						<label><Icon name="spark" /><select aria-label="问题范围" value={selectedQuestion} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ questionPlanId: event.target.value === "all" ? null : Number(event.target.value) })}><option value="all">全部问题</option>{questions.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}</select><Icon name="chevron" /></label>
-					</div>
-					<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Codex Run #${opportunityAnalysis.job_id} 已分析批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Codex 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
 				</div>
 			</header>
 
@@ -1208,6 +1202,15 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>待处理稿件</small><strong>{pendingDraftPackages.length}</strong><em>待审 {reviewReadyDraftCount} · 重生成 {regenerationDraftCount}</em></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
+
+			<div className="pa-top-controls">
+				<div className="pa-filters" aria-label="筛选行动机会">
+					<label><Icon name="calendar" /><select aria-label="观测批次" value={selectedBatchId ?? ""} disabled={isScopePending || !opportunityScope.batches.length} onChange={(event) => changeScope({ batchId: Number(event.target.value) || null })}><option value="">暂无可用批次</option>{opportunityScope.batches.map((batch) => <option key={batch.id} value={batch.id}>批次 #{batch.id} · {batch.eligible_evidence_count} 条有效证据</option>)}</select><Icon name="chevron" /></label>
+					<label><Icon name="filter" /><select aria-label="模型范围" value={selectedModel} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ modelKey: event.target.value })}><option value="all">全部模型</option>{models.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select><Icon name="chevron" /></label>
+					<label><Icon name="spark" /><select aria-label="问题范围" value={selectedQuestion} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ questionPlanId: event.target.value === "all" ? null : Number(event.target.value) })}><option value="all">全部问题</option>{questions.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}</select><Icon name="chevron" /></label>
+				</div>
+				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Codex Run #${opportunityAnalysis.job_id} 已分析批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Codex 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
+			</div>
 		</section>
 
 		<section id="website-audit" className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">

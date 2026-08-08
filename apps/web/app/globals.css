@@ -1545,6 +1545,11 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
 
 .pa-runtime-status.is-busy{background:#fffaf0;border-color:#ead7b7;color:#8b6425}.pa-runtime-status.is-busy>i{background:#d28a25}
 
+/* Keep filters in their own full-width control row so they never overlap summary cards. */
+.pa-top-controls{grid-column:1/-1;min-width:0}
+.pa-top-controls .pa-filters{margin-top:0!important;max-width:100%}
+.pa-top-controls .pa-discovery-row{margin-top:8px}
+
 /* Keep the opportunity summary and selected action card on one truthful scope. */
 .pa-opportunity-panel>header small{background:#f3f6fa!important;border:1px solid #e3e9f1;border-radius:999px;color:#6f7f95!important;display:block!important;font-size:9px!important;font-weight:760;padding:5px 8px!important;white-space:nowrap}.pa-action-current{align-items:center;background:#edf4ff;border-radius:999px;color:#2864cc;display:flex;font-size:9px;font-weight:760;gap:4px;padding:4px 7px;white-space:nowrap}.pa-action-current svg{height:13px;width:13px}
 @media(max-width:760px){.pa-opportunity-panel>header{align-items:flex-start!important;gap:8px}.pa-opportunity-panel>header small{white-space:normal}}
