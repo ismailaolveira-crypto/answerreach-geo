@@ -53,7 +53,9 @@ or claim that content has been published. Return only JSON matching the supplied
 claim must include a public source URL or be marked pending verification. Platform-specific variants must
 be materially adapted to the platform tone and restrictions, not mechanically wrapped copies. Visual
 asset candidates must be public pages on the exact supplied official-website host. Never claim that you
-captured an image; the host application performs and verifies all captures."""
+captured an image; the host application performs and verifies all captures. For stored brand facts,
+copy claim.text from stored_facts.statement exactly and keep the matching source_url; never prepend the
+brand name, paraphrase, split, merge, or expand a verified brand fact."""
 
 
 OUTPUT_SCHEMA = {
@@ -563,6 +565,48 @@ def _validate_agent_result(run: GeoAgentRun, result: dict) -> None:
             raise ValueError(f"Agent platform variant is incomplete: {platform_key}")
 
 
+def _source_identity(value: str) -> tuple[str, str, int, str] | None:
+    parsed = urlsplit(value.strip())
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+    return (
+        parsed.scheme.lower(),
+        parsed.hostname.lower().rstrip("."),
+        port,
+        (parsed.path or "/").rstrip("/") or "/",
+    )
+
+
+def _validate_verified_brand_claims(result: dict, brand_facts: list[object]) -> None:
+    exact_pairs: set[tuple[str, tuple[str, str, int, str]]] = set()
+    brand_sources: set[tuple[str, str, int, str]] = set()
+    for fact in brand_facts:
+        statement = str(getattr(fact, "statement", "") or "").strip()
+        source = _source_identity(str(getattr(fact, "source_url", "") or ""))
+        if statement and source:
+            exact_pairs.add((statement, source))
+            brand_sources.add(source)
+    if not exact_pairs:
+        return
+    rewritten: list[str] = []
+    for claim in result.get("master", {}).get("claims") or []:
+        if claim.get("verification_status") != "source_linked":
+            continue
+        text = str(claim.get("text") or "").strip()
+        source = _source_identity(str(claim.get("source_url") or ""))
+        if source in brand_sources and (text, source) not in exact_pairs:
+            rewritten.append(text)
+    if rewritten:
+        raise ValueError(
+            "Agent rewrote verified brand facts instead of copying stored statements exactly: "
+            + " | ".join(rewritten[:3])
+        )
+
+
 def _cancellation_requested(run_id: int) -> bool:
     with SessionLocal() as check_db:
         timestamp = check_db.scalar(
@@ -612,7 +656,7 @@ def _persist_result(
     db.flush()
     active_brand_facts = verified_active_brand_facts(db, run.workspace_id)
     brand_facts_by_value = {
-        (fact.statement.strip(), str(fact.source_url or "").strip().rstrip("/")): fact
+        (fact.statement.strip(), _source_identity(str(fact.source_url or ""))): fact
         for fact in active_brand_facts
     }
     for index, claim in enumerate(master.get("claims") or []):
@@ -620,7 +664,7 @@ def _persist_result(
         brand_fact = brand_facts_by_value.get(
             (
                 str(claim.get("text") or "").strip(),
-                str(claim.get("source_url") or "").strip().rstrip("/"),
+                _source_identity(str(claim.get("source_url") or "")),
             )
         ) if linked else None
         db.add(
@@ -862,6 +906,10 @@ def execute_agent_run(
         )
         parsed = json.loads(turn_result.final_response)
         _validate_agent_result(run, parsed)
+        _validate_verified_brand_claims(
+            parsed,
+            verified_active_brand_facts(db, run.workspace_id),
+        )
         task_directory.mkdir(parents=True, exist_ok=True)
         raw_path = task_directory / "result.json"
         raw_bytes = json.dumps(

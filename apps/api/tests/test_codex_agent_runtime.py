@@ -9,6 +9,7 @@ from app.services.codex_agent_runtime import (
     LocalCodexRuntime,
 )
 from app.services import codex_agent_runtime
+from app.v1.agent_orchestration import _validate_verified_brand_claims
 
 
 class Payload:
@@ -147,3 +148,37 @@ def test_completed_turn_disarms_timeout_watchdog(
     assert result.final_response == '{"ok": true}'
     assert result.thread_id == "thread-test"
     assert handle.interrupt_calls == 0
+
+
+def test_verified_brand_claims_must_copy_stored_statement_exactly() -> None:
+    fact = SimpleNamespace(
+        statement="企业 AI 系统的统一 Token 管理与模型调度平台",
+        source_url="https://brand.example/",
+    )
+    rewritten = {
+        "master": {
+            "claims": [
+                {
+                    "text": "某品牌是企业 AI Token 管理和调度平台。",
+                    "source_url": "https://brand.example/?from=agent",
+                    "verification_status": "source_linked",
+                }
+            ]
+        }
+    }
+
+    with pytest.raises(ValueError, match="rewrote verified brand facts"):
+        _validate_verified_brand_claims(rewritten, [fact])
+
+    exact = {
+        "master": {
+            "claims": [
+                {
+                    "text": fact.statement,
+                    "source_url": "https://brand.example",
+                    "verification_status": "source_linked",
+                }
+            ]
+        }
+    }
+    _validate_verified_brand_claims(exact, [fact])
