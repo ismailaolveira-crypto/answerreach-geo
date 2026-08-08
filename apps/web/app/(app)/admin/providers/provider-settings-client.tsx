@@ -87,7 +87,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
           return <button type="button" key={item.key} onClick={() => selectModel(item.key)} className={selectedKey === item.key ? "is-selected" : ""} aria-pressed={selectedKey === item.key}>
             <BrandLogo brand={item.brand} label={item.label} />
             <span><b>{item.label}</b><small className={status.className}><i />{status.label}</small></span>
-            {selectedKey === item.key ? <em>✓</em> : null}
+            {selectedKey === item.key ? <em>当前</em> : null}
           </button>;
         })}
       </div>
