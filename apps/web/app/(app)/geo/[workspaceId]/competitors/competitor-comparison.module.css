@@ -559,12 +559,25 @@
 }
 
 .evidenceDisclosure summary {
+  align-items: center;
   color: #185bc9;
   cursor: pointer;
+  display: inline-flex;
   font-size: 9px;
   font-weight: 760;
+  gap: 5px;
   list-style: none;
+  min-height: 44px;
   white-space: nowrap;
+}
+
+.evidenceDisclosure summary::after {
+  content: "⌄";
+  font-size: 11px;
+}
+
+.evidenceDisclosure[open] summary::after {
+  content: "⌃";
 }
 
 .evidenceDisclosure summary::-webkit-details-marker {
@@ -579,9 +592,8 @@
   display: grid;
   gap: 7px;
   margin-top: 9px;
-  max-height: 300px;
   min-width: 0;
-  overflow: auto;
+  overflow: visible;
   padding: 7px;
   width: min(100%, 430px);
 }
@@ -1260,7 +1272,6 @@
     border-radius: 8px;
     box-shadow: none;
     margin-top: 8px;
-    max-height: 250px;
     min-width: 0;
     padding: 5px;
     position: static;

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useState } from "react";
+import { DetailsCollapseButton } from "@/components/details-collapse-button";
 import type {
   CleanroomCompetitorComparison,
   CompetitorBrandStat,
@@ -59,7 +60,7 @@ function EvidenceDisclosure({ workspaceId, rows }: { workspaceId: string; rows: 
       <header><b>{row.model_label}</b><span>{evidenceLabel(row)}</span></header>
       <dl><div><dt>对应问题</dt><dd>{row.question}</dd></div><div><dt>命中摘要</dt><dd>{cleanEvidenceExcerpt(row.context_snippet)}</dd></div></dl>
       <Link href={`/geo/${workspaceId}/evidence/${row.evidence_id}`}>查看原回答和关联引用 <span aria-hidden="true">↗</span></Link>
-    </article>)}</div>
+    </article>)}<DetailsCollapseButton label="收起对应证据" /></div>
   </details>;
 }
 
