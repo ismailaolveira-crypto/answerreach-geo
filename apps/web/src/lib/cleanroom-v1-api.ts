@@ -916,6 +916,18 @@ export type CleanroomBrandFact = {
 	statement: string;
 	source_url?: string | null;
 	status: string;
+	source_verification?: {
+		status: "source_and_statement_verified";
+		verified_url: string;
+		status_code: number;
+		content_type: string;
+		source_sha256: string;
+		statement_sha256: string;
+		size_bytes: number;
+		truncated: boolean;
+		redirect_count: number;
+		verified_at: string;
+	} | null;
 };
 
 export type CleanroomContentAudit = {

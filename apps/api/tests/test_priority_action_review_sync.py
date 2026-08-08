@@ -15,6 +15,7 @@ from app import models  # noqa: F401
 from app.api.deps import get_current_user
 from app.db.session import Base, get_db
 from app.main import create_app
+from app.models import AuditLog
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
     GeoActionOpportunity,
@@ -590,13 +591,33 @@ def test_review_rejects_draft_that_ignored_available_sourced_brand_facts(
     review_client: TestClient,
 ) -> None:
     with review_client.app.state.review_session_factory() as db:
+        fact = GeoBrandFact(
+            workspace_id=1,
+            title="产品定位",
+            statement="测试品牌是企业大模型统一管理平台。",
+            source_url="https://brand.example.com/product",
+            status="active",
+        )
+        db.add(fact)
+        db.flush()
         db.add(
-            GeoBrandFact(
-                workspace_id=1,
-                title="产品定位",
-                statement="测试品牌是企业大模型统一管理平台。",
-                source_url="https://brand.example.com/product",
-                status="active",
+            AuditLog(
+                actor_user_id=1,
+                actor_role="company_admin",
+                action="workspace.brand_fact.source_verified",
+                resource_type="geo_brand_fact",
+                resource_id=fact.id,
+                company_id=1,
+                detail_json={
+                    "workspace_id": 1,
+                    "source_url": fact.source_url,
+                    "statement_sha256": sha256(fact.statement.encode("utf-8")).hexdigest(),
+                    "verification": {
+                        "status": "source_and_statement_verified",
+                        "verified_url": fact.source_url,
+                        "statement_sha256": sha256(fact.statement.encode("utf-8")).hexdigest(),
+                    },
+                },
             )
         )
         db.commit()

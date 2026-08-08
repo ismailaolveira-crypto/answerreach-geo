@@ -162,11 +162,19 @@ from app.v1.action_opportunities import (
     valid_action_evidence,
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
+from app.v1.brand_facts import (
+    BRAND_FACT_VERIFICATION_ACTION,
+    brand_fact_read,
+    statement_fingerprint,
+    verified_active_brand_facts,
+)
 from app.v1.platform_adaptation import adapt_asset
 from app.v1.website_audit import (
+    BrandFactSourceVerificationError,
     PublicationVerificationError,
     WebsiteAuditTargetError,
     audit_website,
+    verify_brand_fact_source,
     verify_publication_page,
 )
 from app.services.article_sync_adapter import get_article_sync_adapter
@@ -4297,18 +4305,7 @@ def _normalized_fact_source(value: str | None) -> str:
 
 
 def _active_sourced_brand_facts(db: Session, workspace_id: int) -> list[GeoBrandFact]:
-    return list(
-        db.scalars(
-            select(GeoBrandFact)
-            .where(
-                GeoBrandFact.workspace_id == workspace_id,
-                GeoBrandFact.status == "active",
-                GeoBrandFact.source_url.is_not(None),
-                func.length(func.trim(GeoBrandFact.source_url)) > 0,
-            )
-            .order_by(GeoBrandFact.id)
-        )
-    )
+    return verified_active_brand_facts(db, workspace_id)
 
 
 REVIEW_RESOLVED_CLAIM_STATUSES = {
@@ -5908,25 +5905,13 @@ def create_agent_run(
         )
     if website_audit:
         readable_brand_source_missing = _website_requires_sourced_brand_facts(opportunity)
-        sourced_brand_fact_count = int(
-            db.scalar(
-                select(func.count())
-                .select_from(GeoBrandFact)
-                .where(
-                    GeoBrandFact.workspace_id == workspace_id,
-                    GeoBrandFact.status == "active",
-                    GeoBrandFact.source_url.is_not(None),
-                    func.length(func.trim(GeoBrandFact.source_url)) > 0,
-                )
-            )
-            or 0
-        )
+        sourced_brand_fact_count = len(verified_active_brand_facts(db, workspace_id))
         if readable_brand_source_missing and sourced_brand_fact_count == 0:
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    "官网没有可回读的产品正文，品牌事实库也没有带公开来源的可用事实；"
-                    "请先在设置中补齐品牌事实，避免只生成通用整改框架"
+                    "官网没有可回读的产品正文，品牌事实库也没有通过公网与原文核验的可用事实；"
+                    "请先在设置中核验品牌事实，避免只生成通用整改框架"
                 ),
             )
     model = payload.model or diagnostic.get("default_model")
@@ -7126,18 +7111,65 @@ def create_action_retest(
     return _action_retest_read(db, row)
 
 
+def _verify_brand_fact_source_or_http_error(source_url: str, statement: str) -> dict:
+    try:
+        return verify_brand_fact_source(source_url, statement)
+    except WebsiteAuditTargetError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="公开来源必须是可从公网访问的 HTTP(S) 地址，不能指向本机或内网。",
+        ) from exc
+    except BrandFactSourceVerificationError as exc:
+        reason = str(exc)
+        if reason == "brand_fact_statement_not_found":
+            detail = "来源页的服务端公开正文中没有找到这段完整陈述；请粘贴页面中确实可见的原文。"
+            status_code = 422
+        elif reason == "brand_fact_source_not_html":
+            detail = "当前只支持可公开读取的 HTML 来源页。"
+            status_code = 422
+        else:
+            detail = "暂时无法从公网读取该来源；本次不会把它保存为可用品牌事实。"
+            status_code = 409
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _record_brand_fact_verification(
+    db: Session,
+    *,
+    workspace: GeoWorkspace,
+    fact: GeoBrandFact,
+    verification: dict,
+    user: User,
+) -> None:
+    record_audit_log(
+        db,
+        user=user,
+        action=BRAND_FACT_VERIFICATION_ACTION,
+        resource_type="geo_brand_fact",
+        resource_id=fact.id,
+        company_id=workspace.company_id,
+        detail={
+            "workspace_id": workspace.id,
+            "source_url": fact.source_url,
+            "statement_sha256": statement_fingerprint(fact.statement),
+            "verification": verification,
+        },
+    )
+
+
 @router.get("/workspaces/{workspace_id}/brand-facts", response_model=list[BrandFactRead])
 def list_brand_facts(
     workspace_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
 ):
     workspace_or_404(db, user, workspace_id)
-    return list(
+    facts = list(
         db.scalars(
             select(GeoBrandFact)
             .where(GeoBrandFact.workspace_id == workspace_id)
             .order_by(GeoBrandFact.id.desc())
         )
     )
+    return [brand_fact_read(db, fact) for fact in facts]
 
 
 @router.post(
@@ -7149,12 +7181,30 @@ def create_brand_fact(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
-    fact = GeoBrandFact(workspace_id=workspace_id, **payload.model_dump())
+    workspace = workspace_or_404(db, user, workspace_id)
+    verification = _verify_brand_fact_source_or_http_error(
+        payload.source_url,
+        payload.statement,
+    )
+    fact = GeoBrandFact(
+        workspace_id=workspace_id,
+        **{
+            **payload.model_dump(),
+            "source_url": str(verification["verified_url"]),
+        },
+    )
     db.add(fact)
+    db.flush()
+    _record_brand_fact_verification(
+        db,
+        workspace=workspace,
+        fact=fact,
+        verification=verification,
+        user=user,
+    )
     db.commit()
     db.refresh(fact)
-    return fact
+    return brand_fact_read(db, fact)
 
 
 @router.patch(
@@ -7167,13 +7217,40 @@ def update_brand_fact(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     fact = scoped_or_404(db, GeoBrandFact, workspace_id, fact_id)
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    changes = payload.model_dump(exclude_unset=True)
+    next_statement = str(changes.get("statement", fact.statement))
+    next_source_url = changes.get("source_url", fact.source_url)
+    next_status = str(changes.get("status", fact.status))
+    if next_status == "active" and not next_source_url:
+        raise HTTPException(
+            status_code=409,
+            detail="恢复使用前必须先配置可核验的公开来源。",
+        )
+    verification = None
+    if next_status == "active" and (
+        "source_url" in changes or "statement" in changes or changes.get("status") == "active"
+    ):
+        verification = _verify_brand_fact_source_or_http_error(
+            str(next_source_url),
+            next_statement,
+        )
+        changes["source_url"] = str(verification["verified_url"])
+    for key, value in changes.items():
         setattr(fact, key, value)
+    db.flush()
+    if verification is not None:
+        _record_brand_fact_verification(
+            db,
+            workspace=workspace,
+            fact=fact,
+            verification=verification,
+            user=user,
+        )
     db.commit()
     db.refresh(fact)
-    return fact
+    return brand_fact_read(db, fact)
 
 
 @router.get("/workspaces/{workspace_id}/content-audits", response_model=list[ContentAuditRead])

@@ -19,7 +19,6 @@ from app.models.cleanroom_v1 import (
     GeoAgentArtifact,
     GeoAgentEvent,
     GeoAgentRun,
-    GeoBrandFact,
     GeoContentAsset,
     GeoContentBrief,
     GeoContentClaim,
@@ -38,6 +37,7 @@ from app.services.codex_agent_runtime import (
 )
 from app.services.official_site_capture import CaptureOutcome, OfficialSiteCapture
 from app.v1.action_opportunities import valid_action_evidence
+from app.v1.brand_facts import verified_active_brand_facts
 from app.v1.content_generation import PLATFORM_CONTRACTS
 
 
@@ -349,13 +349,7 @@ def _build_context(db: Session, run: GeoAgentRun) -> tuple[dict, GeoContentBrief
         website_audit = db.get(GeoWebsiteAudit, audit_id) if audit_id else None
         if website_audit is None or website_audit.workspace_id != workspace.id:
             raise ValueError("Website audit evidence is no longer available")
-    facts = list(
-        db.scalars(
-            select(GeoBrandFact).where(
-                GeoBrandFact.workspace_id == workspace.id, GeoBrandFact.status == "active"
-            )
-        )
-    )
+    facts = verified_active_brand_facts(db, workspace.id)
     evidence_rows = list(
         db.scalars(select(GeoEvidence).where(GeoEvidence.id.in_(brief.evidence_ids or [])))
     ) if brief.evidence_ids else []
@@ -616,16 +610,7 @@ def _persist_result(
     )
     db.add(asset)
     db.flush()
-    active_brand_facts = list(
-        db.scalars(
-            select(GeoBrandFact).where(
-                GeoBrandFact.workspace_id == run.workspace_id,
-                GeoBrandFact.status == "active",
-                GeoBrandFact.source_url.is_not(None),
-                func.length(func.trim(GeoBrandFact.source_url)) > 0,
-            )
-        )
-    )
+    active_brand_facts = verified_active_brand_facts(db, run.workspace_id)
     brand_facts_by_value = {
         (fact.statement.strip(), str(fact.source_url or "").strip().rstrip("/")): fact
         for fact in active_brand_facts

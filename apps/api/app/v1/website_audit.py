@@ -21,6 +21,7 @@ MAX_HOME_BYTES = 512 * 1024
 MAX_DISCOVERY_BYTES = 128 * 1024
 USER_AGENT = "ChunqiuYuanquan-GEO-Audit/1.0 (+website citation readiness)"
 PUBLICATION_VERIFY_MAX_BYTES = 128 * 1024
+BRAND_FACT_VERIFY_MAX_BYTES = 512 * 1024
 
 
 class WebsiteAuditTargetError(ValueError):
@@ -29,6 +30,10 @@ class WebsiteAuditTargetError(ValueError):
 
 class PublicationVerificationError(ValueError):
     """Raised when a claimed public page cannot be verified as readable HTML."""
+
+
+class BrandFactSourceVerificationError(ValueError):
+    """Raised when a public page does not prove the submitted brand statement."""
 
 
 Resolver = Callable[[str, int], list[str]]
@@ -304,6 +309,66 @@ def verify_publication_page(
         "status_code": status_code,
         "content_type": content_type,
         "sha256": document["sha256"],
+        "size_bytes": document["size_bytes"],
+        "truncated": bool(document.get("truncated")),
+        "redirect_count": len(document.get("redirects") or []),
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def verify_brand_fact_source(
+    url: str,
+    statement: str,
+    *,
+    resolver: Resolver = _default_resolver,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Verify that public server-rendered HTML contains the submitted statement."""
+
+    owned_client = client is None
+    active_client = client or httpx.Client(
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        timeout=httpx.Timeout(12.0, connect=8.0),
+        follow_redirects=False,
+    )
+    try:
+        document = _fetch(
+            active_client,
+            url,
+            resolver=resolver,
+            max_bytes=BRAND_FACT_VERIFY_MAX_BYTES,
+        )
+    except WebsiteAuditTargetError:
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise BrandFactSourceVerificationError("brand_fact_source_request_failed") from exc
+    finally:
+        if owned_client:
+            active_client.close()
+
+    status_code = int(document.get("status_code") or 0)
+    if status_code < 200 or status_code >= 300:
+        raise BrandFactSourceVerificationError(
+            f"brand_fact_source_http_{status_code or 'unknown'}"
+        )
+    content_type = str(document.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        raise BrandFactSourceVerificationError("brand_fact_source_not_html")
+
+    parser = _PageParser()
+    parser.feed(str(document.get("body") or ""))
+    visible_text = re.sub(r"\s+", "", parser.page.body_text)
+    normalized_statement = re.sub(r"\s+", "", statement.strip())
+    if not normalized_statement or normalized_statement not in visible_text:
+        raise BrandFactSourceVerificationError("brand_fact_statement_not_found")
+
+    return {
+        "status": "source_and_statement_verified",
+        "verified_url": document["url"],
+        "status_code": status_code,
+        "content_type": content_type,
+        "source_sha256": document["sha256"],
+        "statement_sha256": sha256(statement.strip().encode("utf-8")).hexdigest(),
         "size_bytes": document["size_bytes"],
         "truncated": bool(document.get("truncated")),
         "redirect_count": len(document.get("redirects") or []),

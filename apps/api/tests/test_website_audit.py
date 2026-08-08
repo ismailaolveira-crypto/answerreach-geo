@@ -1,5 +1,6 @@
 from collections.abc import Generator
 from datetime import datetime, timezone
+from hashlib import sha256
 from types import SimpleNamespace
 
 import httpx
@@ -13,11 +14,13 @@ from app import models  # noqa: F401
 from app.api.deps import get_current_user
 from app.db.session import Base, get_db
 from app.main import create_app
+from app.models import AuditLog
 from app.models.company import Company
 from app.models.cleanroom_v1 import (
     GeoActionEvent,
     GeoActionOpportunity,
     GeoAgentRun,
+    GeoBrandFact,
     GeoContentAsset,
     GeoContentBrief,
     GeoContentClaim,
@@ -30,9 +33,11 @@ from app.models.user import User
 from app.v1 import routes
 from app.v1.agent_orchestration import _build_context
 from app.v1.website_audit import (
+    BrandFactSourceVerificationError,
     PublicationVerificationError,
     WebsiteAuditTargetError,
     audit_website,
+    verify_brand_fact_source,
     verify_publication_page,
 )
 
@@ -78,6 +83,47 @@ def test_publication_verification_rejects_non_html_response() -> None:
                 resolver=public_resolver,
                 client=client,
             )
+
+
+def test_brand_fact_source_verification_requires_visible_exact_statement() -> None:
+    statement = "春秋元泉面向企业提供 Token 统一管控能力。"
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text=f"<html><body><main><h1>产品说明</h1><p>{statement}</p></main></body></html>",
+        )
+    )
+    with httpx.Client(transport=transport) as client:
+        result = verify_brand_fact_source(
+            "https://brand.example/product",
+            statement,
+            resolver=public_resolver,
+            client=client,
+        )
+        with pytest.raises(
+            BrandFactSourceVerificationError,
+            match="brand_fact_statement_not_found",
+        ):
+            verify_brand_fact_source(
+                "https://brand.example/product",
+                "页面中不存在的产品承诺。",
+                resolver=public_resolver,
+                client=client,
+            )
+
+    assert result["status"] == "source_and_statement_verified"
+    assert result["statement_sha256"] == sha256(statement.encode("utf-8")).hexdigest()
+    assert "body" not in result
+
+
+def test_brand_fact_source_verification_rejects_private_targets() -> None:
+    with pytest.raises(WebsiteAuditTargetError):
+        verify_brand_fact_source(
+            "http://localhost:8000/internal",
+            "不应读取的内部文本。",
+            resolver=lambda _host, _port: ["127.0.0.1"],
+        )
 
 
 def _transport(request: httpx.Request) -> httpx.Response:
@@ -230,6 +276,22 @@ def website_audit_api(monkeypatch: pytest.MonkeyPatch) -> Generator[SimpleNamesp
     )
     captured["checked_at"] = datetime.now(timezone.utc)
     monkeypatch.setattr(routes, "audit_website", lambda _url, *, brand_name: dict(captured))
+    monkeypatch.setattr(
+        routes,
+        "verify_brand_fact_source",
+        lambda url, statement: {
+            "status": "source_and_statement_verified",
+            "verified_url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "source_sha256": "a" * 64,
+            "statement_sha256": sha256(statement.strip().encode("utf-8")).hexdigest(),
+            "size_bytes": 1024,
+            "truncated": False,
+            "redirect_count": 0,
+            "verified_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     app = create_app()
 
     def override_get_db() -> Generator[Session, None, None]:
@@ -407,6 +469,9 @@ def test_website_draft_requires_active_sourced_brand_fact(
         },
     )
     assert created_fact.status_code == 201
+    assert created_fact.json()["source_verification"]["status"] == (
+        "source_and_statement_verified"
+    )
     fact_id = created_fact.json()["id"]
     inactive = client.patch(
         f"/api/v1/workspaces/1/brand-facts/{fact_id}", json={"status": "inactive"}
@@ -428,6 +493,33 @@ def test_website_draft_requires_active_sourced_brand_fact(
     )
     assert queued.status_code == 202
     assert queued.json()["selected_platforms"] == ["official_site"]
+
+    listed_facts = client.get("/api/v1/workspaces/1/brand-facts")
+    assert listed_facts.status_code == 200
+    assert listed_facts.json()[0]["source_verification"]["source_sha256"] == "a" * 64
+    with website_audit_api.session_factory() as db:
+        verification_log = db.scalar(
+            select(AuditLog).where(
+                AuditLog.action == "workspace.brand_fact.source_verified",
+                AuditLog.resource_id == fact_id,
+            )
+        )
+        assert verification_log is not None
+        assert verification_log.detail_json["verification"]["source_sha256"] == "a" * 64
+        db.add(
+            GeoBrandFact(
+                workspace_id=1,
+                title="未核验事实",
+                statement="仅有链接不能证明这段陈述。",
+                source_url="https://brand.example/unverified",
+                status="active",
+            )
+        )
+        db.commit()
+        run = db.get(GeoAgentRun, queued.json()["id"])
+        assert run is not None
+        context, _brief = _build_context(db, run)
+        assert [fact["id"] for fact in context["brand"]["stored_facts"]] == [fact_id]
 
     with website_audit_api.session_factory() as db:
         brief = GeoContentBrief(

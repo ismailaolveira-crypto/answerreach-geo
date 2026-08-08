@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { CleanroomBrandFact } from "@/lib/cleanroom-v1-api";
-import { saveBrandFact, setBrandFactStatus } from "./actions";
+import { saveBrandFact, setBrandFactStatus, verifyBrandFactSource } from "./actions";
 import styles from "./settings.module.css";
 
 type Feedback = { kind: "success" | "error"; message: string } | null;
@@ -24,7 +24,7 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 	const [busyId, setBusyId] = useState<number | "new" | null>(null);
 	const [feedback, setFeedback] = useState<Feedback>(null);
 	const sourcedActiveFacts = useMemo(
-		() => facts.filter((fact) => fact.status === "active" && Boolean(fact.source_url?.trim())),
+		() => facts.filter((fact) => fact.status === "active" && fact.source_verification?.status === "source_and_statement_verified"),
 		[facts],
 	);
 
@@ -52,9 +52,27 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 			setTitle("");
 			setStatement("");
 			setSourceUrl("");
-			setFeedback({ kind: "success", message: "品牌事实已保存；之后新启动的 Agent 会把它作为可追溯输入。" });
+			setFeedback({ kind: "success", message: "来源与公开原文已核验；之后新启动的 Agent 才会使用这条事实。" });
 		} catch (error) {
 			setFeedback({ kind: "error", message: error instanceof Error ? error.message : "品牌事实保存失败。" });
+		} finally {
+			setBusyId(null);
+		}
+	}
+
+	async function verifyFact(fact: CleanroomBrandFact) {
+		if (!fact.source_url) {
+			setFeedback({ kind: "error", message: "该记录缺少公开来源，请停用后重新创建。" });
+			return;
+		}
+		setBusyId(fact.id);
+		setFeedback(null);
+		try {
+			const next = await verifyBrandFactSource(workspaceId, fact.id, fact.source_url);
+			setFacts((current) => current.map((item) => item.id === next.id ? next : item));
+			setFeedback({ kind: "success", message: `「${next.title}」已通过公网可访问与原文一致性核验。` });
+		} catch (error) {
+			setFeedback({ kind: "error", message: error instanceof Error ? error.message : "公开来源核验失败。" });
 		} finally {
 			setBusyId(null);
 		}
@@ -72,7 +90,7 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 			setFacts((current) => current.map((item) => item.id === next.id ? next : item));
 			setFeedback({
 				kind: "success",
-				message: next.status === "active" ? "该事实已恢复使用。" : "该事实已停用；历史草稿不会被改写。",
+				message: next.status === "active" ? "公开来源已重新核验并恢复使用。" : "该事实已停用；历史草稿不会被改写。",
 			});
 		} catch (error) {
 			setFeedback({ kind: "error", message: error instanceof Error ? error.message : "无法更新品牌事实状态。" });
@@ -89,17 +107,21 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts }: { workspac
 		<div className={styles.brandFactsLayout}>
 			<div className={styles.brandFactForm}>
 				<label>事实名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：产品定位" maxLength={255} /></label>
-				<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="填写可以直接出现在公开内容中的完整陈述，不要只写关键词。" rows={4} /></label>
+				<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="粘贴来源页服务端正文中确实可见的完整原文。" rows={4} /></label>
 				<label>公开来源 URL<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" autoComplete="off" spellCheck={false} /></label>
-				<p>来源将随事实交给 Agent，并在审核时保留。内部口头信息不应在这里伪装成公开证据。</p>
-				<button type="button" onClick={createFact} disabled={busyId !== null}>{busyId === "new" ? "正在保存…" : "保存为可用事实"}</button>
+				<p>后端会安全读取公网 HTML，确认原文存在后才保存哈希证明。内部口头信息不应在这里伪装成公开证据。</p>
+				<button type="button" onClick={createFact} disabled={busyId !== null} aria-busy={busyId === "new"}>{busyId === "new" ? "正在核验来源…" : "核验并保存"}</button>
 			</div>
 			<div className={styles.brandFactList}>
 				<header><b>当前事实</b><small>{facts.length} 条记录 · {sourcedActiveFacts.length} 条参与新生成</small></header>
-				{facts.length ? <div>{facts.map((fact) => <article key={fact.id} className={fact.status === "active" ? "" : styles.isInactive}>
-					<div><span>{fact.status === "active" ? "使用中" : "已停用"}</span><b>{fact.title}</b><p>{fact.statement}</p>{fact.source_url ? <a href={fact.source_url} target="_blank" rel="noreferrer">查看公开来源 ↗</a> : <em>缺少公开来源，不满足官网成稿门禁</em>}</div>
-					<button type="button" onClick={() => toggleFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "处理中…" : fact.status === "active" ? "停用" : "恢复"}</button>
-				</article>)}</div> : <div className={styles.brandFactEmpty}><b>还没有可用品牌事实</b><p>官网当前无法回读产品正文。先补充至少一条带公开来源的事实，再启动官网成稿，可以避免消耗一次 Agent 只得到通用整改框架。</p></div>}
+				{facts.length ? <div>{facts.map((fact) => {
+					const verified = fact.source_verification?.status === "source_and_statement_verified";
+					const inactive = fact.status !== "active";
+					return <article key={fact.id} className={inactive ? styles.isInactive : ""}>
+						<div><span className={inactive ? styles.factStatusInactive : verified ? styles.factStatusVerified : styles.factStatusPending}>{inactive ? "已停用" : verified ? "已核验" : "待核验"}</span><b>{fact.title}</b><p>{fact.statement}</p>{fact.source_url ? <a href={fact.source_url} target="_blank" rel="noreferrer">查看公开来源 ↗</a> : <em>缺少公开来源，不满足官网成稿门禁</em>}{!inactive && !verified ? <em>历史记录尚未完成公网与原文核验，当前不会交给 Agent。</em> : null}</div>
+						<div className={styles.brandFactActions}>{!inactive && !verified ? <button type="button" onClick={() => verifyFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "正在核验…" : "核验来源"}</button> : null}<button type="button" onClick={() => toggleFact(fact)} disabled={busyId !== null}>{busyId === fact.id ? "处理中…" : inactive ? "恢复并核验" : "停用"}</button></div>
+					</article>;
+				})}</div> : <div className={styles.brandFactEmpty}><b>还没有可用品牌事实</b><p>官网当前无法回读产品正文。先补充至少一条通过公网与原文核验的事实，再启动官网成稿。</p></div>}
 			</div>
 		</div>
 		{feedback ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}

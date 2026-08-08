@@ -1452,7 +1452,7 @@ class PromptTemplateRead(BaseModel):
 class BrandFactCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     statement: str = Field(min_length=1)
-    source_url: str | None = Field(default=None, max_length=1000)
+    source_url: str = Field(min_length=1, max_length=1000)
 
     @field_validator("title", "statement")
     @classmethod
@@ -1515,4 +1515,6 @@ class BrandFactRead(BrandFactCreate):
     id: int
     workspace_id: int
     status: str
+    source_url: str | None = None
+    source_verification: dict | None = None
     model_config = ConfigDict(from_attributes=True)

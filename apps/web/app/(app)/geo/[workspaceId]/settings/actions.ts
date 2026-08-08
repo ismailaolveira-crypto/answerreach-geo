@@ -78,6 +78,17 @@ export async function setBrandFactStatus(
 	return fact;
 }
 
+export async function verifyBrandFactSource(
+	workspaceId: number,
+	factId: number,
+	sourceUrl: string,
+) {
+	const fact = await updateCleanroomBrandFact(workspaceId, factId, { source_url: sourceUrl });
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	revalidatePath(`/geo/${workspaceId}/actions`);
+	return fact;
+}
+
 export async function saveWorkspaceSettings(
   _previous: SettingsActionState,
   formData: FormData,
