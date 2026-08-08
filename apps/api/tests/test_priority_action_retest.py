@@ -324,7 +324,10 @@ def retest_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None
             "observation_ledger_batch_id": ledger.id,
         }
         db.commit()
-        return {"batch_id": parent.id}
+        # Match the real observation-batch endpoint: batch_id identifies the
+        # persisted ledger, while queue_job_id is a separate parent receipt.
+        assert ledger.id != parent.id
+        return {"batch_id": ledger.id}
 
     monkeypatch.setattr(routes, "create_provider_web_search_batch", fake_create_batch)
     app = create_app()
@@ -351,6 +354,7 @@ def test_retest_reuses_exact_scope_and_completes_from_real_evidence(
     assert queued.status_code == 202
     assert queued.json()["status"] == "queued"
     assert queued.json()["batch"]["progress_percent"] == 0
+    assert queued.json()["retest_batch_id"] != queued.json()["retest_queue_job_id"]
     assert retest_client.app.state.captured_retest_payload == {
         "provider_ids": [10, 20],
         "question_plan_ids": [1],

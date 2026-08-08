@@ -7069,16 +7069,22 @@ def create_action_retest(
     except Exception:
         db.rollback()
         raise
-    queue_job_id = int(batch_receipt["batch_id"])
-    retest_batch = db.scalar(
-        select(GeoObservationBatch).where(GeoObservationBatch.queue_job_id == queue_job_id)
-    )
-    if retest_batch is None:
+    retest_batch_id = int(batch_receipt["batch_id"])
+    retest_batch = db.get(GeoObservationBatch, retest_batch_id)
+    if retest_batch is None or retest_batch.workspace_id != workspace_id:
         row.status = "failed"
         row.conclusion = "insufficient_evidence"
         row.measured_delta = {"comparable": False, "reason": "ledger_batch_missing"}
         db.commit()
         raise HTTPException(status_code=500, detail="复测队列已创建，但统一观测账本缺失")
+    queue_job_id = int(retest_batch.queue_job_id or 0)
+    queue_job = db.get(QueueJob, queue_job_id) if queue_job_id else None
+    if queue_job is None or queue_job.job_type != "geo_observation.batch":
+        row.status = "failed"
+        row.conclusion = "insufficient_evidence"
+        row.measured_delta = {"comparable": False, "reason": "queue_job_missing"}
+        db.commit()
+        raise HTTPException(status_code=500, detail="复测账本已创建，但队列任务缺失")
     retest_batch.source_type = "action_retest"
     retest_batch.configuration = {
         **(retest_batch.configuration or {}),
