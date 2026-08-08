@@ -146,6 +146,16 @@ pnpm run verify
 - 回归测试：`tests/test_priority_action_review_sync.py`覆盖 Claim 门禁、逐平台审批、草稿回读、退回意见传入、v2 生成、工作区容量、排队取消竞态、超时落库、进度聚合、私有路径隔离和禁止冒充发布；`tests/test_codex_agent_runtime.py`覆盖 watchdog 真实中断与正常完成后解除超时。
 - 回归测试：`tests/test_priority_action_retest.py`覆盖公开 URL 归档、可比复测、结论和证据回链；`tests/test_action_opportunity_scope.py`覆盖真实证据门槛、模型范围与已选机会保留。
 
+## 2026-08-08 · 竞品范围报告持久化
+
+- `POST /api/v1/workspaces/{workspaceId}/competitor-insights` 仍只使用当前筛选范围内的真实 Provider 证据生成 DeepSeek 分析，但成功结果现在会追加写入 `geo_competitor_insight_snapshots_v1`；报告快照是派生分析，绝不计入观测批次、任务、证据或 GEO 指标。
+- `GET /api/v1/workspaces/{workspaceId}/competitor-insights` 按账号、工作区、时间范围、模型、问题和证据上限恢复最近一份精确范围报告。同公司不同账号也不会互相读取报告。
+- 每个快照保存范围指纹、输入指纹、全部输入证据 ID 和模型实际引用的证据 ID。当前证据、问题文案、品牌目录或匹配规则变化后，旧报告仍可审计，但 API 返回 `is_stale=true`，界面明确提示重新生成，不把旧结论伪装成当前结论。
+- 浏览器 `sessionStorage` 只作为首屏缓存；后端快照是恢复依据。完整报告可从新标签页直接打开，并显示账号报告编号、生成范围、真实回答数、证据回链和“不计入 GEO 观测指标”的边界。
+- 完整报告正文改为随页面自然向下流动，不再在正文区域建立独立滚动条。读取、生成、恢复失败和数据过期均有独立的真实状态与重试入口，并支持 `prefers-reduced-motion`。
+- 迁移：`20260808_0023_competitor_insight_snapshots.py`。回归测试：`tests/test_competitor_insight_snapshot.py` 覆盖持久化、不污染观测、跨账号隔离和输入变化过期判定。
+- 本机真实验收生成账号报告 `#1`：输入 187 条真实证据，模型引用 5 条证据；从全新标签页恢复成功。该数据只存在本地数据库，不进入 Git。
+
 ## 2026-08-08 · 官网可引用性审计
 
 - 优先行动页已增加“官网可引用性”真实检查，明确区分 HTTP 可访问与原始 HTML 可直接读取，不会把 JavaScript 外壳当作已有产品正文。

@@ -256,6 +256,41 @@ class GeoScorecard(CleanRoomTimestamp, Base):
     explanation: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class GeoCompetitorInsightSnapshot(CleanRoomTimestamp, Base):
+    """Append-only, account-scoped snapshot of a generated competitor report.
+
+    Reports are derived artifacts, never observation evidence.  The scope and
+    input fingerprints make it possible to restore a report without presenting
+    it as current after the underlying evidence changes.
+    """
+
+    __tablename__ = "geo_competitor_insight_snapshots_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    period_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    model_key: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    question_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_question_plans_v1.id"), index=True
+    )
+    evidence_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    input_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    model: Mapped[str] = mapped_column(String(120), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_evidence_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    linked_evidence_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    generated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class GeoOptimizationAction(CleanRoomTimestamp, Base):
     __tablename__ = "geo_optimization_actions_v1"
 

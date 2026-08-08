@@ -2,8 +2,9 @@
 
 The model never invents telemetry.  It receives only an already-filtered
 comparison payload plus a small set of evidence snippets and must cite the
-archived evidence IDs it used.  Results are deliberately not persisted: a
-user can refresh an insight, but it must not be mistaken for an observation.
+archived evidence IDs it used.  The generator has no persistence side effects;
+the API stores its result as a derived report snapshot, never as observation
+evidence.
 """
 
 from __future__ import annotations

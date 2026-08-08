@@ -488,6 +488,10 @@ class CompetitorInsightRead(BaseModel):
     generated_at: datetime
     scope: dict
     analysis: CompetitorInsightAnalysisRead
+    snapshot_id: int | None = None
+    persisted: bool = False
+    is_stale: bool = False
+    source_evidence_count: int = 0
 
 
 class CompetitorComparisonSummary(BaseModel):

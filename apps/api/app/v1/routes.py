@@ -33,6 +33,7 @@ from app.models.cleanroom_v1 import (
     GeoContentBrief,
     GeoContentClaim,
     GeoContentReview,
+    GeoCompetitorInsightSnapshot,
     GeoDistributionRun,
     GeoDistributionTarget,
     GeoPlatformVariant,
@@ -142,7 +143,11 @@ from app.v1.schemas import (
 from app.services.llm_provider import diagnose_provider, get_search_provider
 from app.services.audit import record_audit_log
 from app.services.usage import enforce_monthly_search_budget, record_usage
-from app.v1.competitor_comparison import build_competitor_comparison
+from app.v1.competitor_comparison import (
+    MATCH_RULE_VERSION,
+    brand_configs,
+    build_competitor_comparison,
+)
 from app.v1.competitor_insight import CompetitorInsightError, generate_competitor_insight
 from app.v1.evidence_analysis import analyze_brand_status
 from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_evidence
@@ -3248,6 +3253,204 @@ def get_competitor_comparison(
     }
 
 
+def _fingerprint_json(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return sha256(encoded).hexdigest()
+
+
+def _normalize_competitor_model_key(value: str | None) -> str:
+    normalized = (value or "").strip()
+    return "" if normalized == "all" else normalized
+
+
+def _competitor_insight_scope_fingerprint(
+    *,
+    workspace_id: int,
+    user_id: int,
+    period_days: int,
+    model_key: str,
+    question_plan_id: int | None,
+    evidence_limit: int,
+) -> str:
+    return _fingerprint_json(
+        {
+            "workspace_id": workspace_id,
+            "user_id": user_id,
+            "period_days": period_days,
+            "model_key": model_key,
+            "question_plan_id": question_plan_id,
+            "evidence_limit": evidence_limit,
+        }
+    )
+
+
+def _competitor_insight_input_fingerprint(
+    workspace: GeoWorkspace,
+    real_rows: list[GeoEvidence],
+    questions: list[GeoQuestionPlan],
+) -> str:
+    return _fingerprint_json(
+        {
+            "matching_rule_version": MATCH_RULE_VERSION,
+            "brand": {
+                "name": workspace.brand_name,
+                "aliases": workspace.brand_aliases or [],
+                "catalog": [
+                    {
+                        "key": item.key,
+                        "name": item.canonical_name,
+                        "aliases": item.aliases,
+                        "is_baseline": item.is_baseline,
+                    }
+                    for item in brand_configs(workspace)
+                ],
+            },
+            "questions": [
+                {"id": item.id, "text": item.question_text, "importance": item.importance}
+                for item in sorted(questions, key=lambda row: row.id)
+            ],
+            "evidence": [
+                {"id": item.id, "answer_hash": item.answer_hash}
+                for item in sorted(real_rows, key=lambda row: row.id)
+            ],
+        }
+    )
+
+
+def _load_competitor_insight_scope(
+    db: Session,
+    workspace: GeoWorkspace,
+    *,
+    period_days: int,
+    model_key: str,
+    question_plan_id: int | None,
+    evidence_limit: int,
+) -> dict:
+    selected_question = None
+    if question_plan_id is not None:
+        selected_question = scoped_or_404(db, GeoQuestionPlan, workspace.id, question_plan_id)
+    effective_to = datetime.now(timezone.utc)
+    effective_from = effective_to - timedelta(days=period_days)
+    scoped_query = select(GeoEvidence).where(
+        GeoEvidence.workspace_id == workspace.id,
+        GeoEvidence.captured_at >= effective_from,
+        GeoEvidence.captured_at <= effective_to,
+    )
+    if model_key:
+        scoped_query = scoped_query.where(GeoEvidence.model_key == model_key)
+    if question_plan_id is not None:
+        scoped_query = scoped_query.where(GeoEvidence.question_plan_id == question_plan_id)
+    scoped_rows = list(
+        db.scalars(scoped_query.order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc()))
+    )
+    real_rows = [row for row in scoped_rows if row.is_real_provider_evidence]
+    questions = list(
+        db.scalars(
+            select(GeoQuestionPlan)
+            .where(
+                GeoQuestionPlan.workspace_id == workspace.id,
+                GeoQuestionPlan.active.is_(True),
+            )
+            .order_by(GeoQuestionPlan.importance.desc(), GeoQuestionPlan.id)
+        )
+    )
+    comparison = build_competitor_comparison(
+        workspace,
+        real_rows,
+        questions,
+        excluded_non_real_answer_count=len(scoped_rows) - len(real_rows),
+        evidence_limit=evidence_limit,
+    )
+    model_label = "全部已测模型"
+    if model_key:
+        model_label = next(
+            (row.model_label for row in real_rows if row.model_key == model_key), model_key
+        )
+    return {
+        "comparison": comparison,
+        "input_fingerprint": _competitor_insight_input_fingerprint(
+            workspace, real_rows, questions
+        ),
+        "model_label": model_label,
+        "question_label": (
+            selected_question.question_text if selected_question is not None else "全部已选问题"
+        ),
+        "real_rows": real_rows,
+    }
+
+
+def _competitor_insight_snapshot_response(
+    snapshot: GeoCompetitorInsightSnapshot,
+    *,
+    is_stale: bool,
+) -> dict:
+    return {
+        **snapshot.payload,
+        "snapshot_id": snapshot.id,
+        "persisted": True,
+        "is_stale": is_stale,
+        "source_evidence_count": len(snapshot.source_evidence_ids or []),
+    }
+
+
+@router.get(
+    "/workspaces/{workspace_id}/competitor-insights",
+    response_model=CompetitorInsightRead | None,
+)
+def get_latest_workspace_competitor_insight(
+    workspace_id: int,
+    period_days: int = Query(90, ge=1, le=3650),
+    model_key: str | None = Query(default=None, min_length=1, max_length=120),
+    question_plan_id: int | None = Query(default=None, ge=1),
+    evidence_limit: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Restore the latest report for this account and exact filter scope."""
+    workspace = workspace_or_404(db, user, workspace_id)
+    normalized_model_key = _normalize_competitor_model_key(model_key)
+    scope_fingerprint = _competitor_insight_scope_fingerprint(
+        workspace_id=workspace_id,
+        user_id=user.id,
+        period_days=period_days,
+        model_key=normalized_model_key,
+        question_plan_id=question_plan_id,
+        evidence_limit=evidence_limit,
+    )
+    snapshot = db.scalar(
+        select(GeoCompetitorInsightSnapshot)
+        .where(
+            GeoCompetitorInsightSnapshot.workspace_id == workspace_id,
+            GeoCompetitorInsightSnapshot.created_by_user_id == user.id,
+            GeoCompetitorInsightSnapshot.scope_fingerprint == scope_fingerprint,
+        )
+        .order_by(
+            GeoCompetitorInsightSnapshot.generated_at.desc(),
+            GeoCompetitorInsightSnapshot.id.desc(),
+        )
+    )
+    if snapshot is None:
+        return None
+    current_scope = _load_competitor_insight_scope(
+        db,
+        workspace,
+        period_days=period_days,
+        model_key=normalized_model_key,
+        question_plan_id=question_plan_id,
+        evidence_limit=evidence_limit,
+    )
+    return _competitor_insight_snapshot_response(
+        snapshot,
+        is_stale=snapshot.input_fingerprint != current_scope["input_fingerprint"],
+    )
+
+
 @router.post(
     "/workspaces/{workspace_id}/competitor-insights",
     response_model=CompetitorInsightRead,
@@ -3258,69 +3461,79 @@ def generate_workspace_competitor_insight(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Generate an on-demand DeepSeek insight from the exact selected scope.
-
-    This is intentionally not an observation and writes nothing to the
-    workspace. The client receives a transient, evidence-referenced analysis.
-    """
+    """Generate and persist a derived report without altering observation metrics."""
     workspace = workspace_or_404(db, user, workspace_id)
-    selected_question = None
-    if payload.question_plan_id is not None:
-        selected_question = scoped_or_404(
-            db, GeoQuestionPlan, workspace_id, payload.question_plan_id
-        )
-    effective_to = datetime.now(timezone.utc)
-    effective_from = effective_to - timedelta(days=payload.period_days)
-    scoped_query = select(GeoEvidence).where(
-        GeoEvidence.workspace_id == workspace_id,
-        GeoEvidence.captured_at >= effective_from,
-        GeoEvidence.captured_at <= effective_to,
-    )
-    model_key = (payload.model_key or "").strip()
-    if model_key and model_key != "all":
-        scoped_query = scoped_query.where(GeoEvidence.model_key == model_key)
-    else:
-        model_key = ""
-    if payload.question_plan_id is not None:
-        scoped_query = scoped_query.where(GeoEvidence.question_plan_id == payload.question_plan_id)
-    scoped_rows = list(
-        db.scalars(scoped_query.order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc()))
-    )
-    real_rows = [row for row in scoped_rows if row.is_real_provider_evidence]
-    questions = list(
-        db.scalars(
-            select(GeoQuestionPlan)
-            .where(GeoQuestionPlan.workspace_id == workspace_id, GeoQuestionPlan.active.is_(True))
-            .order_by(GeoQuestionPlan.importance.desc(), GeoQuestionPlan.id)
-        )
-    )
-    comparison = build_competitor_comparison(
+    model_key = _normalize_competitor_model_key(payload.model_key)
+    current_scope = _load_competitor_insight_scope(
+        db,
         workspace,
-        real_rows,
-        questions,
-        excluded_non_real_answer_count=len(scoped_rows) - len(real_rows),
+        period_days=payload.period_days,
+        model_key=model_key,
+        question_plan_id=payload.question_plan_id,
         evidence_limit=payload.evidence_limit,
     )
-    model_label = "全部已测模型"
-    if model_key:
-        model_label = next(
-            (row.model_label for row in real_rows if row.model_key == model_key), model_key
-        )
-    question_label = (
-        selected_question.question_text if selected_question is not None else "全部已选问题"
-    )
     try:
-        return generate_competitor_insight(
-            comparison,
+        generated = generate_competitor_insight(
+            current_scope["comparison"],
             api_key=get_settings().deepseek_api_key,
             selected_question_id=payload.question_plan_id,
-            selected_question_label=question_label,
-            selected_model_label=model_label,
-            selected_period_label=("全部归档" if payload.period_days == 3650 else f"近 {payload.period_days} 天"),
+            selected_question_label=current_scope["question_label"],
+            selected_model_label=current_scope["model_label"],
+            selected_period_label=(
+                "全部归档" if payload.period_days == 3650 else f"近 {payload.period_days} 天"
+            ),
         )
     except CompetitorInsightError as error:
         status_code = 503 if "API Key" in str(error) else 502
         raise HTTPException(status_code=status_code, detail=str(error)) from error
+
+    generated_at = generated["generated_at"]
+    if isinstance(generated_at, str):
+        generated_at = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    if generated_at.tzinfo is None:
+        generated_at = generated_at.replace(tzinfo=timezone.utc)
+    serialized_payload = {
+        "provider": generated["provider"],
+        "model": generated["model"],
+        "generated_at": generated_at.isoformat(),
+        "scope": generated["scope"],
+        "analysis": generated["analysis"],
+    }
+    linked_evidence_ids = sorted(
+        {
+            evidence_id
+            for finding in generated["analysis"].get("findings", [])
+            for evidence_id in finding.get("evidence_ids", [])
+            if isinstance(evidence_id, int)
+        }
+    )
+    snapshot = GeoCompetitorInsightSnapshot(
+        workspace_id=workspace_id,
+        created_by_user_id=user.id,
+        period_days=payload.period_days,
+        model_key=model_key,
+        question_plan_id=payload.question_plan_id,
+        evidence_limit=payload.evidence_limit,
+        scope_fingerprint=_competitor_insight_scope_fingerprint(
+            workspace_id=workspace_id,
+            user_id=user.id,
+            period_days=payload.period_days,
+            model_key=model_key,
+            question_plan_id=payload.question_plan_id,
+            evidence_limit=payload.evidence_limit,
+        ),
+        input_fingerprint=current_scope["input_fingerprint"],
+        provider=generated["provider"],
+        model=generated["model"],
+        payload=serialized_payload,
+        source_evidence_ids=[row.id for row in current_scope["real_rows"]],
+        linked_evidence_ids=linked_evidence_ids,
+        generated_at=generated_at,
+    )
+    db.add(snapshot)
+    db.commit()
+    db.refresh(snapshot)
+    return _competitor_insight_snapshot_response(snapshot, is_stale=False)
 
 
 @router.get("/workspaces/{workspace_id}/decision-map", response_model=DecisionMapRead)
