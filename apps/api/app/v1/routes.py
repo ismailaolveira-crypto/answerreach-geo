@@ -4216,6 +4216,9 @@ def read_content_library(
     )
     if not assets:
         return []
+    latest_asset_by_brief: dict[int, GeoContentAsset] = {}
+    for candidate in sorted(assets, key=lambda item: (item.version, item.id), reverse=True):
+        latest_asset_by_brief.setdefault(candidate.brief_id, candidate)
     briefs = {
         item.id: item
         for item in db.scalars(
@@ -4273,6 +4276,7 @@ def read_content_library(
             None,
         ) if latest_review else None
         run = runs_by_asset.get(asset.id)
+        latest_asset = latest_asset_by_brief[asset.brief_id]
         distribution = distributions_by_asset.get(asset.id)
         targets = list(
             db.scalars(
@@ -4302,6 +4306,9 @@ def read_content_library(
                 ),
                 "total_draft_targets": len(targets),
                 "draft_targets": targets,
+                "is_latest_version": asset.id == latest_asset.id,
+                "latest_version_id": latest_asset.id,
+                "latest_version_number": latest_asset.version,
             }
         )
     return items

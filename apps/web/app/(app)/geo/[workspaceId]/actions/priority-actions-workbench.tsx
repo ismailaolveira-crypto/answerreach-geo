@@ -17,6 +17,7 @@ import type {
 	CleanroomPlatformVariant,
 	WebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
+import { markdownToSafeHtml } from "@/lib/markdown-html";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
 
 type Props = {
@@ -72,10 +73,6 @@ type ArticleSyncPageApi = {
 	) => void;
 };
 
-function escapeHtml(value: string) {
-	return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character] ?? character);
-}
-
 function getArticleSyncApi() {
 	return (window as Window & { $syncer?: ArticleSyncPageApi }).$syncer;
 }
@@ -89,26 +86,6 @@ function syncPlatformKey(account: SyncAccount) {
 
 function syncAccountKey(account: SyncAccount) {
 	return `${account.type}::${account.uid || account.displayName || account.title}`;
-}
-
-function inlineMarkdownHtml(value: string) {
-	return escapeHtml(value)
-		.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
-		.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-}
-
-function basicMarkdownHtml(markdown: string) {
-	return markdown
-		.split(/\n{2,}/)
-		.map((block) => {
-			const text = block.trim();
-			if (!text) return "";
-			if (text.startsWith("### ")) return `<h3>${inlineMarkdownHtml(text.slice(4))}</h3>`;
-			if (text.startsWith("## ")) return `<h2>${inlineMarkdownHtml(text.slice(3))}</h2>`;
-			if (text.startsWith("# ")) return `<h1>${inlineMarkdownHtml(text.slice(2))}</h1>`;
-			return `<p>${inlineMarkdownHtml(text).replaceAll("\n", "<br>")}</p>`;
-		})
-		.join("");
 }
 
 function syncVariant(
@@ -132,7 +109,7 @@ function syncVariant(
 			{
 				post: {
 					title: variant.title,
-					content: basicMarkdownHtml(variant.body_markdown),
+					content: markdownToSafeHtml(variant.body_markdown),
 					markdown: variant.body_markdown,
 				},
 				accounts: [account],
@@ -1012,10 +989,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				{!websiteDraftReadyForApproval ? <div className="pa-review-readiness" role="status"><div><b>这版内容是整改框架，不是可上线的品牌成稿</b><p>生成时品牌事实库为空。请先在设置中补齐带公开来源的品牌事实，再退回并生成新版本；系统不会允许直接批准这版官网稿。</p></div><Link href={`/geo/${workspaceId}/settings`}>补齐品牌事实 →</Link></div> : null}
 				<div className="pa-review-body">
 					<article className="pa-review-document">
-						{reviewTab === "master" ? <><small>母稿 · v{currentReviewPackage.asset.version}</small><h3>{currentReviewPackage.asset.title}</h3><p className="pa-review-summary">{currentReviewPackage.asset.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: basicMarkdownHtml(currentReviewPackage.asset.body_markdown) }} /></> : (() => {
+						{reviewTab === "master" ? <><small>母稿 · v{currentReviewPackage.asset.version}</small><h3>{currentReviewPackage.asset.title}</h3><p className="pa-review-summary">{currentReviewPackage.asset.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(currentReviewPackage.asset.body_markdown) }} /></> : (() => {
 							const variant = currentReviewPackage.variants.find((item) => item.platform_key === reviewTab);
 							if (!variant) return null;
-							return <><small>{platformOptions.find((item) => item.key === variant.platform_key)?.label || variant.platform_key} · {variant.policy_version}</small><h3>{variant.title}</h3><p className="pa-review-summary">{variant.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: basicMarkdownHtml(variant.body_markdown) }} /></>;
+							return <><small>{platformOptions.find((item) => item.key === variant.platform_key)?.label || variant.platform_key} · {variant.policy_version}</small><h3>{variant.title}</h3><p className="pa-review-summary">{variant.summary}</p><div className="pa-review-copy" dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(variant.body_markdown) }} /></>;
 						})()}
 					</article>
 					<aside className="pa-review-checks">

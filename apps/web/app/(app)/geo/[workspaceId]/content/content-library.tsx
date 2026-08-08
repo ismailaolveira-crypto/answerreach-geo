@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import type { CleanroomContentLibraryItem } from "@/lib/cleanroom-v1-api";
+import { markdownToSafeHtml } from "@/lib/markdown-html";
 import styles from "./content-library.module.css";
 
 const PLATFORM_META: Record<string, { label: string; logo?: string }> = {
@@ -19,12 +20,13 @@ const FILTERS = [
 	{ key: "approved", label: "已通过" },
 	{ key: "draft_saved", label: "已写草稿" },
 	{ key: "published", label: "人工已发布" },
+	{ key: "superseded", label: "历史版本" },
 ] as const;
 
 function itemState(item: CleanroomContentLibraryItem) {
+	if (!item.is_latest_version || item.asset.status === "superseded") return "superseded";
 	if (item.draft_targets.some((target) => target.human_publish_status === "published" && target.public_url)) return "published";
 	if (item.saved_draft_count > 0) return "draft_saved";
-	if (item.asset.status === "superseded") return "superseded";
 	if (item.latest_review_verdict === "changes_requested") return "revision";
 	if (item.approved_platform_keys.length > 0) return "approved";
 	return "review";
@@ -78,28 +80,28 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 				const reviewComplete = item.approved_platform_keys.length > 0;
 				const draftComplete = item.saved_draft_count > 0;
 				const publishedCount = item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url).length;
-				return <article className={styles.item} key={item.asset.id}>
+				return <article className={`${styles.item} ${state === "superseded" ? styles.history : ""}`} key={item.asset.id}>
 					<header>
 						<div className={styles.identity}><span className={`${styles.state} ${styles[state]}`}>{stateLabel(state)}</span><small>内容 #{item.asset.id} · v{item.asset.version} · {formatDate(item.asset.updated_at)}</small></div>
 						<div className={styles.platforms} aria-label="平台版本">{item.variants.map((variant) => { const meta = PLATFORM_META[variant.platform_key]; return <span key={variant.id} title={`${meta?.label || variant.platform_key}：${variant.status}`}>{meta?.logo ? <img src={meta.logo} alt="" /> : null}{meta?.label || variant.platform_key}</span>; })}</div>
 					</header>
 					<div className={styles.copy}><small>{item.action_title}</small><h2>{item.asset.title}</h2><p>{item.asset.summary}</p>{item.latest_review_note ? <blockquote><b>人工意见</b>{item.latest_review_note}</blockquote> : null}</div>
-					<div className={styles.flow} aria-label="内容进度">
+					{state === "superseded" ? <div className={styles.historyNote}><b>已由 v{item.latest_version_number} 替代</b><span>仅保留正文和退回意见用于追溯，不再进入审核、交付或发布流程。</span></div> : <div className={styles.flow} aria-label="内容进度">
 						<div className={styles.done}><span>1</span><b>Agent 生成</b><small>已持久化</small></div>
 						<div className={reviewComplete ? styles.done : state === "revision" ? styles.warning : styles.current}><span>2</span><b>人工审核</b><small>{reviewComplete ? `${item.approved_platform_keys.length} 个平台已通过` : state === "revision" ? "已退回修订" : `${item.pending_claim_count} 条待确认`}</small></div>
 						<div className={draftComplete ? styles.done : reviewComplete ? styles.current : ""}><span>3</span><b>平台草稿</b><small>{draftComplete ? `${item.saved_draft_count}/${item.total_draft_targets} 已回读` : reviewComplete ? "可打开同步助手" : "尚未开放"}</small></div>
 						<div className={publishedCount > 0 ? styles.done : draftComplete ? styles.current : ""}><span>4</span><b>人工发布</b><small>{publishedCount > 0 ? `${publishedCount}/${item.total_draft_targets} 已记录 URL` : draftComplete ? "等待平台人工确认" : "尚未开放"}</small></div>
-					</div>
+					</div>}
 					{item.draft_targets.some((target) => target.draft_url) ? <div className={styles.draftLinks}><b>已回读草稿</b>{item.draft_targets.filter((target) => target.draft_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.draft_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}打开{meta?.label || target.platform_key}草稿</a>; })}</div> : null}
 					{publishedCount > 0 ? <div className={styles.publicLinks}><b>人工发布记录</b>{item.draft_targets.filter((target) => target.public_url).map((target) => { const meta = PLATFORM_META[target.platform_key]; return <a key={target.id} href={target.public_url!} target="_blank" rel="noreferrer">{meta?.logo ? <img src={meta.logo} alt="" /> : null}查看{meta?.label || target.platform_key}公开文章</a>; })}</div> : null}
 					<details className={styles.details}>
 						<summary>查看正文与 {item.variants.length} 个平台版本<span aria-hidden="true">›</span></summary>
 						<div className={styles.documents}>
-							<section><small>母稿 · v{item.asset.version}</small><h3>{item.asset.title}</h3><pre>{item.asset.body_markdown}</pre></section>
-							{item.variants.map((variant) => <section key={variant.id}><small>{PLATFORM_META[variant.platform_key]?.label || variant.platform_key} · {variant.policy_version}</small><h3>{variant.title}</h3><pre>{variant.body_markdown}</pre></section>)}
+							<section><small>母稿 · v{item.asset.version}</small><h3>{item.asset.title}</h3><div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(item.asset.body_markdown) }} /></section>
+							{item.variants.map((variant) => <section key={variant.id}><small>{PLATFORM_META[variant.platform_key]?.label || variant.platform_key} · {variant.policy_version}</small><h3>{variant.title}</h3><div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(variant.body_markdown) }} /></section>)}
 						</div>
 					</details>
-					<footer><span>原始 Agent 工件与审核记录已保留</span><Link href={`/geo/${workspaceId}/actions`}>回到优化行动</Link></footer>
+					<footer><span>{state === "superseded" ? "历史正文、原始 Agent 工件与退回意见已保留" : "原始 Agent 工件与审核记录已保留"}</span><Link href={`/geo/${workspaceId}/actions`}>回到优化行动</Link></footer>
 				</article>;
 			}) : <div className={styles.noMatch}>当前筛选下没有内容。</div>}
 		</section>

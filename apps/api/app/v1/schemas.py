@@ -1355,6 +1355,9 @@ class ContentLibraryItemRead(BaseModel):
     saved_draft_count: int = 0
     total_draft_targets: int = 0
     draft_targets: list[DistributionTargetRead] = Field(default_factory=list)
+    is_latest_version: bool = True
+    latest_version_id: int
+    latest_version_number: int = Field(ge=1)
 
 
 class DistributionClientTargetResult(BaseModel):

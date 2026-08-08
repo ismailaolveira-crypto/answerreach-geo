@@ -547,6 +547,14 @@ def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(
     )
     assert duplicate.status_code == 409
 
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    library_by_id = {item["asset"]["id"]: item for item in library.json()}
+    assert library_by_id[new_asset.id]["is_latest_version"] is True
+    assert library_by_id[1]["is_latest_version"] is False
+    assert library_by_id[1]["latest_version_id"] == new_asset.id
+    assert library_by_id[1]["latest_version_number"] == 2
+
 
 def test_agent_capacity_and_pending_job_cancellation_are_truthful(
     review_client: TestClient,

@@ -830,6 +830,9 @@ export type CleanroomContentLibraryItem = {
 	saved_draft_count: number;
 	total_draft_targets: number;
 	draft_targets: CleanroomDistributionTarget[];
+	is_latest_version: boolean;
+	latest_version_id: number;
+	latest_version_number: number;
 };
 
 export type CleanroomDistributionTarget = {
