@@ -822,6 +822,9 @@ export type CleanroomContentLibraryItem = {
 	question_plan_id?: number | null;
 	variants: CleanroomPlatformVariant[];
 	pending_claim_count: number;
+	available_sourced_brand_fact_count: number;
+	sourced_brand_fact_count: number;
+	brand_fact_snapshot_stale: boolean;
 	approved_platform_keys: string[];
 	latest_review_verdict?: string | null;
 	latest_review_note?: string | null;

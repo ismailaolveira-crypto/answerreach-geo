@@ -372,6 +372,12 @@ def test_review_rejects_draft_that_ignored_available_sourced_brand_facts(
     assert package.json()["available_sourced_brand_fact_count"] == 1
     assert package.json()["sourced_brand_fact_count"] == 0
 
+    library = review_client.get("/api/v1/workspaces/1/content-library")
+    assert library.status_code == 200
+    assert library.json()[0]["available_sourced_brand_fact_count"] == 1
+    assert library.json()[0]["sourced_brand_fact_count"] == 0
+    assert library.json()[0]["brand_fact_snapshot_stale"] is True
+
     blocked = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
         json={

@@ -4344,7 +4344,12 @@ def _asset_sourced_brand_facts(
     return [matched[fact_id] for fact_id in sorted(matched)]
 
 
-def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
+def _content_review_package(
+    db: Session,
+    asset: GeoContentAsset,
+    *,
+    active_sourced_brand_facts: list[GeoBrandFact] | None = None,
+) -> dict:
     claims = list(
         db.scalars(
             select(GeoContentClaim)
@@ -4392,7 +4397,8 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
         else None
     )
     requires_sourced_brand_facts = _website_requires_sourced_brand_facts(opportunity)
-    active_sourced_brand_facts = _active_sourced_brand_facts(db, asset.workspace_id)
+    if active_sourced_brand_facts is None:
+        active_sourced_brand_facts = _active_sourced_brand_facts(db, asset.workspace_id)
     sourced_brand_facts = _asset_sourced_brand_facts(
         db,
         asset,
@@ -4472,6 +4478,7 @@ def read_content_library(
     ):
         if distribution.content_asset_id:
             distributions_by_asset.setdefault(distribution.content_asset_id, distribution)
+    active_sourced_brand_facts = _active_sourced_brand_facts(db, workspace_id)
 
     items = []
     for asset in assets:
@@ -4479,7 +4486,11 @@ def read_content_library(
         action = actions.get(brief.action_id) if brief else None
         if brief is None or action is None:
             continue
-        package = _content_review_package(db, asset)
+        package = _content_review_package(
+            db,
+            asset,
+            active_sourced_brand_facts=active_sourced_brand_facts,
+        )
         content_reviews = [
             review
             for review in package["reviews"]
@@ -4513,6 +4524,16 @@ def read_content_library(
                 "question_plan_id": brief.question_plan_id,
                 "variants": package["variants"],
                 "pending_claim_count": package["pending_claim_count"],
+                "available_sourced_brand_fact_count": package[
+                    "available_sourced_brand_fact_count"
+                ],
+                "sourced_brand_fact_count": package["sourced_brand_fact_count"],
+                "brand_fact_snapshot_stale": (
+                    asset.id == latest_asset.id
+                    and asset.status not in {"approved", "superseded"}
+                    and package["available_sourced_brand_fact_count"] > 0
+                    and package["sourced_brand_fact_count"] == 0
+                ),
                 "approved_platform_keys": package["approved_platform_keys"],
                 "latest_review_verdict": latest_review.verdict if latest_review else None,
                 "latest_review_note": latest_note,

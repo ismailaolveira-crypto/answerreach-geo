@@ -1355,6 +1355,9 @@ class ContentLibraryItemRead(BaseModel):
     question_plan_id: int | None
     variants: list[PlatformVariantRead] = Field(default_factory=list)
     pending_claim_count: int = 0
+    available_sourced_brand_fact_count: int = Field(default=0, ge=0)
+    sourced_brand_fact_count: int = Field(default=0, ge=0)
+    brand_fact_snapshot_stale: bool = False
     approved_platform_keys: list[str] = Field(default_factory=list)
     latest_review_verdict: str | None = None
     latest_review_note: str | None = None

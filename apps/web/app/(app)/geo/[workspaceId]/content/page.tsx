@@ -5,7 +5,8 @@ import styles from "./content-library.module.css";
 export default async function ContentLibraryPage({ params }: { params: Promise<{ workspaceId: string }> }) {
 	const { workspaceId } = await params;
 	const items = await getCleanroomContentLibrary(workspaceId);
-	const awaitingReview = items.filter((item) => item.asset.status === "draft").length;
+	const awaitingReview = items.filter((item) => item.asset.status === "draft" && !item.brand_fact_snapshot_stale).length;
+	const staleDrafts = items.filter((item) => item.brand_fact_snapshot_stale).length;
 	const savedDrafts = items.reduce((total, item) => total + item.saved_draft_count, 0);
 	const publishedArticles = items.reduce((total, item) => total + item.draft_targets.filter((target) => target.human_publish_status === "published" && target.public_url).length, 0);
 
@@ -15,6 +16,7 @@ export default async function ContentLibraryPage({ params }: { params: Promise<{
 			<div className={styles.summary} aria-label="内容库摘要">
 				<div><small>全部版本</small><strong>{items.length}</strong></div>
 				<div><small>待人工审核</small><strong>{awaitingReview}</strong></div>
+				<div><small>需重新生成</small><strong>{staleDrafts}</strong></div>
 				<div><small>已回读草稿</small><strong>{savedDrafts}</strong></div>
 				<div><small>人工已发布</small><strong>{publishedArticles}</strong></div>
 			</div>
