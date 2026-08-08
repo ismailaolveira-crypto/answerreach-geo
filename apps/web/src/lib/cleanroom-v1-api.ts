@@ -750,6 +750,17 @@ export type WebsiteGapAnalysisRun = {
 	evidence_count: number;
 	result_count: number;
 	recommendation_count: number;
+	recommendations: Array<{
+		priority: "high" | "medium" | "low";
+		title: string;
+		target_page: string;
+		required_content: string[];
+		reason: string;
+		evidence_ids: number[];
+		affected_models: string[];
+		affected_question_plan_ids: number[];
+		source_urls: string[];
+	}>;
 	input_fingerprint: string;
 	skill_name: string;
 	skill_sha256: string;

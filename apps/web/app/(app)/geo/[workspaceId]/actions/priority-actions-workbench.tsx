@@ -16,7 +16,6 @@ import type {
 	CleanroomDistributionRun,
 	CleanroomOpportunityAnalysisRun,
 	CleanroomPlatformVariant,
-	WebsiteAudit,
 	WebsiteGapAnalysisRun,
 } from "@/lib/cleanroom-v1-api";
 import {
@@ -41,7 +40,6 @@ type Props = {
 	agentRuntime: AgentRuntime | null;
 	activeSourcedBrandFactCount: number;
 	websiteUrl: string | null;
-	initialWebsiteAudit: WebsiteAudit | null;
 	initialOpportunityAnalysis: CleanroomOpportunityAnalysisRun | null;
 	initialWebsiteGapAnalysis: WebsiteGapAnalysisRun | null;
 	initialAgentRuns: CleanroomAgentRun[];
@@ -63,7 +61,6 @@ type Props = {
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
-	runWebsiteAudit: () => Promise<WebsiteAudit>;
 	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<CleanroomOpportunityAnalysisRun>;
 	readOpportunityAnalysis: (jobId: number) => Promise<CleanroomOpportunityAnalysisRun>;
 	analyzeWebsiteGap: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<WebsiteGapAnalysisRun>;
@@ -296,18 +293,7 @@ const agentProgressStateLabels = {
 	failed: "未完成",
 } as const;
 
-function formatWebsiteAuditTime(value: string) {
-	const normalized = /(?:Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`;
-	return new Intl.DateTimeFormat("zh-CN", {
-		month: "numeric",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-		hour12: false,
-	}).format(new Date(normalized));
-}
-
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialWebsiteAudit, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, runWebsiteAudit, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntime, activeSourcedBrandFactCount, websiteUrl, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -387,12 +373,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			});
 		});
 	}
-	const [websiteAudit, setWebsiteAudit] = useState(initialWebsiteAudit);
-	const [websiteAuditFeedback, setWebsiteAuditFeedback] = useState("");
 	const [isSaving, startSaving] = useTransition();
 	const [isVariantSaving, startVariantSaving] = useTransition();
 	const [isScopePending, startScopeTransition] = useTransition();
-	const [isWebsiteAuditing, startWebsiteAuditTransition] = useTransition();
 	const [isWebsiteGapPending, startWebsiteGapTransition] = useTransition();
 	const reviewDialogRef = useRef<HTMLElement | null>(null);
 	const syncDialogRef = useRef<HTMLElement | null>(null);
@@ -431,7 +414,6 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	)).length;
 	const reviewReadyDraftCount = pendingDraftPackages.length - regenerationDraftCount;
 	const retestReady = retests.filter((item) => item.status === "completed").length;
-	const websiteAuditBlocked = websiteAudit?.status === "blocked";
 	const stage = actionStage(selected?.existingAction);
 	const syncAction = selected?.existingAction ?? actions[0];
 	const currentRun = useMemo(() => agentRuns
@@ -442,6 +424,28 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const agentCapacityUsed = Math.max(agentRuntime?.active_run_count ?? 0, activeAgentRunCount + (opportunityAnalysisActive ? 1 : 0) + (websiteGapAnalysisActive ? 1 : 0));
 	const agentCapacityAvailable = agentCapacityUsed < agentCapacityLimit;
 	const agentCanStart = Boolean(agentRuntime?.ready && agentCapacityAvailable);
+	const websiteRecommendations = websiteGapAnalysis?.recommendations ?? [];
+	const websiteAnalysisState = isScopePending
+		? "switching"
+		: isWebsiteGapPending
+			? "submitting"
+			: websiteGapAnalysisActive
+				? "running"
+				: websiteGapAnalysis?.status === "failed"
+					? "failed"
+					: websiteGapAnalysis?.status === "succeeded"
+						? websiteGapAnalysis.result_count > 0 ? "success" : "empty"
+						: !selectedBatchId
+							? "missing-batch"
+							: !websiteUrl
+								? "missing-website"
+								: !agentRuntime?.ready
+									? "not-ready"
+									: !agentCapacityAvailable
+										? "busy"
+										: "idle";
+	const websiteCitationCount = Number(websiteGapAnalysis?.official_metrics.official_cited_answer_count || 0);
+	const websiteEligibleCount = Number(websiteGapAnalysis?.official_metrics.eligible_answer_count || 0);
 	const agentTimeoutMinutes = Math.max(1, Math.round((agentRuntime?.run_timeout_seconds ?? 900) / 60));
 	const runActive = Boolean(currentRun && ["queued", "resuming", "running", "cancelling"].includes(currentRun.status));
 	const currentRunId = currentRun?.id;
@@ -614,8 +618,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				setWebsiteGapAnalysis(result);
 				if (result.status === "succeeded") {
 					setWebsiteGapFeedback(result.result_count > 0
-						? `Codex 已根据当前范围生成 ${result.recommendation_count} 项官网建议。`
-						: "Codex 已完成分析，当前范围没有足够证据形成官网行动。");
+						? `Codex 已根据当前范围形成 ${result.recommendation_count} 项官网诊断建议。`
+						: "Codex 已完成分析，当前范围未发现需补齐的官网差距。");
 					router.refresh();
 				} else if (result.status === "failed") {
 					setWebsiteGapFeedback(result.error_message || "Codex 官网差距分析失败，没有产生建议。");
@@ -635,7 +639,6 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
 	useEffect(() => setRetests(initialRetests), [initialRetests]);
-	useEffect(() => setWebsiteAudit(initialWebsiteAudit), [initialWebsiteAudit]);
 	useEffect(() => {
 		if (!selected) return;
 		const recommended = selected.recommendedPlatforms.filter((key) => (
@@ -814,24 +817,6 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		});
 	}
 
-	function refreshWebsiteAudit() {
-		setWebsiteAuditFeedback("");
-		startWebsiteAuditTransition(async () => {
-			try {
-				const result = await runWebsiteAudit();
-				setWebsiteAudit(result);
-				setWebsiteAuditFeedback(result.status === "ready"
-					? "检查完成：官网具备较完整的服务端可引用信息。"
-					: result.status === "blocked"
-						? "检查未完成，请根据阻塞原因处理后重试。"
-						: "检查完成：已找到需要优先补齐的官网可引用性问题。");
-				router.refresh();
-			} catch (error) {
-				setWebsiteAuditFeedback(error instanceof Error ? error.message : "官网检查失败");
-			}
-		});
-	}
-
 	function startWebsiteGapAnalysis() {
 		setWebsiteGapFeedback("");
 		startWebsiteGapTransition(async () => {
@@ -842,7 +827,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
 				});
 				setWebsiteGapAnalysis(run);
-				setWebsiteGapFeedback(`Codex 已接收当前范围的 ${run.evidence_count} 条真实证据；成功前不会生成官网机会。`);
+				setWebsiteGapFeedback(`Codex 已接收当前范围的 ${run.evidence_count} 条真实证据；完成前不会显示诊断结论。`);
 			} catch (error) {
 				setWebsiteGapFeedback(error instanceof Error ? error.message : "无法启动 Codex 官网差距分析");
 			}
@@ -1274,44 +1259,34 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			</div>
 		</section>
 
-		<section id="website-audit" className={`pa-site-audit${websiteAudit ? ` is-${websiteAudit.status}` : ""}`} aria-labelledby="website-audit-title">
-			<header>
-				<div><small>技术基础检查 · 官网</small><h2 id="website-audit-title">官网基础可引用性</h2><p>{websiteUrl || "工作区尚未配置官网地址"}</p></div>
-				<div className="pa-site-audit-action">
-					{websiteAudit ? <span><b>{Math.round(websiteAudit.score)}</b><small>{isWebsiteAuditing ? "上次结果" : "/ 100"}</small></span> : <span className="is-empty"><b>—</b><small>尚未检查</small></span>}
-					<button type="button" onClick={refreshWebsiteAudit} disabled={isWebsiteAuditing || !websiteUrl}>{isWebsiteAuditing ? <><i />正在检查官网…</> : websiteAudit ? "重新检查" : "开始检查"}</button>
+		<section className={`pa-website-analysis is-${websiteAnalysisState}`} aria-labelledby="website-analysis-title" aria-live="polite">
+			<div className="pa-website-analysis-inner">
+				<span className="pa-website-analysis-icon"><Icon name={websiteAnalysisState === "success" ? "check" : websiteAnalysisState === "failed" ? "warning" : "spark"} /></span>
+				<small>Codex 官网差距分析 · 独立诊断</small>
+				<h2 id="website-analysis-title">{websiteAnalysisState === "switching" ? "正在切换官网分析范围" : ["submitting", "running"].includes(websiteAnalysisState) ? "Codex 正在分析官网差距" : websiteAnalysisState === "failed" ? "官网分析未完成" : websiteAnalysisState === "success" ? "官网差距分析已完成" : websiteAnalysisState === "empty" ? "当前范围未发现官网差距" : websiteAnalysisState === "missing-batch" ? "请先选择真实观测批次" : websiteAnalysisState === "missing-website" ? "请先配置官网地址" : websiteAnalysisState === "not-ready" ? "Codex 尚未就绪" : websiteAnalysisState === "busy" ? "Codex 正在处理其他任务" : "让 Codex 分析官网差距"}</h2>
+				<p>{websiteAnalysisState === "switching" ? "新范围返回前不展示旧结果。" : ["submitting", "running"].includes(websiteAnalysisState) ? websiteGapFeedback || `正在读取 ${websiteGapAnalysis?.evidence_count ?? 0} 条真实证据；诊断不会进入内容发布流程。` : websiteAnalysisState === "failed" ? websiteGapFeedback || websiteGapAnalysis?.error_message || "Codex 未能返回通过证据校验的官网诊断。" : websiteAnalysisState === "success" ? `已形成 ${websiteGapAnalysis?.recommendation_count ?? 0} 项官网诊断建议；它们不会变成优先机会，也不会启动写稿和发布。` : websiteAnalysisState === "empty" ? "Codex 已完成分析，但当前数据不支持具体官网改进结论。" : websiteAnalysisState === "missing-batch" ? "官网分析只使用你选定的批次、模型和问题数据。" : websiteAnalysisState === "missing-website" ? "官网地址用来限定诊断边界，系统不会接受任意站点。" : websiteAnalysisState === "not-ready" ? "完成本机 Codex 登录与自检后才能运行官网分析。" : websiteAnalysisState === "busy" ? `当前运行容量 ${agentCapacityUsed}/${agentCapacityLimit}，有空位后可继续。` : "只有你点击后，Codex 才会读取当前范围的官网表现和竞品内容。"}</p>
+				{selectedBatchId ? <span className="pa-website-analysis-scope">批次 #{selectedBatchId} · {selectedModelLabel} · {selectedQuestionLabel}</span> : null}
+				{websiteAnalysisState === "success" ? <div className="pa-website-analysis-results">
+					<div className="pa-website-analysis-metric"><b>官网引用 {websiteCitationCount}/{websiteEligibleCount}</b><span>{websiteGapAnalysis?.recommendation_count ?? 0} 项诊断建议</span></div>
+					{websiteRecommendations.slice(0, 3).map((recommendation, index) => <article key={`${recommendation.title}-${index}`}><div><em>{recommendation.priority === "high" ? "高优先级" : recommendation.priority === "medium" ? "中优先级" : "低优先级"}</em><b>{recommendation.title}</b></div><span>{recommendation.required_content.slice(0, 3).join(" · ") || recommendation.target_page}</span></article>)}
+				</div> : null}
+				<div className="pa-website-analysis-actions">
+					{["idle", "failed", "success", "empty"].includes(websiteAnalysisState) ? <button type="button" onClick={startWebsiteGapAnalysis} disabled={!selectedBatchId || !websiteUrl || !agentRuntime?.ready || !agentCapacityAvailable}>{["success", "empty"].includes(websiteAnalysisState) ? "重新分析当前范围" : "让 Codex 分析官网"}</button> : null}
+					{websiteAnalysisState === "missing-website" || websiteAnalysisState === "not-ready" ? <Link href={`/geo/${workspaceId}/settings`}>前往设置 <Icon name="arrow" /></Link> : null}
 				</div>
-			</header>
-			{isWebsiteAuditing ? <div className="pa-site-audit-wait" role="status" aria-live="polite"><i /><div><b>正在读取真实公开页面</b><span>依次检查首页原始 HTML、robots.txt 与 sitemap.xml；完成前不会显示绿色结果。</span></div></div> : websiteAudit ? <>
-				<div className="pa-site-audit-signals">
-					<div className={websiteAudit.checks.accessible?.passed ? "is-pass" : "is-fail"}><i>{websiteAudit.checks.accessible?.passed ? "✓" : "!"}</i><span><b>公网响应</b><small>{websiteAudit.status_code ? `HTTP ${websiteAudit.status_code}` : "未获得响应"}</small></span></div>
-					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.server_visible_content?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.server_visible_content?.passed ? "✓" : "!"}</i><span><b>服务端正文</b><small>{websiteAuditBlocked ? "首页未回读，正文未检查" : websiteAudit.checks.server_visible_content?.detail || "没有检查结果"}</small></span></div>
-					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.headings?.passed && websiteAudit.checks.structured_data?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.headings?.passed && websiteAudit.checks.structured_data?.passed ? "✓" : "!"}</i><span><b>页面结构</b><small>{websiteAuditBlocked ? "首页未回读，结构未检查" : [websiteAudit.checks.headings?.passed ? "标题层级" : null, websiteAudit.checks.structured_data?.passed ? "结构化数据" : null].filter(Boolean).join("、") || "缺少标题层级与结构化数据"}</small></span></div>
-					<div className={websiteAuditBlocked ? "is-pending" : websiteAudit.checks.robots?.passed && websiteAudit.checks.sitemap?.passed ? "is-pass" : "is-fail"}><i>{websiteAuditBlocked ? "–" : websiteAudit.checks.robots?.passed && websiteAudit.checks.sitemap?.passed ? "✓" : "!"}</i><span><b>发现文件</b><small>{websiteAuditBlocked ? "公网请求受阻，未完成检查" : <>{websiteAudit.checks.robots?.passed ? "robots 可读" : "robots 缺失"} · {websiteAudit.checks.sitemap?.passed ? "sitemap 可读" : "sitemap 缺失"}</>}</small></span></div>
-				</div>
-				<div className="pa-site-audit-result">
-					<div><span className={`is-${websiteAudit.status}`}>{websiteAudit.status === "ready" ? "可引用基础较完整" : websiteAudit.status === "blocked" ? "检查受阻" : "需要补齐"}</span><small>{formatWebsiteAuditTime(websiteAudit.checked_at)} · {websiteAudit.response_ms ?? 0} ms · 原始证据 {websiteAudit.raw_html_size} B</small></div>
-					{websiteAudit.findings.length ? <ul>{websiteAudit.findings.slice(0, 3).map((finding) => <li key={finding.code}><b>{finding.title}</b><span>{finding.recommendation}</span></li>)}</ul> : <p>本轮未发现高优先级官网可引用性问题。</p>}
-				</div>
-			</> : <div className="pa-site-audit-empty"><b>{websiteUrl ? "尚无官网检查记录" : "请先在设置中填写官网地址"}</b><span>{websiteUrl ? "检查会保存真实响应、内容哈希和明确的问题清单；结果不会计入模型出现率。" : "官网地址用于限定检查范围，系统不会接受任意目标地址。"}</span></div>}
-			<div className="pa-site-gap-analysis" aria-live="polite">
-				<div><small>Codex 官网差距分析 · 强制 Skill</small><b>{selectedBatchId ? `批次 #${selectedBatchId} · ${selectedModelLabel} · ${selectedQuestionLabel}` : "请先选择真实观测批次"}</b><span>{isScopePending ? "正在切换范围，不展示旧结果…" : websiteGapFeedback || (websiteGapAnalysis?.status === "succeeded" ? websiteGapAnalysis.result_count > 0 ? `${websiteGapAnalysis.analysis_summary || "已形成官网改进建议。"} 官网引用 ${Number(websiteGapAnalysis.official_metrics.official_cited_answer_count || 0)}/${Number(websiteGapAnalysis.official_metrics.eligible_answer_count || 0)} 条回答。` : websiteGapAnalysis.analysis_summary || "当前范围没有足够证据形成官网行动。" : "只读取上方已选批次、模型和问题；点击前不会生成官网机会。")}</span></div>
-				<button type="button" onClick={startWebsiteGapAnalysis} disabled={isScopePending || isWebsiteGapPending || websiteGapAnalysisActive || !selectedBatchId || !websiteUrl || !agentRuntime?.ready || !agentCapacityAvailable}>{isWebsiteGapPending ? "正在提交…" : websiteGapAnalysisActive ? websiteGapAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在分析…" : websiteGapAnalysis?.status === "succeeded" ? "重新分析当前范围" : "让 Codex 分析官网"}</button>
 			</div>
-			<footer><span>{websiteAuditFeedback || "上方分数只表示公开页面是否便于抓取与理解，不等于模型已引用春秋元泉。"}</span>{websiteAudit?.raw_html_sha256 ? <code title={websiteAudit.raw_html_sha256}>证据 {websiteAudit.raw_html_sha256.slice(0, 12)}</code> : null}</footer>
 		</section>
 
 			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>{opportunityAnalysisActive ? "Codex 正在判断优先机会" : opportunityAnalysis?.status === "succeeded" ? "Codex 未发现足够可靠的优先机会" : "尚未让 Codex 分析这个批次"}</h2><p>{opportunityAnalysisActive ? `正在阅读批次 #${opportunityAnalysis?.batch_id} 的 ${opportunityAnalysis?.evidence_count ?? 0} 条真实证据；完成并通过证据校验前，这里保持为空。` : opportunityAnalysis?.status === "succeeded" ? opportunityAnalysis.analysis_summary || "Codex 已完成分析，但当前数据不足以支持具体行动。" : selectedBatch ? `已选定批次 #${selectedBatch.id}。只有你点击后，Codex 才会阅读该批次的回答、信源和竞品内容并给出判断。` : "请先完成一次真实联网观测。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
-					<header><div><h2>系统发现的优先机会</h2><p>来自完整模型观测或官网原始响应；两类证据分开标记。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
+					<header><div><h2>系统发现的优先机会</h2><p>仅显示真实观测形成的运营机会；点击卡片查看详细判断。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
 					<div className="pa-opportunity-list">
 						{filtered.map((item) => <article id={`opportunity-card-${item.id}`} key={item.id} tabIndex={0} aria-expanded={expandedOpportunityId === item.id} aria-label={`${item.title}，点击查看详细判断`} className={selected?.id === item.id ? "is-selected" : ""} onClick={() => { setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return; event.preventDefault(); setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }}>
-							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3><p>{item.summary}</p>{item.sourceType === "website_audit" ? <div className="pa-opportunity-source"><img src="/icon.svg" alt="春秋元泉 GEO 标志" /><span><b>官网原始响应</b><small>审计 #{item.websiteAuditId} · 不计为模型观测</small></span></div> : <div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div>}<small className="pa-opportunity-proof">{item.proof}</small></div>
+							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3>{item.sourceType === "website_audit" ? <div className="pa-opportunity-source"><img src="/icon.svg" alt="春秋元泉 GEO 标志" /><span><b>官网原始响应</b><small>审计 #{item.websiteAuditId} · 不计为模型观测</small></span></div> : <div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div>}<small className="pa-opportunity-proof">{item.proof}</small></div>
 							<div className="pa-gap"><small>{item.type === "website" ? "开发团队待补齐" : item.sourceStrategy === "direct_operable_source" ? "可直接运营的信源" : item.sourceStrategy === "build_controlled_alternative" ? "外部参考 → 建立可控信源" : "建议补齐的信源"}</small><div className="pa-source-tags">{item.sourceTargetLabel ? <span>{item.sourceTargetLabel}</span> : suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}{item.type !== "website" ? item.recommendedPlatforms.slice(0, 3).map((platformKey) => <span key={platformKey}>{platformDisplayName(platformKey)}</span>) : null}</div><em>{item.sourceTargetDetail || `建议载体 · ${suggestedCarrier(item.type)}`}</em></div>
 							<div className="pa-opportunity-actions" onClick={(event) => event.stopPropagation()}><span className={item.existingAction ? "pa-action-current" : item.generationReady ? "pa-evidence-ok" : "pa-action-blocked"}><Icon name={item.existingAction ? "arrow" : item.generationReady ? "check" : "warning"} />{item.existingAction ? "行动进行中" : item.generationReady ? "证据充分" : "检查受阻"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button>{item.websiteAuditId ? <a href="#website-audit">查看官网证据 <Icon name="arrow" /></a> : item.evidenceIds[0] ? <Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link> : null}</div>
 							{expandedOpportunityId === item.id ? <section className="pa-opportunity-details" aria-label="Codex 机会判断详情" onClick={(event) => event.stopPropagation()}>
-								<header><div><small>Codex 判断依据</small><h4>{item.agentRationale || item.summary}</h4></div>{typeof item.agentConfidence === "number" ? <span>信心 {Math.round(item.agentConfidence * 100)}%</span> : null}</header>
 								<div className="pa-opportunity-detail-grid">
 									<div><b>建议补齐的内容</b>{item.missingContent.length ? <ul>{item.missingContent.map((value) => <li key={value}>{value}</li>)}</ul> : <p>当前判断未拆分更细的内容项。</p>}</div>
 									<div><b>同信源竞品内容规律</b>{item.competitorContentPatterns.length ? <ul>{item.competitorContentPatterns.map((value) => <li key={value}>{value}</li>)}</ul> : <p>未发现足够稳定的竞品内容规律。</p>}</div>

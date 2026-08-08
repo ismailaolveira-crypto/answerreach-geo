@@ -248,6 +248,7 @@ def test_forced_skill_is_injected_and_persisted_without_new_schema(tmp_path, mon
 
         result = website_gap_agent.execute_website_gap_analysis(db, job, runtime=runtime)
         opportunity = db.scalar(select(GeoActionOpportunity))
+        persisted_payload = dict(job.payload_json or {})
         user = SimpleNamespace(id=1, role="super_admin", company_id=1)
         exact_scope_rows = routes.list_action_opportunities(
             1,
@@ -271,14 +272,12 @@ def test_forced_skill_is_injected_and_persisted_without_new_schema(tmp_path, mon
         )
 
     assert result["result_count"] == 1
-    assert opportunity is not None
-    assert opportunity.opportunity_type == "website_scope_gap"
-    assert opportunity.scope_snapshot["model_keys"] == []
-    assert opportunity.scope_snapshot["resolved_model_keys"] == ["deepseek", "qianwen"]
-    assert opportunity.scope_snapshot["skill_contract"] == context["skill_contract"]
+    assert opportunity is None
+    assert persisted_payload["recommendation_count"] == 1
+    assert persisted_payload["recommendations"][0]["title"] == "补齐私有化部署与验收页"
     assert "MANDATORY_SKILL_CONTRACT" in runtime.developer_instructions
     assert context["skill_contract"]["sha256"] in runtime.developer_instructions
-    assert len(exact_scope_rows) == 1
+    assert exact_scope_rows == []
     assert different_scope_rows == []
 
 

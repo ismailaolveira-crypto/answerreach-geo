@@ -1019,6 +1019,18 @@ class WebsiteGapAnalysisRequest(BaseModel):
     model_keys: list[str] = Field(default_factory=list, max_length=20)
 
 
+class WebsiteGapRecommendationRead(BaseModel):
+    priority: Literal["high", "medium", "low"]
+    title: str
+    target_page: str
+    required_content: list[str] = Field(default_factory=list)
+    reason: str
+    evidence_ids: list[int] = Field(default_factory=list)
+    affected_models: list[str] = Field(default_factory=list)
+    affected_question_plan_ids: list[int] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+
+
 class WebsiteGapAnalysisRunRead(BaseModel):
     job_id: int
     workspace_id: int
@@ -1030,6 +1042,7 @@ class WebsiteGapAnalysisRunRead(BaseModel):
     evidence_count: int = 0
     result_count: int = 0
     recommendation_count: int = 0
+    recommendations: list[WebsiteGapRecommendationRead] = Field(default_factory=list)
     input_fingerprint: str
     skill_name: str
     skill_sha256: str

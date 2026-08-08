@@ -674,17 +674,44 @@ def execute_website_gap_analysis(
         ),
         encoding="utf-8",
     )
-    opportunity = materialize_website_gap_opportunity(
-        db,
-        job=job,
-        context=context,
-        result=parsed,
+    recommendations = [
+        {
+            "priority": item["priority"],
+            "title": str(item["title"])[:220],
+            "target_page": str(item["target_page"])[:500],
+            "required_content": [str(value)[:500] for value in item["required_content"][:12]],
+            "reason": str(item["reason"])[:2000],
+            "evidence_ids": item["evidence_ids"],
+            "affected_models": item["affected_models"],
+            "affected_question_plan_ids": item["affected_question_plan_ids"],
+            "source_urls": item["source_urls"],
+        }
+        for item in parsed["recommendations"]
+    ]
+    db.add(
+        GeoActionEvent(
+            workspace_id=int(payload["workspace_id"]),
+            job_id=job.id,
+            event_type="website_gap_analysis_completed",
+            actor_type="worker",
+            detail={
+                "opportunity_id": None,
+                "batch_id": int(payload["batch_id"]),
+                "model_keys": list(payload.get("model_keys") or []),
+                "question_plan_ids": list(payload.get("question_plan_ids") or []),
+                "skill_contract": context["skill_contract"],
+                "evidence_count": len(context["evidence"]),
+                "recommendation_count": len(recommendations),
+                "result_kind": "independent_website_diagnostic",
+            },
+        )
     )
     job.payload_json = {
         **dict(job.payload_json or {}),
         "stage": "complete",
-        "result_count": 1 if opportunity else 0,
-        "recommendation_count": len(parsed["recommendations"]),
+        "result_count": 1 if recommendations else 0,
+        "recommendation_count": len(recommendations),
+        "recommendations": recommendations,
         "analysis_summary": parsed["analysis_summary"][:1000],
         "official_metrics": context["deterministic_metrics"],
         "codex_thread_id": turn.thread_id,
@@ -696,7 +723,7 @@ def execute_website_gap_analysis(
     db.commit()
     return {
         "stage": "complete",
-        "result_count": 1 if opportunity else 0,
-        "recommendation_count": len(parsed["recommendations"]),
-        "opportunity_id": opportunity.id if opportunity else None,
+        "result_count": 1 if recommendations else 0,
+        "recommendation_count": len(recommendations),
+        "opportunity_id": None,
     }

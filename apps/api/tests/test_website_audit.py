@@ -31,6 +31,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.v1 import routes
+from app.v1.action_opportunities import materialize_website_opportunity
 from app.v1.agent_orchestration import _build_context
 from app.v1.website_audit import (
     BrandFactSourceVerificationError,
@@ -546,7 +547,7 @@ def test_api_persists_snapshot_but_never_returns_raw_documents(website_audit_api
         assert db.scalar(select(GeoActionOpportunity)) is None
 
 
-def test_needs_work_audit_becomes_deduplicated_selectable_website_action(
+def test_needs_work_audit_stays_an_independent_diagnostic(
     website_audit_api: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -562,15 +563,7 @@ def test_needs_work_audit_becomes_deduplicated_selectable_website_action(
 
     listed = client.get("/api/v1/workspaces/1/action-opportunities?batch_id=999")
     assert listed.status_code == 200
-    opportunities = listed.json()
-    assert len(opportunities) == 1
-    opportunity = opportunities[0]
-    assert opportunity["opportunity_type"] == "website_citation_readiness"
-    assert opportunity["recommended_platforms"] == ["official_site"]
-    assert opportunity["evidence"] == []
-    assert opportunity["scope_snapshot"]["source_type"] == "website_audit"
-    assert opportunity["scope_snapshot"]["website_audit_id"] == second.json()["id"]
-    assert opportunity["scope_snapshot"]["raw_html_sha256"]
+    assert listed.json() == []
     assert client.get(
         "/api/v1/workspaces/1/action-opportunities?model_key=deepseek"
     ).json() == []
@@ -578,40 +571,11 @@ def test_needs_work_audit_becomes_deduplicated_selectable_website_action(
         "/api/v1/workspaces/1/action-opportunities?question_plan_id=1"
     ).json() == []
 
-    selected = client.post(
-        f"/api/v1/workspaces/1/action-opportunities/{opportunity['id']}/select"
-    )
-    assert selected.status_code == 201
-    action = selected.json()
-    assert action["question_plan_id"] is None
-    assert action["source_evidence_id"] is None
-    assert action["selected_scope"]["source_type"] == "website_audit"
-    assert action["selected_scope"]["website_audit_id"] == second.json()["id"]
-
     with website_audit_api.session_factory() as db:
-        assert db.scalar(select(GeoActionOpportunity).where(GeoActionOpportunity.status == "selected"))
-        action_row = db.scalar(select(GeoOptimizationAction))
-        assert action_row is not None
-        run = GeoAgentRun(
-            workspace_id=1,
-            action_id=action_row.id,
-            runtime_key="local_codex",
-            status="queued",
-            stage="queued",
-            selected_platforms=["official_site"],
-            request_snapshot={},
-            result_snapshot={},
-        )
-        db.add(run)
-        db.flush()
-        context, brief = _build_context(db, run)
-        assert brief.status == "ready"
-        assert brief.evidence_ids == []
-        assert context["action"]["source_type"] == "website_audit"
-        assert context["website_audit_evidence"]["raw_html_sha256"]
-        assert context["website_audit_evidence"]["requires_sourced_brand_facts"] is True
-        assert "<div id=\"app\">" in context["website_audit_evidence"]["raw_homepage_html_excerpt"]
-        assert set(context["platforms"]) == {"official_site"}
+        assert db.scalar(select(GeoActionOpportunity)) is None
+        audits = list(db.scalars(select(GeoWebsiteAudit).order_by(GeoWebsiteAudit.id)))
+        assert [audit.id for audit in audits] == [first.json()["id"], second.json()["id"]]
+        assert all(audit.raw_html_sha256 for audit in audits)
 
 
 def test_failed_brand_fact_reverification_is_audited_and_invalidates_old_proof(
@@ -731,10 +695,11 @@ def test_brand_fact_candidate_discovery_is_scoped_and_audited(
         ).hexdigest()
 
 
-def test_website_draft_requires_active_sourced_brand_fact(
+def test_legacy_website_draft_requires_active_sourced_brand_fact(
     website_audit_api: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    client: TestClient = website_audit_api.client
     captured = _needs_work_capture()
     captured["checked_at"] = datetime.now(timezone.utc)
     monkeypatch.setattr(routes, "audit_website", lambda _url, *, brand_name: dict(captured))
@@ -753,11 +718,18 @@ def test_website_draft_requires_active_sourced_brand_fact(
             "error": None,
         },
     )
-    client: TestClient = website_audit_api.client
-    assert client.post("/api/v1/workspaces/1/website-audits").status_code == 201
-    opportunity = client.get("/api/v1/workspaces/1/action-opportunities").json()[0]
+    audit_response = client.post("/api/v1/workspaces/1/website-audits")
+    assert audit_response.status_code == 201
+    with website_audit_api.session_factory() as db:
+        workspace = db.get(GeoWorkspace, 1)
+        audit = db.get(GeoWebsiteAudit, audit_response.json()["id"])
+        assert workspace is not None and audit is not None
+        opportunity = materialize_website_opportunity(db, workspace, audit)
+        assert opportunity is not None
+        db.commit()
+        opportunity_id = opportunity.id
     action = client.post(
-        f"/api/v1/workspaces/1/action-opportunities/{opportunity['id']}/select"
+        f"/api/v1/workspaces/1/action-opportunities/{opportunity_id}/select"
     ).json()
 
     blocked = client.post(
@@ -804,10 +776,6 @@ def test_website_draft_requires_active_sourced_brand_fact(
     )
     assert inactive.status_code == 200
     assert inactive.json()["status"] == "inactive"
-    assert client.post(
-        f"/api/v1/workspaces/1/actions/{action['id']}/agent-runs",
-        json={"selected_platforms": ["official_site"]},
-    ).status_code == 409
 
     active = client.patch(
         f"/api/v1/workspaces/1/brand-facts/{fact_id}", json={"status": "active"}

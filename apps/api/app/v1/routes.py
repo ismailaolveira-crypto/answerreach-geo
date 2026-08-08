@@ -161,10 +161,7 @@ from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_eviden
 from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
-from app.v1.action_opportunities import (
-    materialize_website_opportunity,
-    valid_action_evidence,
-)
+from app.v1.action_opportunities import valid_action_evidence
 from app.v1.opportunity_agent import (
     AGENT_RULE_VERSION,
     build_opportunity_context,
@@ -3783,6 +3780,7 @@ def _website_gap_analysis_read(job: QueueJob) -> dict:
         "evidence_count": int(payload.get("evidence_count") or 0),
         "result_count": int(payload.get("result_count") or 0),
         "recommendation_count": int(payload.get("recommendation_count") or 0),
+        "recommendations": list(payload.get("recommendations") or []),
         "input_fingerprint": str(payload.get("input_fingerprint") or ""),
         "skill_name": str(payload.get("skill_name") or ""),
         "skill_sha256": str(payload.get("skill_sha256") or ""),
@@ -4277,7 +4275,12 @@ def list_action_opportunities(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    query = select(GeoActionOpportunity).where(GeoActionOpportunity.workspace_id == workspace_id)
+    query = select(GeoActionOpportunity).where(
+        GeoActionOpportunity.workspace_id == workspace_id,
+        GeoActionOpportunity.opportunity_type.notin_(
+            ("website_scope_gap", "website_citation_readiness")
+        ),
+    )
     if not include_legacy:
         query = query.where(
             GeoActionOpportunity.rule_version.in_(
@@ -4295,35 +4298,23 @@ def list_action_opportunities(
             )
         )
     )
-    rows = [
-        row
-        for row in rows
-        if row.opportunity_type != "website_scope_gap"
-        or (
-            int((row.scope_snapshot or {}).get("batch_id") or 0) == int(batch_id or 0)
-            and list((row.scope_snapshot or {}).get("model_keys") or [])
-            == ([model_key] if model_key else [])
-            and list((row.scope_snapshot or {}).get("question_plan_ids") or [])
-            == ([question_plan_id] if question_plan_id else [])
-        )
-    ]
     if batch_id is not None:
         rows = [
-            row for row in rows
-            if row.opportunity_type == "website_citation_readiness"
-            or int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
+            row
+            for row in rows
+            if int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
         ]
     if model_key:
         rows = [
-            row for row in rows
-            if row.opportunity_type != "website_citation_readiness"
-            and model_key in ((row.scope_snapshot or {}).get("model_keys") or [])
+            row
+            for row in rows
+            if model_key in ((row.scope_snapshot or {}).get("model_keys") or [])
         ]
     if question_plan_id is not None:
         rows = [
-            row for row in rows
-            if row.opportunity_type != "website_citation_readiness"
-            and int((row.scope_snapshot or {}).get("question_plan_id") or 0)
+            row
+            for row in rows
+            if int((row.scope_snapshot or {}).get("question_plan_id") or 0)
             == question_plan_id
         ]
     return [_opportunity_read(db, opportunity) for opportunity in rows]
@@ -8008,7 +7999,6 @@ def create_website_audit(
     )
     db.add(audit)
     db.flush()
-    opportunity = materialize_website_opportunity(db, workspace, audit)
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -8023,7 +8013,7 @@ def create_website_audit(
                 "requested_url": audit.requested_url,
                 "raw_html_sha256": audit.raw_html_sha256,
                 "finding_codes": [item.get("code") for item in audit.findings],
-                "opportunity_id": opportunity.id if opportunity else None,
+                "opportunity_id": None,
             },
         )
     )
