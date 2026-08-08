@@ -17,6 +17,14 @@ import type {
 	CleanroomPlatformVariant,
 	WebsiteAudit,
 } from "@/lib/cleanroom-v1-api";
+import {
+	articleSyncAccountKey,
+	articleSyncPlatformKey,
+	discoverArticleSyncAccounts,
+	getArticleSyncPageApi,
+	type ArticleSyncAccount,
+	type ArticleSyncPageApi,
+} from "@/lib/article-sync-page-bridge";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
 
@@ -51,53 +59,15 @@ type Props = {
 	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<void>;
 };
 
-type SyncAccount = {
-	type: string;
-	title: string;
-	displayName?: string;
-	uid?: string;
-	icon?: string;
-	avatar?: string;
-	home?: string;
-	status?: "pending" | "uploading" | "done" | "failed";
-	msg?: string;
-	error?: string;
-	editResp?: { draftLink?: string } | null;
-};
-
-type ArticleSyncPageApi = {
-	getAccounts: (callback: (first: unknown, second?: unknown) => void) => void;
-	addTask: (
-		task: { post: { title: string; content: string; markdown: string }; accounts: SyncAccount[] },
-		statusHandler: (task: { accounts?: SyncAccount[] }) => void,
-		callback: (first?: unknown, second?: unknown) => void,
-	) => void;
-};
-
-function getArticleSyncApi() {
-	return (window as Window & { $syncer?: ArticleSyncPageApi }).$syncer;
-}
-
-function syncPlatformKey(account: SyncAccount) {
-	const value = `${account.type} ${account.title} ${account.displayName || ""}`.toLowerCase();
-	if (value.includes("zhihu") || value.includes("知乎")) return "zhihu";
-	if (value.includes("wechat") || value.includes("weixin") || value.includes("微信") || value.includes("公众号")) return "wechat";
-	return null;
-}
-
-function syncAccountKey(account: SyncAccount) {
-	return `${account.type}::${account.uid || account.displayName || account.title}`;
-}
-
 function syncVariant(
 	api: ArticleSyncPageApi,
-	account: SyncAccount,
+	account: ArticleSyncAccount,
 	variant: CleanroomPlatformVariant,
-	onUpdate: (account: SyncAccount) => void,
+	onUpdate: (account: ArticleSyncAccount) => void,
 ) {
-	return new Promise<SyncAccount>((resolve) => {
+	return new Promise<ArticleSyncAccount>((resolve) => {
 		let settled = false;
-		const finish = (result: SyncAccount) => {
+		const finish = (result: ArticleSyncAccount) => {
 			if (settled) return;
 			settled = true;
 			window.clearTimeout(timeout);
@@ -122,17 +92,6 @@ function syncVariant(
 			},
 			() => undefined,
 		);
-	});
-}
-
-function discoverSyncAccounts(api: ArticleSyncPageApi) {
-	return new Promise<SyncAccount[]>((resolve, reject) => {
-		const timeout = window.setTimeout(() => reject(new Error("平台登录检查超时，请打开文章同步助手确认登录状态。")), 180_000);
-		api.getAccounts((first, second) => {
-			window.clearTimeout(timeout);
-			const value = Array.isArray(second) ? second : Array.isArray(first) ? first : [];
-			resolve(value as SyncAccount[]);
-		});
 	});
 }
 
@@ -300,7 +259,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [previewMessage, setPreviewMessage] = useState("");
 	const [syncOpen, setSyncOpen] = useState(false);
 	const [syncPhase, setSyncPhase] = useState<"idle" | "discovering" | "confirm" | "syncing" | "complete" | "partial" | "error">("idle");
-	const [syncAccounts, setSyncAccounts] = useState<SyncAccount[]>([]);
+	const [syncAccounts, setSyncAccounts] = useState<ArticleSyncAccount[]>([]);
 	const [selectedSyncAccounts, setSelectedSyncAccounts] = useState<string[]>([]);
 	const [syncMessage, setSyncMessage] = useState("");
 	const [agentRuns, setAgentRuns] = useState(initialAgentRuns);
@@ -423,7 +382,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	} as Record<string, string>)[currentRetest.conclusion] || currentRetest.conclusion : "";
 	const syncConnectionReady = ["confirm", "syncing", "complete", "partial"].includes(syncPhase) || (syncPhase === "error" && syncAccounts.length > 0);
 	const syncSelectionReady = ["syncing", "complete", "partial"].includes(syncPhase) || (syncPhase === "error" && selectedSyncAccounts.length > 0);
-	const syncMatchedPlatformCount = new Set(syncAccounts.map(syncPlatformKey).filter(Boolean)).size;
+	const syncMatchedPlatformCount = new Set(syncAccounts.map(articleSyncPlatformKey).filter(Boolean)).size;
 	const syncSavedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "draft_saved").length ?? 0;
 	const syncFailedTargetCount = currentDistribution?.targets.filter((target) => target.draft_readback_status === "failed").length ?? 0;
 	const syncPendingTargetCount = currentDistribution?.targets.filter((target) => !["draft_saved", "failed"].includes(target.draft_readback_status)).length ?? 0;
@@ -767,19 +726,19 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			: current.filter((id) => id !== claimId));
 	}
 
-	function updateSyncAccount(next: SyncAccount) {
-		const key = syncAccountKey(next);
-		setSyncAccounts((current) => current.map((account) => syncAccountKey(account) === key ? { ...account, ...next } : account));
+	function updateSyncAccount(next: ArticleSyncAccount) {
+		const key = articleSyncAccountKey(next);
+		setSyncAccounts((current) => current.map((account) => articleSyncAccountKey(account) === key ? { ...account, ...next } : account));
 	}
 
-	function toggleSyncAccount(account: SyncAccount) {
-		const key = syncAccountKey(account);
-		const platformKey = syncPlatformKey(account);
+	function toggleSyncAccount(account: ArticleSyncAccount) {
+		const key = articleSyncAccountKey(account);
+		const platformKey = articleSyncPlatformKey(account);
 		setSelectedSyncAccounts((current) => {
 			if (current.includes(key)) return current.filter((value) => value !== key);
 			const withoutSamePlatform = current.filter((value) => {
-				const selectedAccount = syncAccounts.find((item) => syncAccountKey(item) === value);
-				return !platformKey || !selectedAccount || syncPlatformKey(selectedAccount) !== platformKey;
+				const selectedAccount = syncAccounts.find((item) => articleSyncAccountKey(item) === value);
+				return !platformKey || !selectedAccount || articleSyncPlatformKey(selectedAccount) !== platformKey;
 			});
 			return [...withoutSamePlatform, key];
 		});
@@ -805,16 +764,16 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setSyncMessage("正在通过文章同步助手检查已登录平台…");
 		setSyncAccounts([]);
 		setSelectedSyncAccounts([]);
-		const api = getArticleSyncApi();
+		const api = getArticleSyncPageApi();
 		if (!api) {
 			setSyncPhase("error");
 			setSyncMessage("当前网页没有检测到文章同步助手。请在 EgoLite 中启用扩展并刷新本页。");
 			return;
 		}
 		try {
-			const accounts = await discoverSyncAccounts(api);
+			const accounts = await discoverArticleSyncAccounts(api);
 			const platformAccounts = accounts.filter((account) => {
-				const platformKey = syncPlatformKey(account);
+				const platformKey = articleSyncPlatformKey(account);
 				return platformKey !== null && syncablePlatformKeys.includes(platformKey);
 			});
 			setSyncAccounts(platformAccounts);
@@ -825,7 +784,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			}
 			setSyncPhase("confirm");
 			const preservedCount = syncableApprovedPlatformKeys.length - syncablePlatformKeys.length;
-			const matchedPlatformCount = new Set(platformAccounts.map(syncPlatformKey).filter(Boolean)).size;
+			const matchedPlatformCount = new Set(platformAccounts.map(articleSyncPlatformKey).filter(Boolean)).size;
 			setSyncMessage(matchedPlatformCount === 1
 				? preservedCount ? `已有 ${preservedCount} 个平台草稿完成回读，本次只需重试剩余平台。` : "当前只检测到 1 个已登录平台；如需双平台，请先在 EgoLite 中登录另一个平台。"
 				: `已检测到 ${matchedPlatformCount} 个待写入平台、${platformAccounts.length} 个可用账号。选择目标后由你确认，系统不会自动发布。`);
@@ -836,11 +795,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	}
 
 	async function confirmSync() {
-		const api = getArticleSyncApi();
-		const accounts = syncAccounts.filter((account) => selectedSyncAccounts.includes(syncAccountKey(account)));
+		const api = getArticleSyncPageApi();
+		const accounts = syncAccounts.filter((account) => selectedSyncAccounts.includes(articleSyncAccountKey(account)));
 		if (!api || !syncAction || !currentReviewPackage || accounts.length === 0) return;
 		const accountVariants = accounts.flatMap((account) => {
-			const platformKey = syncPlatformKey(account);
+			const platformKey = articleSyncPlatformKey(account);
 			const variant = currentReviewPackage.variants.find((item) => item.platform_key === platformKey && approvedPlatformKeys.includes(item.platform_key));
 			return platformKey && variant ? [{ account, platformKey, variant }] : [];
 		});
@@ -1159,9 +1118,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					<p className={`pa-sync-message is-${syncPhase}`} role="status">{syncMessage}</p>
 					{syncAccounts.length ? <div className="pa-sync-platforms">{syncAccounts.map((account) => {
 						const disabled = syncPhase !== "confirm";
-						const accountKey = syncAccountKey(account);
+						const accountKey = articleSyncAccountKey(account);
 						const checked = selectedSyncAccounts.includes(accountKey);
-						const platformKey = syncPlatformKey(account);
+						const platformKey = articleSyncPlatformKey(account);
 						const platform = platformOptions.find((item) => item.key === platformKey);
 						return <label key={accountKey} className={checked ? "is-selected" : ""}><input type="checkbox" checked={checked} disabled={disabled} onChange={() => toggleSyncAccount(account)} />{platform ? <img src={platform.logo} alt={`${platform.label} 官方标志`} /> : null}<span><b>{account.displayName || account.title}</b><small>{account.status === "done" ? "草稿已返回并等待回读归档" : account.status === "failed" ? (account.error || "写入失败") : account.msg || (account.uid ? `账号 ${account.uid}` : platform?.label || account.title)}</small></span>{account.editResp?.draftLink ? <a href={account.editResp.draftLink} target="_blank" rel="noreferrer">打开草稿</a> : null}</label>;
 					})}</div> : null}
