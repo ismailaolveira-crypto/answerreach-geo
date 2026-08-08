@@ -1075,7 +1075,7 @@ class AgentRuntimeRead(BaseModel):
     connected_since: datetime | None = None
     reuse_count: int = 0
     active_run_count: int = 0
-    max_concurrent_runs: int = 1
+    max_concurrent_runs: int = 10
     capacity_available: bool = True
     run_timeout_seconds: int = 900
     error: str | None = None

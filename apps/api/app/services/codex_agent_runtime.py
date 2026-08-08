@@ -30,63 +30,100 @@ _diagnostic_cache: tuple[float, dict] | None = None
 _diagnostic_cache_lock = threading.Lock()
 
 
-class _WarmCodexClient:
-    """Keep one serialized SDK client alive per API/worker process."""
+@dataclass(slots=True)
+class _WarmCodexSlot:
+    client: object
+    connected_since: datetime
+    reuse_count: int = 0
+    in_use: bool = False
 
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._client: object | None = None
-        self._connected_since: datetime | None = None
-        self._reuse_count = 0
+
+class _WarmCodexClientPool:
+    """Lazily keep up to ten independent SDK clients warm per process."""
+
+    def __init__(self, max_size: int = 10) -> None:
+        self._max_size = max(1, min(int(max_size), 10))
+        self._condition = threading.Condition(threading.RLock())
+        self._slots: list[_WarmCodexSlot] = []
 
     @contextmanager
     def use(self):
-        with self._lock:
-            if self._client is None:
-                from openai_codex import Codex
+        slot: _WarmCodexSlot
+        with self._condition:
+            while True:
+                slot = next((candidate for candidate in self._slots if not candidate.in_use), None)
+                if slot is not None:
+                    break
+                if len(self._slots) < self._max_size:
+                    from openai_codex import Codex
 
-                self._client = Codex()
-                self._connected_since = datetime.now(timezone.utc)
-                self._reuse_count = 0
-            self._reuse_count += 1
-            try:
-                yield self._client
-            except BaseException:
-                self._close_locked()
-                raise
+                    slot = _WarmCodexSlot(
+                        client=Codex(),
+                        connected_since=datetime.now(timezone.utc),
+                    )
+                    self._slots.append(slot)
+                    break
+                self._condition.wait()
+            slot.in_use = True
+            slot.reuse_count += 1
+
+        invalid = False
+        try:
+            yield slot.client
+        except BaseException:
+            invalid = True
+            raise
+        finally:
+            client_to_close: object | None = None
+            with self._condition:
+                if invalid:
+                    if slot in self._slots:
+                        self._slots.remove(slot)
+                    client_to_close = slot.client
+                else:
+                    slot.in_use = False
+                self._condition.notify()
+            self._close_client(client_to_close)
 
     def snapshot(self) -> dict:
-        with self._lock:
+        with self._condition:
+            connected_since = min(
+                (slot.connected_since for slot in self._slots),
+                default=None,
+            )
             return {
-                "connection_status": "warm" if self._client is not None else "cold",
-                "connected_since": (
-                    self._connected_since.isoformat() if self._connected_since else None
-                ),
-                "reuse_count": self._reuse_count,
+                "connection_status": "warm" if self._slots else "cold",
+                "connected_since": connected_since.isoformat() if connected_since else None,
+                "reuse_count": sum(slot.reuse_count for slot in self._slots),
+                "pool_size": len(self._slots),
+                "pool_busy": sum(1 for slot in self._slots if slot.in_use),
+                "pool_limit": self._max_size,
             }
 
     def reset(self) -> None:
-        with self._lock:
-            self._close_locked()
+        with self._condition:
+            clients = [slot.client for slot in self._slots]
+            self._slots.clear()
+            self._condition.notify_all()
+        for client in clients:
+            self._close_client(client)
 
-    def _close_locked(self) -> None:
-        client = self._client
-        self._client = None
-        self._connected_since = None
-        self._reuse_count = 0
-        if client is not None:
-            try:
-                client.close()
-            except Exception:
-                pass
+    @staticmethod
+    def _close_client(client: object | None) -> None:
+        if client is None:
+            return
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
-_warm_codex_client = _WarmCodexClient()
+_warm_codex_client = _WarmCodexClientPool(max_size=10)
 atexit.register(_warm_codex_client.reset)
 
 
 def reset_local_codex_client() -> None:
-    """Discard the warm SDK process after a fault or during deterministic tests."""
+    """Discard all warm SDK processes during shutdown or deterministic tests."""
 
     _warm_codex_client.reset()
 
@@ -300,31 +337,34 @@ class LocalCodexRuntime:
                 if timeout_thread is not None:
                     timeout_thread.join(timeout=1)
 
-        if timeout_reached.is_set():
-            reset_local_codex_client()
-            raise CodexRunTimedOut(
-                f"Codex turn exceeded {float(timeout_seconds or 0):g} seconds"
-            ) from stream_error
-        if stream_error is not None:
-            reset_local_codex_client()
-            raise stream_error
-        if interrupted or completed_status in {"interrupted", "cancelled", "canceled"}:
-            raise CodexRunInterrupted("Codex turn was interrupted by the user")
-        if completed_status != "completed":
-            reset_local_codex_client()
-            raise CodexRuntimeUnavailable(f"Codex turn ended with status: {completed_status or 'unknown'}")
-        if not final_response.strip():
-            reset_local_codex_client()
-            raise CodexRuntimeUnavailable("Codex returned no final structured response")
-        try:
-            json.loads(final_response)
-        except json.JSONDecodeError as exc:
-            reset_local_codex_client()
-            raise CodexRuntimeUnavailable("Codex final response is not valid JSON") from exc
-        return CodexTurnResult(
-            thread_id=thread.id,
-            turn_id=handle.id,
-            final_response=final_response,
-            usage=usage,
-            runtime_events=compact_events,
-        )
+            if timeout_reached.is_set():
+                raise CodexRunTimedOut(
+                    f"Codex turn exceeded {float(timeout_seconds or 0):g} seconds"
+                ) from stream_error
+            if stream_error is not None:
+                raise stream_error
+            if interrupted or completed_status in {
+                "interrupted",
+                "cancelled",
+                "canceled",
+            }:
+                raise CodexRunInterrupted("Codex turn was interrupted by the user")
+            if completed_status != "completed":
+                raise CodexRuntimeUnavailable(
+                    f"Codex turn ended with status: {completed_status or 'unknown'}"
+                )
+            if not final_response.strip():
+                raise CodexRuntimeUnavailable("Codex returned no final structured response")
+            try:
+                json.loads(final_response)
+            except json.JSONDecodeError as exc:
+                raise CodexRuntimeUnavailable(
+                    "Codex final response is not valid JSON"
+                ) from exc
+            return CodexTurnResult(
+                thread_id=thread.id,
+                turn_id=handle.id,
+                final_response=final_response,
+                usage=usage,
+                runtime_events=compact_events,
+            )

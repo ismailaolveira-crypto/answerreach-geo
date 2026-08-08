@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
 from types import SimpleNamespace
@@ -185,6 +186,145 @@ def test_completed_turns_reuse_one_warm_codex_client(
     assert snapshot["connection_status"] == "warm"
     assert snapshot["connected_since"]
     assert snapshot["reuse_count"] == 2
+
+
+def test_two_codex_turns_overlap_on_independent_warm_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import openai_codex
+
+    barrier = threading.Barrier(2)
+    lifecycle = {"created": 0, "closed": 0}
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    class ConcurrentHandle:
+        def __init__(self, client_id: int) -> None:
+            self.id = f"turn-{client_id}"
+
+        def stream(self):
+            nonlocal active, max_active
+            with counter_lock:
+                active += 1
+                max_active = max(max_active, active)
+            try:
+                barrier.wait(timeout=1)
+                yield SimpleNamespace(
+                    method="item/completed",
+                    payload=Payload(
+                        {
+                            "item": {
+                                "type": "agentMessage",
+                                "phase": "final_answer",
+                                "text": '{"ok": true}',
+                            }
+                        }
+                    ),
+                )
+                yield SimpleNamespace(
+                    method="turn/completed",
+                    payload=Payload({"turn": {"status": "completed"}}),
+                )
+            finally:
+                with counter_lock:
+                    active -= 1
+
+        def interrupt(self) -> None:
+            return None
+
+    class ConcurrentThread:
+        def __init__(self, client_id: int) -> None:
+            self.id = f"thread-{client_id}"
+            self.handle = ConcurrentHandle(client_id)
+
+        def turn(self, *_args, **_kwargs) -> ConcurrentHandle:
+            return self.handle
+
+    class ConcurrentCodex:
+        def __init__(self) -> None:
+            lifecycle["created"] += 1
+            self.client_id = lifecycle["created"]
+
+        def thread_start(self, **_kwargs) -> ConcurrentThread:
+            return ConcurrentThread(self.client_id)
+
+        def close(self) -> None:
+            lifecycle["closed"] += 1
+
+    monkeypatch.setattr(openai_codex, "Codex", ConcurrentCodex)
+    monkeypatch.setattr(openai_codex, "ApprovalMode", SimpleNamespace(deny_all="deny"))
+    monkeypatch.setattr(openai_codex, "Sandbox", SimpleNamespace(workspace_write="workspace"))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(run_runtime, tmp_path / f"run-{index}", timeout_seconds=1)
+            for index in range(2)
+        ]
+        results = [future.result(timeout=2) for future in futures]
+
+    assert [result.final_response for result in results] == ['{"ok": true}'] * 2
+    assert lifecycle == {"created": 2, "closed": 0}
+    assert max_active == 2
+    snapshot = codex_agent_runtime._warm_codex_client.snapshot()
+    assert snapshot["pool_size"] == 2
+    assert snapshot["pool_busy"] == 0
+    assert snapshot["pool_limit"] == 10
+
+
+def test_failed_lease_closes_only_its_client_while_other_lease_keeps_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai_codex
+
+    lifecycle = {"created": 0, "closed": []}
+    barrier = threading.Barrier(2)
+    release_healthy = threading.Event()
+    client_closed = threading.Event()
+
+    class PoolClient:
+        def __init__(self) -> None:
+            lifecycle["created"] += 1
+            self.client_id = lifecycle["created"]
+
+        def close(self) -> None:
+            lifecycle["closed"].append(self.client_id)
+            client_closed.set()
+
+    monkeypatch.setattr(openai_codex, "Codex", PoolClient)
+    pool = codex_agent_runtime._WarmCodexClientPool(max_size=2)
+
+    def healthy_lease() -> None:
+        with pool.use():
+            barrier.wait(timeout=1)
+            assert release_healthy.wait(timeout=2)
+
+    def failed_lease() -> None:
+        with pool.use():
+            barrier.wait(timeout=1)
+            raise RuntimeError("isolated client failure")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        healthy = executor.submit(healthy_lease)
+        failed = executor.submit(failed_lease)
+        with pytest.raises(RuntimeError, match="isolated client failure"):
+            failed.result(timeout=2)
+
+        assert client_closed.wait(timeout=1)
+        during_failure = pool.snapshot()
+        assert lifecycle["closed"] in ([1], [2])
+        assert during_failure["pool_size"] == 1
+        assert during_failure["pool_busy"] == 1
+
+        release_healthy.set()
+        healthy.result(timeout=2)
+
+    after = pool.snapshot()
+    assert after["pool_size"] == 1
+    assert after["pool_busy"] == 0
+    pool.reset()
+    assert sorted(lifecycle["closed"]) == [1, 2]
 
 
 def test_verified_brand_claims_must_copy_stored_statement_exactly() -> None:

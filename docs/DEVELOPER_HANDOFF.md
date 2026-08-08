@@ -154,7 +154,7 @@ pnpm run verify
 - 同一内容资产的外部平台分发只维护一个可扩展的 distribution run。首次仅登录一个平台时，任务仍包含全部已审核目标并显示例如 `1/2 已回读、1 个待写入`；后续登录另一个平台会扩展/复用原任务，不新建一个让前次草稿从内容库汇总中消失的孤立任务。
 - 同步账号使用 `type + uid` 作为界面稳定键；同一平台若出现多个账号只能选择一个，避免重复平台结果被后端拒绝。平台列表显示真实 Logo 和逐账号 `uploading / done / failed` 状态；所有目标已回读后入口改为“草稿已写入”并禁用重复同步。
 - 发布 URL 在真实复测建立前允许更正；一旦 `retest_batch_id` 已生成即锁定，避免复测快照与后改发布记录发生漂移。重复提交同一 URL 保持幂等。
-- Agent 产品化门禁已实装：默认每工作区同时只运行 1 个任务，单次最长 15 分钟；容量已满时 API 拒绝第二个 run，页面显示真实容量和超时上限。排队中取消会立即释放容量；worker 交接竞态也会落为 `cancelled`，不留在虚假运行态。
+- Agent 产品化门禁已实装：默认每工作区最多同时运行 10 个任务，单次最长 15 分钟；容量已满时 API 拒绝第 11 个 run，页面显示真实容量和超时上限。队列 worker 默认提供 10 个独立槽位，Codex SDK 使用按需创建、最多 10 个客户端的常驻连接池，不再由单一进程锁串行所有 turn。排队中取消会立即释放容量；worker 交接竞态也会落为 `cancelled`，不留在虚假运行态。
 - SDK turn 超时会调用真实 `interrupt`，持久化为 `failed / timed_out / agent_timeout`，并保留原 Codex thread 恢复入口。尚未建立 thread 的取消/失败任务在界面显示“重新启动”，不再卡在无操作的终止态。
 - `GET /api/v1/workspaces/{workspaceId}/agent-runs/{runId}/progress` 统一从持久化事件计算五阶段状态、确定性百分比、耗时和超时余量；前端不再自行猜测阶段。该接口仅返回工件类型、大小和哈希，不暴露 `private_artifacts` 本机路径或元数据。
 - `GET /api/v1/workspaces/{workspaceId}/action-workbench-state` 一次返回已持久化的 Agent 运行、审核包、分发任务和已建立复测。优先行动首屏不再对每个行动逐一请求 Agent 与不存在的复测，空复测以空列表表示，不制造 404 错误流量。

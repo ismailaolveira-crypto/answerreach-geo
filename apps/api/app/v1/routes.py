@@ -5992,7 +5992,7 @@ def _agent_capacity(
     *,
     exclude_run_id: int | None = None,
 ) -> tuple[int, list[object]]:
-    limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 4))
+    limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 10))
     query = select(GeoAgentRun).where(
         GeoAgentRun.workspace_id == workspace_id,
         GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),

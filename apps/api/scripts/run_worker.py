@@ -12,6 +12,13 @@ from app.db.session import Base, SessionLocal, engine
 from app.services.job_queue import run_next_job
 
 
+MAX_WORKER_CONCURRENCY = 10
+
+
+def normalize_concurrency(value: int) -> int:
+    return min(MAX_WORKER_CONCURRENCY, max(1, value))
+
+
 def run_once() -> dict:
     with SessionLocal() as db:
         job = run_next_job(db)
@@ -30,11 +37,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run GEO background queue worker.")
     parser.add_argument("--once", action="store_true", help="Process at most one queued job and exit.")
     parser.add_argument("--interval-seconds", type=float, default=5.0, help="Loop sleep interval.")
-    parser.add_argument("--concurrency", type=int, default=5, help="Maximum jobs processed concurrently (1-5).")
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=MAX_WORKER_CONCURRENCY,
+        help=f"Maximum jobs processed concurrently (1-{MAX_WORKER_CONCURRENCY}).",
+    )
     args = parser.parse_args()
 
     Base.metadata.create_all(bind=engine)
-    concurrency = min(5, max(1, args.concurrency))
+    concurrency = normalize_concurrency(args.concurrency)
 
     if args.once:
         with ThreadPoolExecutor(max_workers=concurrency) as executor:

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -1356,16 +1357,19 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
     runtime = review_client.get("/api/v1/workspaces/1/agent-runtime")
     assert runtime.status_code == 200
     assert runtime.json()["active_run_count"] == 1
-    assert runtime.json()["max_concurrent_runs"] == 1
-    assert runtime.json()["capacity_available"] is False
+    assert runtime.json()["max_concurrent_runs"] == 10
+    assert runtime.json()["capacity_available"] is True
     assert runtime.json()["run_timeout_seconds"] == 900
 
-    blocked = review_client.post(
+    second = review_client.post(
         "/api/v1/workspaces/1/actions/3/agent-runs",
         json={"selected_platforms": ["zhihu"]},
     )
-    assert blocked.status_code == 409
-    assert "capacity is busy" in blocked.json()["detail"]
+    assert second.status_code == 202
+    second_cleanup = review_client.post(
+        f"/api/v1/workspaces/1/agent-runs/{second.json()['id']}/interrupt"
+    )
+    assert second_cleanup.status_code == 200
 
     cancelled = review_client.post(f"/api/v1/workspaces/1/agent-runs/{run_id}/interrupt")
     assert cancelled.status_code == 200
@@ -1393,6 +1397,41 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
     )
     assert cleanup.status_code == 200
     assert cleanup.json()["status"] == "cancelled"
+
+
+def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add_all(
+            [
+                GeoAgentRun(
+                    id=100 + index,
+                    workspace_id=1,
+                    action_id=1,
+                    status="running",
+                    stage="researching",
+                    selected_platforms=["zhihu"],
+                    request_snapshot={},
+                    result_snapshot={},
+                )
+                for index in range(10)
+            ]
+        )
+        db.commit()
+
+        limit, active = routes._agent_capacity(db, 1)
+        assert limit == 10
+        assert len(active) == 10
+        with pytest.raises(HTTPException) as blocked:
+            routes._assert_agent_capacity(db, 1)
+        assert blocked.value.status_code == 409
+        assert "10/10" in str(blocked.value.detail)
+
+        db.get(GeoAgentRun, 100).status = "completed"
+        db.commit()
+        routes._assert_agent_capacity(db, 1)
 
 
 def test_worker_honors_cancellation_won_during_queue_handoff(review_client: TestClient) -> None:
