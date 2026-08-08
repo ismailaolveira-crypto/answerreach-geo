@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { getLLMProviderReadiness, getLLMProviders, type LLMProvider, type LLMProviderReadiness } from "@/lib/geo-provider-api";
 import { BrandLogo } from "@/components/brand-logo";
-import { getCleanroomEvidence, getOfficialProviderObservationBatches } from "@/lib/cleanroom-v1-api";
+import { getCleanroomActions, getCleanroomActionWorkbenchState, getCleanroomEvidence, getOfficialProviderObservationBatches } from "@/lib/cleanroom-v1-api";
 
 type Props = { params: Promise<{ workspaceId: string }> };
 type PlatformDefinition = {
@@ -78,11 +78,13 @@ function connectionState(provider: LLMProvider | undefined, readiness?: LLMProvi
 
 export default async function OperationsPage({ params }: Props) {
   const { workspaceId } = await params;
-  const [evidence, providers, readinessRows, recentBatches] = await Promise.all([
+  const [evidence, providers, readinessRows, recentBatches, actions, actionState] = await Promise.all([
     getCleanroomEvidence(workspaceId),
     getLLMProviders(),
     getLLMProviderReadiness(),
     getOfficialProviderObservationBatches(workspaceId, { page: 1, pageSize: 5 }),
+    getCleanroomActions(workspaceId),
+    getCleanroomActionWorkbenchState(workspaceId),
   ]);
   const readinessByProvider = new Map(readinessRows.map((item) => [item.provider_id, item]));
   const rows = PLATFORMS.map((definition) => {
@@ -113,6 +115,18 @@ export default async function OperationsPage({ params }: Props) {
   const testedAvailableCount = rows.filter((item) => item.testedAvailable).length;
   const acceptedCount = rows.filter((item) => item.accepted).length;
   const needsAttentionCount = rows.length - acceptedCount;
+  const actionById = new Map(actions.map((action) => [action.id, action]));
+  const reviewPackageByAssetId = new Map(actionState.review_packages.map((reviewPackage) => [reviewPackage.asset.id, reviewPackage]));
+  const actionRuns = [...actionState.agent_runs].sort((a, b) => b.id - a.id);
+  const pendingReviewPackages = actionRuns
+    .filter((run) => run.status === "awaiting_review")
+    .map((run) => reviewPackageByAssetId.get(Number(run.result_snapshot.asset_id)))
+    .filter((reviewPackage) => reviewPackage && !reviewPackage.approved_platform_keys.length);
+  const regenerationCount = pendingReviewPackages.filter((reviewPackage) => (
+    reviewPackage?.asset.status === "changes_requested"
+    || (Number(reviewPackage?.available_sourced_brand_fact_count) > 0 && Number(reviewPackage?.sourced_brand_fact_count) === 0)
+  )).length;
+  const readyReviewCount = pendingReviewPackages.length - regenerationCount;
 
   return <div className="sy-page">
     <header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header>
@@ -141,6 +155,40 @@ export default async function OperationsPage({ params }: Props) {
             </article>;
           })}
         </div>
+      </section>
+
+      <section className="sy-action-operations" aria-labelledby="action-operations-heading">
+        <div className="sy-section-heading">
+          <div><h2 id="action-operations-heading">行动闭环</h2><p>来自持久化 Agent、内容审核、草稿交付和复测记录；等待人工不会显示为完成。</p></div>
+          <Link href={`/geo/${workspaceId}/actions`}>进入优先行动</Link>
+        </div>
+        <div className="sy-action-operation-summary" aria-label="行动闭环摘要">
+          <article><small>Agent 任务</small><strong>{actionRuns.length}</strong><span>{actionRuns.filter((run) => run.status === "awaiting_review").length} 条等待人工处置</span></article>
+          <article className="is-review"><small>可以审核</small><strong>{readyReviewCount}</strong><span>事实与平台稿已持久化</span></article>
+          <article className="is-regenerate"><small>需重新生成</small><strong>{regenerationCount}</strong><span>旧稿不能进入交付</span></article>
+          <article><small>交付任务</small><strong>{actionState.distribution_runs.length}</strong><span>复测记录 {actionState.retests.length} 条</span></article>
+        </div>
+        {actionRuns.length ? <div className="sy-action-run-list" aria-label="最近 Agent 行动任务">{actionRuns.slice(0, 4).map((run) => {
+          const assetId = Number(run.result_snapshot.asset_id) || null;
+          const reviewPackage = assetId ? reviewPackageByAssetId.get(assetId) : undefined;
+          const action = actionById.get(run.action_id);
+          const needsRegeneration = Boolean(reviewPackage && (
+            reviewPackage.asset.status === "changes_requested"
+            || (reviewPackage.available_sourced_brand_fact_count > 0 && reviewPackage.sourced_brand_fact_count === 0)
+          ));
+          const status = run.status === "awaiting_review"
+            ? needsRegeneration ? { tone: "regenerate", label: "需重新生成" } : { tone: "review", label: "等待人工审核" }
+            : ["queued", "resuming", "running", "cancelling"].includes(run.status)
+              ? { tone: "running", label: "Agent 执行中" }
+              : run.status === "failed" || run.status === "timed_out"
+                ? { tone: "failed", label: run.status === "timed_out" ? "运行超时" : "运行失败" }
+                : { tone: "neutral", label: run.status };
+          const sourcedClaims = reviewPackage?.claims.filter((claim) => claim.verification_status === "source_linked").length ?? 0;
+          return <Link className={`sy-action-run-row is-${status.tone}`} href={`/geo/${workspaceId}/actions`} key={run.id}>
+            <div><small>Run #{run.id} · {formatOperationTime(run.updated_at)}</small><b>{action?.title || `行动 #${run.action_id}`}</b><span>{reviewPackage ? `内容资产 #${reviewPackage.asset.id} · ${reviewPackage.variants.length} 个平台稿 · ${sourcedClaims} 条有来源主张 · ${reviewPackage.pending_claim_count} 条待判断` : run.error_message || "尚未产生可审核内容资产"}</span></div>
+            <em>{status.label}</em><i>查看行动 →</i>
+          </Link>;
+        })}</div> : <div className="sy-runtime-empty"><b>还没有 Agent 行动任务</b><span>从优先行动选择一条真实机会后，生成、审核和交付状态会出现在这里。</span><Link href={`/geo/${workspaceId}/actions`}>进入优先行动 →</Link></div>}
       </section>
 
       <section className="sy-runtime-section" aria-labelledby="recent-runtime-heading">
