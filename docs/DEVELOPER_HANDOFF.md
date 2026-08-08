@@ -154,4 +154,7 @@ pnpm run verify
 - 设置页已增加“04 · Agent 事实底座”：品牌事实需要名称、可公开陈述和公开 `http/https` 来源，可停用/恢复但不删除历史；Token 与密钥仍不回显。
 - 若官网审计包含 `client_rendering_required`、`server_visible_content_missing` 或 `server_visible_content_too_short`，启动 Agent 前必须有启用且带来源的品牌事实；官网原始 HTML 已有完整产品正文时不额外阻塞。
 - Agent 结果快照保存使用过的品牌事实 ID、带来源事实 ID 和数量。历史整改框架在审核工作台显示明确警告，前端批准按钮与后端审核 API 双重拒绝批准；刷新行动页默认恢复最新 Action。
+- 真实修订 `Action #6 / Run #2 / 内容资产 #3 v2` 已完成：第 2 轮耗时 3 分 33 秒，使用 3 条官网来源品牌事实，生成 1 个官网版本、11 条主张（10 条有来源、1 条待人工确认）。当前保持 `awaiting_review`，尚未批准、交付或发布。
+- 恢复和修订沿用同一个 run 时，进度接口按最新 `run_queued / resume_queued / revision_queued` 边界计算本轮耗时、事件与工件；界面同时显示轮次、本轮事件数和累计事件数，不再把首轮耗时或旧工件冒充为当前轮结果。
+- 官网审核门禁以内容资产内实际引用的启用品牌事实为准：Claim 需要匹配事实 ID，或同时匹配事实正文与来源 URL。单独修改 Agent 结果快照不能绕过门禁；后续新稿会把匹配的 Claim 持久化为 `support_type=brand_fact` 并保存 `support_id`。
 - `tests/test_website_audit.py` 覆盖事实缺失门禁、无效来源 URL、停用/恢复、审批拒绝和有来源后允许通过。

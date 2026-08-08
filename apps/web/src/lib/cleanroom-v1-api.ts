@@ -651,6 +651,9 @@ export type CleanroomAgentProgressArtifact = {
 export type CleanroomAgentRunProgress = {
 	run: CleanroomAgentRun;
 	stages: CleanroomAgentProgressStage[];
+	attempt_number: number;
+	attempt_event_count: number;
+	attempt_started_at?: string | null;
 	progress_percent: number;
 	elapsed_seconds: number;
 	timeout_seconds: number;
@@ -804,6 +807,9 @@ export type CleanroomContentReviewPackage = {
 	reviews: CleanroomContentReview[];
 	pending_claim_count: number;
 	approved_platform_keys: string[];
+	requires_sourced_brand_facts: boolean;
+	sourced_brand_fact_count: number;
+	sourced_brand_fact_ids: number[];
 };
 
 export type CleanroomContentLibraryItem = {

@@ -1145,6 +1145,9 @@ class AgentProgressArtifactRead(BaseModel):
 class AgentRunProgressRead(BaseModel):
     run: AgentRunRead
     stages: list[AgentProgressStageRead]
+    attempt_number: int = Field(ge=1)
+    attempt_event_count: int = Field(ge=0)
+    attempt_started_at: datetime | None = None
     progress_percent: int = Field(ge=0, le=100)
     elapsed_seconds: int = Field(ge=0)
     timeout_seconds: int = Field(ge=60)
@@ -1272,6 +1275,9 @@ class ContentReviewPackageRead(BaseModel):
     reviews: list[ContentReviewRead] = Field(default_factory=list)
     pending_claim_count: int = 0
     approved_platform_keys: list[str] = Field(default_factory=list)
+    requires_sourced_brand_facts: bool = False
+    sourced_brand_fact_count: int = Field(default=0, ge=0)
+    sourced_brand_fact_ids: list[int] = Field(default_factory=list)
 
 
 class ContentReviewDecision(BaseModel):

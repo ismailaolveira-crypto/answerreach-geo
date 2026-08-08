@@ -4085,6 +4085,53 @@ def list_content_assets(
     )
 
 
+def _normalized_fact_source(value: str | None) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _asset_sourced_brand_facts(
+    db: Session,
+    asset: GeoContentAsset,
+    claims: list[GeoContentClaim] | None = None,
+) -> list[GeoBrandFact]:
+    active_facts = list(
+        db.scalars(
+            select(GeoBrandFact)
+            .where(
+                GeoBrandFact.workspace_id == asset.workspace_id,
+                GeoBrandFact.status == "active",
+                GeoBrandFact.source_url.is_not(None),
+                func.length(func.trim(GeoBrandFact.source_url)) > 0,
+            )
+            .order_by(GeoBrandFact.id)
+        )
+    )
+    if not active_facts:
+        return []
+    asset_claims = claims if claims is not None else list(
+        db.scalars(
+            select(GeoContentClaim).where(GeoContentClaim.content_asset_id == asset.id)
+        )
+    )
+    facts_by_id = {fact.id: fact for fact in active_facts}
+    facts_by_value = {
+        (fact.statement.strip(), _normalized_fact_source(fact.source_url)): fact
+        for fact in active_facts
+    }
+    matched: dict[int, GeoBrandFact] = {}
+    for claim in asset_claims:
+        if claim.verification_status not in {"source_linked", "verified", "human_confirmed"}:
+            continue
+        fact = facts_by_id.get(int(claim.support_id or 0))
+        if fact is None:
+            fact = facts_by_value.get(
+                (claim.claim_text.strip(), _normalized_fact_source(claim.source_url))
+            )
+        if fact is not None:
+            matched[fact.id] = fact
+    return [matched[fact_id] for fact_id in sorted(matched)]
+
+
 def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
     claims = list(
         db.scalars(
@@ -4125,6 +4172,15 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
     approved_platform_keys = [
         variant.platform_key for variant in variants if variant.id in approved_variant_ids
     ]
+    brief = db.get(GeoContentBrief, asset.brief_id)
+    action = db.get(GeoOptimizationAction, brief.action_id) if brief else None
+    opportunity = (
+        db.get(GeoActionOpportunity, action.opportunity_id)
+        if action is not None and action.opportunity_id
+        else None
+    )
+    requires_sourced_brand_facts = _website_requires_sourced_brand_facts(opportunity)
+    sourced_brand_facts = _asset_sourced_brand_facts(db, asset, claims)
     return {
         "asset": asset,
         "claims": claims,
@@ -4135,6 +4191,9 @@ def _content_review_package(db: Session, asset: GeoContentAsset) -> dict:
             for claim in claims
         ),
         "approved_platform_keys": list(dict.fromkeys(approved_platform_keys)),
+        "requires_sourced_brand_facts": requires_sourced_brand_facts,
+        "sourced_brand_fact_count": len(sourced_brand_facts),
+        "sourced_brand_fact_ids": [fact.id for fact in sourced_brand_facts],
     }
 
 
@@ -4311,25 +4370,7 @@ def decide_content_review(
         and opportunity.opportunity_type == "website_citation_readiness"
         and _website_requires_sourced_brand_facts(opportunity)
     ):
-        asset_run = next(
-            (
-                candidate
-                for candidate in db.scalars(
-                    select(GeoAgentRun)
-                    .where(
-                        GeoAgentRun.workspace_id == workspace_id,
-                        GeoAgentRun.action_id == action.id,
-                    )
-                    .order_by(GeoAgentRun.id.desc())
-                )
-                if int((candidate.result_snapshot or {}).get("asset_id") or 0) == asset.id
-            ),
-            None,
-        )
-        sourced_fact_count = int(
-            (asset_run.result_snapshot or {}).get("sourced_brand_fact_count") or 0
-        ) if asset_run else 0
-        if sourced_fact_count == 0:
+        if not _asset_sourced_brand_facts(db, asset, claims):
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -5362,16 +5403,35 @@ def _build_agent_run_progress(db: Session, run: GeoAgentRun) -> dict:
             .order_by(GeoAgentEvent.sequence)
         )
     )
-    attempt_boundary = max(
-        (
-            index
-            for index, event in enumerate(events)
-            if event.event_type in {"run_queued", "resume_queued"}
-            or (event.event_type == "stage_started" and event.stage == "preparing_context")
-        ),
-        default=0,
-    )
+    attempt_markers = [
+        index
+        for index, event in enumerate(events)
+        if event.event_type in {"run_queued", "resume_queued", "revision_queued"}
+    ]
+    if attempt_markers:
+        attempt_boundary = attempt_markers[-1]
+        attempt_number = len(attempt_markers)
+    else:
+        # Older persisted runs may predate explicit queue events. Their latest
+        # preparing_context event is the safest available attempt boundary.
+        attempt_boundary = max(
+            (
+                index
+                for index, event in enumerate(events)
+                if event.event_type == "stage_started" and event.stage == "preparing_context"
+            ),
+            default=0,
+        )
+        attempt_number = 1
     attempt_events = events[attempt_boundary:]
+    attempt_started_at = next(
+        (
+            event.created_at
+            for event in attempt_events
+            if event.event_type == "stage_started" and event.stage == "preparing_context"
+        ),
+        attempt_events[0].created_at if attempt_events else (run.started_at or run.created_at),
+    )
     artifacts = list(
         db.scalars(
             select(GeoAgentArtifact)
@@ -5379,6 +5439,11 @@ def _build_agent_run_progress(db: Session, run: GeoAgentRun) -> dict:
             .order_by(GeoAgentArtifact.id)
         )
     )
+    attempt_artifacts = [
+        artifact
+        for artifact in artifacts
+        if _utc_datetime(artifact.created_at) >= _utc_datetime(attempt_started_at)
+    ]
     stage_index = {key: index for index, (key, _label, _weight) in enumerate(AGENT_PROGRESS_STAGES)}
     latest_by_stage = {
         key: next((event for event in reversed(attempt_events) if event.stage == key), None)
@@ -5427,15 +5492,18 @@ def _build_agent_run_progress(db: Session, run: GeoAgentRun) -> dict:
         )
 
     timeout_seconds = max(60, min(int(get_settings().agent_run_timeout_seconds), 3600))
-    started_at = run.started_at or run.created_at
+    started_at = attempt_started_at
     finished_at = run.finished_at or datetime.now(timezone.utc)
     elapsed_seconds = max(0, int((_utc_datetime(finished_at) - _utc_datetime(started_at)).total_seconds()))
     timeout_remaining_seconds = None
-    if active_status and run.started_at is not None:
+    if active_status:
         timeout_remaining_seconds = max(0, timeout_seconds - elapsed_seconds)
     return {
         "run": run,
         "stages": stages,
+        "attempt_number": attempt_number,
+        "attempt_event_count": len(attempt_events),
+        "attempt_started_at": attempt_started_at,
         "progress_percent": progress_percent,
         "elapsed_seconds": elapsed_seconds,
         "timeout_seconds": timeout_seconds,
@@ -5450,7 +5518,7 @@ def _build_agent_run_progress(db: Session, run: GeoAgentRun) -> dict:
                 "size_bytes": artifact.size_bytes,
                 "created_at": artifact.created_at,
             }
-            for artifact in artifacts
+            for artifact in attempt_artifacts
         ],
     }
 

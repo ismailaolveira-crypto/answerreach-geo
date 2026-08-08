@@ -467,6 +467,12 @@ def test_website_draft_requires_active_sourced_brand_fact(
     assert review_blocked.status_code == 409
     assert "通用整改框架" in review_blocked.json()["detail"]
 
+    blocked_package = client.get(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/review-package"
+    ).json()
+    assert blocked_package["requires_sourced_brand_facts"] is True
+    assert blocked_package["sourced_brand_fact_count"] == 0
+
     with website_audit_api.session_factory() as db:
         run = db.get(GeoAgentRun, queued.json()["id"])
         assert run is not None
@@ -476,6 +482,38 @@ def test_website_draft_requires_active_sourced_brand_fact(
             "sourced_brand_fact_ids": [fact_id],
         }
         db.commit()
+
+    metadata_only_is_blocked = client.post(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["official_site"],
+            "note": "仅有运行元数据，不应绕过内容证据门禁",
+        },
+    )
+    assert metadata_only_is_blocked.status_code == 409
+
+    with website_audit_api.session_factory() as db:
+        db.add(
+            GeoContentClaim(
+                content_asset_id=asset_id,
+                claim_key="brand-fact-1",
+                claim_text="春秋元泉面向企业提供 Token 统一管控能力。",
+                support_type="brand_fact",
+                support_id=fact_id,
+                source_url="https://brand.example/product",
+                verification_status="source_linked",
+                introduced_by_model=False,
+            )
+        )
+        db.commit()
+
+    ready_package = client.get(
+        f"/api/v1/workspaces/1/content-assets/{asset_id}/review-package"
+    ).json()
+    assert ready_package["sourced_brand_fact_count"] == 1
+    assert ready_package["sourced_brand_fact_ids"] == [fact_id]
 
     approved = client.post(
         f"/api/v1/workspaces/1/content-assets/{asset_id}/reviews",

@@ -1,4 +1,5 @@
 from collections.abc import Generator
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -399,6 +400,44 @@ def test_agent_progress_is_derived_from_persisted_events_without_local_paths(
     assert payload["artifacts"][0]["artifact_kind"] == "structured_result"
     assert "uri" not in payload["artifacts"][0]
     assert "metadata_json" not in payload["artifacts"][0]
+
+
+def test_agent_progress_scopes_timing_and_artifacts_to_latest_attempt(
+    review_client: TestClient,
+) -> None:
+    now = datetime.now(timezone.utc)
+    first_started_at = now - timedelta(minutes=30)
+    latest_started_at = now - timedelta(seconds=8)
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        assert run is not None
+        run.status = "running"
+        run.stage = "researching_platform"
+        run.started_at = first_started_at
+        run.finished_at = None
+        db.add_all(
+            [
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=1, event_type="run_queued", stage="queued", message="首次入队", detail={}, created_at=first_started_at),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=2, event_type="stage_started", stage="preparing_context", message="首次执行", detail={}, created_at=first_started_at),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=3, event_type="revision_queued", stage="queued", message="修订入队", detail={}, created_at=latest_started_at),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=4, event_type="stage_started", stage="preparing_context", message="开始修订", detail={}, created_at=latest_started_at),
+                GeoAgentEvent(workspace_id=1, agent_run_id=1, sequence=5, event_type="stage_started", stage="researching_platform", message="修订中", detail={}, created_at=latest_started_at),
+                GeoAgentArtifact(workspace_id=1, agent_run_id=1, artifact_kind="structured_result", uri="/private/agent-runs/1/old.json", sha256="a" * 64, size_bytes=64, metadata_json={}, created_at=first_started_at),
+                GeoAgentArtifact(workspace_id=1, agent_run_id=1, artifact_kind="structured_result", uri="/private/agent-runs/1/current.json", sha256="b" * 64, size_bytes=96, metadata_json={}, created_at=latest_started_at + timedelta(seconds=1)),
+            ]
+        )
+        db.commit()
+
+    response = review_client.get("/api/v1/workspaces/1/agent-runs/1/progress")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["attempt_number"] == 2
+    assert payload["attempt_event_count"] == 3
+    assert payload["event_count"] == 5
+    assert 7 <= payload["elapsed_seconds"] <= 20
+    assert payload["timeout_remaining_seconds"] == payload["timeout_seconds"] - payload["elapsed_seconds"]
+    assert [artifact["sha256"] for artifact in payload["artifacts"]] == ["b" * 64]
 
 
 def test_rejected_asset_can_resume_original_agent_thread_for_a_new_version(

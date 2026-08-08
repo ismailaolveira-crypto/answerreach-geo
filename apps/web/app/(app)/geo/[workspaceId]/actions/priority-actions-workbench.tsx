@@ -389,8 +389,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const currentAssetId = Number(currentRun?.result_snapshot.asset_id) || null;
 	const currentReviewPackage = reviewPackages.find((item) => item.asset.id === currentAssetId);
 	const websiteGenerationReady = !selected?.requiresSourcedBrandFacts || activeSourcedBrandFactCount > 0;
-	const websiteDraftReadyForApproval = !selected?.requiresSourcedBrandFacts
-		|| Number(currentRun?.result_snapshot.sourced_brand_fact_count || 0) > 0;
+	const websiteDraftReadyForApproval = !currentReviewPackage?.requires_sourced_brand_facts
+		|| currentReviewPackage.sourced_brand_fact_count > 0;
 	const reviewNeedsRevision = currentReviewPackage?.asset.status === "changes_requested";
 	const approvedPlatformKeys = currentReviewPackage?.approved_platform_keys ?? [];
 	const syncableApprovedPlatformKeys = approvedPlatformKeys.filter((key) => key === "zhihu" || key === "wechat");
@@ -449,7 +449,9 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			: agentTransport === "connecting"
 				? "正在连接实时事件"
 				: visibleAgentProgress
-					? `${visibleAgentProgress.event_count} 条持久化事件`
+					? visibleAgentProgress.attempt_number > 1
+						? `本轮 ${visibleAgentProgress.attempt_event_count} 条 · 累计 ${visibleAgentProgress.event_count} 条事件`
+						: `${visibleAgentProgress.event_count} 条持久化事件`
 					: "正在读取持久化进度";
 	const availableTargetPlatforms = selected?.type === "website"
 		? platformOptions.filter((platform) => platform.key === "official_site")
@@ -944,7 +946,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							{currentRun ? <div className="pa-agent-run">
 								<div className="pa-agent-runtime">
 									<span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span>
-									<div><b>{currentRun.model || "Local Codex"}</b><small>Run #{currentRun.id} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div>
+									<div><b>{currentRun.model || "Local Codex"}</b><small>Run #{currentRun.id}{visibleAgentProgress && visibleAgentProgress.attempt_number > 1 ? ` · 第 ${visibleAgentProgress.attempt_number} 轮执行` : ""} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div>
 									{visibleAgentProgress ? <strong>{visibleAgentProgress.progress_percent}%</strong> : null}
 								</div>
 								<p>{agentEvents.at(-1)?.message || (currentRun.status === "queued" ? "已入队，等待 worker 接受。" : "正在读取持久化进度…")}</p>
@@ -963,12 +965,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 										</li>)}
 									</ol>
 									<div className="pa-agent-artifacts">
-										<b>已持久化结果</b>
+										<b>本轮持久化结果</b>
 										{visibleAgentProgress.artifacts.length ? visibleAgentProgress.artifacts.map((artifact) => <span key={artifact.id}>结构化结果 · {formatArtifactSize(artifact.size_bytes)} · 已校验归档</span>) : <span>尚未产生可审核工件</span>}
-										{currentReviewPackage ? <span>内容资产 #{currentReviewPackage.asset.id} · {currentReviewPackage.variants.length} 个平台稿 · {currentReviewPackage.claims.length} 条主张</span> : null}
+										{currentReviewPackage && !(reviewNeedsRevision && runActive) ? <span>内容资产 #{currentReviewPackage.asset.id} · {currentReviewPackage.variants.length} 个平台稿 · {currentReviewPackage.claims.length} 条主张</span> : null}
 									</div>
 									{visibleAgentProgress.event_count ? <button className="pa-agent-log-toggle" type="button" onClick={() => setAgentDetailsExpanded((value) => !value)} aria-expanded={agentDetailsExpanded}>{agentDetailsExpanded ? "收起执行记录" : `查看 ${visibleAgentProgress.event_count} 条执行记录`} <Icon name="chevron" /></button> : null}
-									{agentDetailsExpanded ? <><small className="pa-agent-log-note">连续重复事件已合并展示，原始事件完整保留。</small><ul className="pa-agent-event-log">{groupedAgentEvents.map((event) => <li key={event.key}><time>{formatEventTime(event.firstAt)}{event.count > 1 ? `–${formatEventTime(event.lastAt)}` : ""}</time><span><b>{agentStageLabels[event.stage] || event.stage}{event.count > 1 ? ` · ${event.count} 次` : ""}</b>{event.message}</span></li>)}</ul></> : null}
+									{agentDetailsExpanded ? <><small className="pa-agent-log-note">{visibleAgentProgress.attempt_number > 1 ? `当前为第 ${visibleAgentProgress.attempt_number} 轮；下方保留全部历史事件，` : ""}连续重复事件已合并展示，原始事件完整保留。</small><ul className="pa-agent-event-log">{groupedAgentEvents.map((event) => <li key={event.key}><time>{formatEventTime(event.firstAt)}{event.count > 1 ? `–${formatEventTime(event.lastAt)}` : ""}</time><span><b>{agentStageLabels[event.stage] || event.stage}{event.count > 1 ? ` · ${event.count} 次` : ""}</b>{event.message}</span></li>)}</ul></> : null}
 								</> : null}
 								{currentRun.status === "failed" && currentRun.error_message ? <p className="is-error">{currentRun.error_message}</p> : null}
 								<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "恢复原任务" : "Agent 正忙"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && !currentRun.codex_thread_id ? <button type="button" onClick={beginAgent} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "重新启动" : "Agent 正忙"}</button> : null}</div>

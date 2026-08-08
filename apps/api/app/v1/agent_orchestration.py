@@ -503,14 +503,35 @@ def _persist_result(
     )
     db.add(asset)
     db.flush()
+    active_brand_facts = list(
+        db.scalars(
+            select(GeoBrandFact).where(
+                GeoBrandFact.workspace_id == run.workspace_id,
+                GeoBrandFact.status == "active",
+                GeoBrandFact.source_url.is_not(None),
+                func.length(func.trim(GeoBrandFact.source_url)) > 0,
+            )
+        )
+    )
+    brand_facts_by_value = {
+        (fact.statement.strip(), str(fact.source_url or "").strip().rstrip("/")): fact
+        for fact in active_brand_facts
+    }
     for index, claim in enumerate(master.get("claims") or []):
         linked = claim.get("verification_status") == "source_linked" and claim.get("source_url")
+        brand_fact = brand_facts_by_value.get(
+            (
+                str(claim.get("text") or "").strip(),
+                str(claim.get("source_url") or "").strip().rstrip("/"),
+            )
+        ) if linked else None
         db.add(
             GeoContentClaim(
                 content_asset_id=asset.id,
                 claim_key=f"agent-{index + 1}",
                 claim_text=claim["text"],
-                support_type="public_source" if linked else "agent_pending",
+                support_type="brand_fact" if brand_fact else "public_source" if linked else "agent_pending",
+                support_id=brand_fact.id if brand_fact else None,
                 source_url=claim.get("source_url") or None,
                 verification_status="source_linked" if linked else "pending",
                 introduced_by_model=True,
