@@ -123,7 +123,7 @@ export default async function QuestionAnalysisPage({
 				<Link href={`/geo/${workspaceId}/competitors`}>对比分析</Link>
 				<Link href={`/geo/${workspaceId}/operations`}>监控中心</Link>
 				<Link href={`/geo/${workspaceId}/operations`}>数据管理</Link>
-				<Link href="/admin/providers">设置</Link>
+				<Link href={`/admin/providers?workspace=${workspaceId}` as Route}>设置</Link>
 			</nav>
 			<div className="sy-top-actions" aria-label="账户工具"><span aria-hidden="true">?</span><span aria-hidden="true">♧</span><b>张</b><i aria-hidden="true">⌄</i></div>
 		</header>

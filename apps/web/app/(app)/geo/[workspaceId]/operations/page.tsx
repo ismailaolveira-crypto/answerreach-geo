@@ -141,12 +141,12 @@ export default async function OperationsPage({ params }: Props) {
       </section>
 
       <section className="sy-provider-section">
-        <div className="sy-section-heading"><div><h2>API 连接</h2><p>日常只需要维护 Key。模型、地址和搜索能力可在高级配置中调整。</p></div><Link href="/admin/providers">管理全部连接</Link></div>
+        <div className="sy-section-heading"><div><h2>API 连接</h2><p>日常只需要维护 Key。模型、地址和搜索能力可在高级配置中调整。</p></div><Link href={`/admin/providers?workspace=${workspaceId}` as Route}>管理全部连接</Link></div>
         <div className="sy-provider-grid">
           {rows.map(({ definition, provider, diagnostic, providerEvidence, state }) => {
             const href = provider
               ? `/admin/providers/${provider.id}/test?return_to=/geo/${workspaceId}/operations`
-              : `/admin/providers?model=${definition.key}`;
+              : `/admin/providers?model=${definition.key}&workspace=${workspaceId}`;
             return <article className={`sy-provider-card is-${state.tone}`} data-provider-key={definition.key} key={definition.key}>
               <header><BrandLogo brand={definition.key} label={definition.label} className="sy-provider-mark" /><div><h3>{definition.label}</h3><p>{definition.note}</p></div><i>{state.label}</i></header>
               <div className="sy-provider-facts"><span><small>当前模型</small><b>{provider?.model_name || "尚未配置"}</b></span><span><small>API Key</small><b>{diagnostic?.auth_ready ? "已安全配置" : "未配置"}</b></span><span><small>闭环证据</small><b>{providerEvidence ? `#${providerEvidence.id} 已归档` : "尚未生成"}</b></span></div>

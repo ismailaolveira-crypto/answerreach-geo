@@ -96,7 +96,7 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
         <Link href={`/geo/${workspaceId}`}>决策地图</Link>
         <Link aria-current="page" href={`/geo/${workspaceId}/competitors` as Route}>竞品对比</Link>
         <Link href={`/geo/${workspaceId}/actions`}>优化行动</Link>
-        <Link href="/admin/providers">模型与渠道</Link>
+        <Link href={`/admin/providers?workspace=${workspaceId}` as Route}>模型与渠道</Link>
       </nav>
     </header>
 

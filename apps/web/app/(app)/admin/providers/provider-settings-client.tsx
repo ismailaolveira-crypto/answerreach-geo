@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import type { Route } from "next";
 import { createProviderAction, saveOfficialProviderAction } from "@/app/actions";
 import { SubmitButton } from "@/app/(app)/submit-button";
 import { BrandLogo } from "@/components/brand-logo";
@@ -12,6 +13,8 @@ type Props = {
   providers: LLMProvider[];
   readinessRows: LLMProviderReadiness[];
   initialKey: ProviderCatalogKey;
+  workspaceId?: string;
+  loadError?: string;
 };
 
 function readableTime(value?: string | null) {
@@ -21,6 +24,7 @@ function readableTime(value?: string | null) {
 
 function channelState(readiness?: LLMProviderReadiness) {
   if (readiness?.collection_ready) return { label: "健康", className: "is-ready" };
+  if (readiness?.latest_test && !readiness.test_fresh) return { label: "需重测", className: "is-pending" };
   if (readiness?.latest_test?.ok === false) return { label: "测试失败", className: "is-failed" };
   if (readiness?.diagnostic.auth_ready) return { label: "待测试", className: "is-pending" };
   return { label: "未配置", className: "is-muted" };
@@ -42,11 +46,29 @@ function officialProviderForModel(
 function officialModelState(provider: LLMProvider | undefined, readiness?: LLMProviderReadiness) {
   if (!provider || !readiness?.diagnostic.auth_ready) return { label: "未配置", className: "is-muted" };
   if (readiness.collection_ready) return { label: "已连接", className: "is-ready" };
+  if (readiness.latest_test && !readiness.test_fresh) return { label: "需重测", className: "is-pending" };
   if (readiness.latest_test?.ok === false) return { label: "测试失败", className: "is-failed" };
   return { label: "待测试", className: "is-pending" };
 }
 
-export default function ProviderSettingsClient({ providers, readinessRows, initialKey }: Props) {
+function latencyState(latency?: number | null) {
+  if (!latency) return { label: "未执行", className: "" };
+  if (latency < 5000) return { label: "正常", className: "is-good" };
+  if (latency < 20000) return { label: "偏慢", className: "is-warning" };
+  return { label: "很慢", className: "is-warning" };
+}
+
+function hubHref(key: ProviderCatalogKey, workspaceId?: string) {
+  const params = new URLSearchParams({ model: key });
+  if (workspaceId) params.set("workspace", workspaceId);
+  return `/admin/providers?${params.toString()}`;
+}
+
+function testHref(providerId: number, key: ProviderCatalogKey, workspaceId?: string) {
+  return `/admin/providers/${providerId}/test?return_to=${encodeURIComponent(hubHref(key, workspaceId))}`;
+}
+
+export default function ProviderSettingsClient({ providers, readinessRows, initialKey, workspaceId, loadError }: Props) {
   const [selectedKey, setSelectedKey] = useState(initialKey);
   const readinessByProvider = useMemo(() => new Map(readinessRows.map((item) => [item.provider_id, item])), [readinessRows]);
   const selectedModel = PROVIDER_CATALOG.find((item) => item.key === selectedKey) ?? PROVIDER_CATALOG[0];
@@ -64,15 +86,29 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
     const provider = officialProviderForModel(providers, item.key);
     return provider ? readinessByProvider.get(provider.id)?.collection_ready : false;
   }).length;
+  const overallState = healthyCount === PROVIDER_CATALOG.length ? "is-ready" : healthyCount > 0 ? "is-partial" : "is-pending";
+  const selectedLatency = latencyState(primaryReadiness?.latest_test?.latency_ms);
 
   function selectModel(key: ProviderCatalogKey) {
     setSelectedKey(key);
   }
 
+  if (loadError) return <main className="provider-hub">
+    <header className="provider-hub-heading">
+      <div><p>运营设置</p><h1>模型与渠道</h1><span>统一维护模型、API 渠道和联网能力。</span></div>
+      <div className="provider-overall-state is-failed"><i />状态暂时不可用</div>
+    </header>
+    <section className="provider-load-error" role="alert">
+      <span aria-hidden="true">!</span>
+      <div><h2>没有读取到渠道真实状态</h2><p>{loadError} 为避免把读取失败误显示成“未配置”，本页已暂停编辑；已有 Key 和渠道不会被改动。</p></div>
+      <div><Link href={hubHref(initialKey, workspaceId) as Route}>重新读取</Link>{workspaceId ? <Link href={`/geo/${workspaceId}/operations` as Route}>查看运营状态</Link> : <Link href="/">返回工作区</Link>}</div>
+    </section>
+  </main>;
+
   return <main className="provider-hub">
     <header className="provider-hub-heading">
       <div><p>运营设置</p><h1>模型与渠道</h1><span>统一维护模型、API 渠道和联网能力。切换模型只切换视图，不会执行测试。</span></div>
-      <div className={`provider-overall-state ${healthyCount ? "is-ready" : "is-pending"}`}><i />整体连接状态：{healthyCount ? `${healthyCount} 个渠道可观测` : "待完成测试"}</div>
+      <div className={`provider-overall-state ${overallState}`}><i />渠道准备度：{healthyCount}/{PROVIDER_CATALOG.length} 可观测</div>
     </header>
 
     <section className="provider-hub-models" aria-label="选择模型">
@@ -104,7 +140,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
             return <article key={provider.id} className={primaryProvider?.id === provider.id ? "is-primary" : ""}>
               <div><i className={state.className} /><span><b>{provider === volcengineProvider ? "火山引擎渠道" : `${selectedModel.label} 官方渠道`}</b><small>{provider.model_name} · {provider.api_base_url || "默认官方端点"}</small></span></div>
               <span className={`provider-status-pill ${state.className}`}><i />{state.label}</span>
-              <Link href={`/admin/providers/${provider.id}/test?return_to=/admin/providers%3Fmodel%3D${selectedKey}`}>配置 / 测试</Link>
+              <Link href={testHref(provider.id, selectedKey, workspaceId) as Route}>配置 / 测试</Link>
             </article>;
           })}
         </div> : <div className="provider-config-empty"><BrandLogo brand={selectedModel.brand} label={selectedModel.label} /><div><b>还没有 {selectedModel.label} 渠道</b><p>填写下方必要信息即可创建；创建后由你决定何时测试。</p></div></div>}
@@ -118,6 +154,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
           <input type="hidden" name="api_base_url" value={selectedModel.defaultBaseUrl} />
           <input type="hidden" name="timeout_seconds" value="45" />
           <input type="hidden" name="currency" value="CNY" />
+          <input type="hidden" name="return_to" value={hubHref(selectedKey, workspaceId)} />
           <div className="provider-quick-fields">
             <label><span>官方模型</span><select name="model_name" defaultValue={primaryProvider?.model_name || selectedModel.defaultModel}>{selectedModel.modelOptions.map((model) => <option key={model.value} value={model.value}>{model.label}</option>)}</select></label>
             <label><span>API Key</span><input name="api_key" type="password" autoComplete="off" placeholder={primaryReadiness?.diagnostic.auth_ready ? "已保存；留空保持不变" : "粘贴官方 API Key"} /></label>
@@ -129,7 +166,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
         <details className="provider-custom-channels">
           <summary><span>自定义渠道</span><small>{customProviders.length ? `${customProviders.length} 个已收起` : "按需手动添加"}</small><i>＋</i></summary>
           <div>
-            {customProviders.length ? <div className="provider-config-channels">{customProviders.map((provider) => <article key={provider.id}><div><span><b>{provider.name}</b><small>{provider.model_name} · {provider.api_base_url || "自定义端点"}</small></span></div><Link href={`/admin/providers/${provider.id}/test?return_to=/admin/providers%3Fmodel%3D${selectedKey}`}>配置 / 测试</Link></article>)}</div> : null}
+            {customProviders.length ? <div className="provider-config-channels">{customProviders.map((provider) => <article key={provider.id}><div><span><b>{provider.name}</b><small>{provider.model_name} · {provider.api_base_url || "自定义端点"}</small></span></div><Link href={testHref(provider.id, selectedKey, workspaceId) as Route}>配置 / 测试</Link></article>)}</div> : null}
             <form action={createProviderAction} className="provider-custom-form">
               <input type="hidden" name="platform_key" value={selectedKey} /><input type="hidden" name="channel_role" value="custom" /><input type="hidden" name="status" value="active" /><input type="hidden" name="timeout_seconds" value="45" />
               <label><span>渠道名称</span><input name="name" required placeholder="例如：企业代理渠道" /></label>
@@ -147,19 +184,19 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
         <header><div><h2>渠道健康</h2><p>{primaryProvider?.name || `${selectedModel.label} 官方渠道`}</p></div><span className={`provider-status-pill ${primaryState.className}`}><i />{primaryState.label}</span></header>
         <dl>
           <div><dt>最近测试</dt><dd>{readableTime(primaryReadiness?.latest_test?.created_at)}<em className={primaryReadiness?.latest_test?.ok ? "is-good" : ""}>{primaryReadiness?.latest_test ? primaryReadiness.latest_test.ok ? "成功" : "失败" : "未执行"}</em></dd></div>
-          <div><dt>最近延迟</dt><dd>{primaryReadiness?.latest_test?.latency_ms ? `${primaryReadiness.latest_test.latency_ms} ms` : "—"}<em>{primaryReadiness?.latest_test?.latency_ms && primaryReadiness.latest_test.latency_ms < 5000 ? "正常" : "待测"}</em></dd></div>
+          <div><dt>最近延迟</dt><dd>{primaryReadiness?.latest_test?.latency_ms ? `${primaryReadiness.latest_test.latency_ms} ms` : "—"}<em className={selectedLatency.className}>{selectedLatency.label}</em></dd></div>
           <div><dt>联网搜索能力</dt><dd>{primaryReadiness?.diagnostic.supports_web_search ? "已声明支持" : "尚未验证"}<em className={primaryReadiness?.diagnostic.supports_web_search ? "is-good" : ""}>{primaryReadiness?.diagnostic.supports_web_search ? "✓" : "—"}</em></dd></div>
           <div><dt>来源归档门禁</dt><dd>{primaryReadiness?.collection_ready ? "可进入决策地图" : "测试后确认"}<em className={primaryReadiness?.collection_ready ? "is-good" : ""}>{primaryReadiness?.collection_ready ? "✓" : "—"}</em></dd></div>
           <div><dt>当前阻塞</dt><dd>{primaryProvider ? primaryReadiness?.diagnostic.auth_ready ? primaryReadiness?.collection_blocker || "无" : "API Key 尚未配置" : "尚未创建官方渠道"}<em className={primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "is-good" : ""}>{primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "正常" : "待处理"}</em></dd></div>
         </dl>
-        {primaryProvider ? <Link className="provider-test-explicit" href={`/admin/providers/${primaryProvider.id}/test?return_to=/admin/providers%3Fmodel%3D${selectedKey}`}>打开渠道设置与测试 <span>→</span></Link> : <span className="provider-test-explicit is-disabled">保存渠道后即可测试</span>}
+        {primaryProvider ? <Link className="provider-test-explicit" href={testHref(primaryProvider.id, selectedKey, workspaceId) as Route}>打开渠道设置与测试 <span>→</span></Link> : <span className="provider-test-explicit is-disabled">保存渠道后即可测试</span>}
         <small>只有你在下一页主动点击“测试渠道”时，系统才会产生真实 API 请求。</small>
       </section>
     </div>
 
     <section className="provider-observation-link">
       <div><p>观测工作台</p><h2>渠道准备好后，再去决策地图发起观测</h2><span>推荐问题、自定义问题、模型和运行次数都在同一个紧凑面板内完成。</span></div>
-      <Link href={`/geo/1?model=${selectedKey}`}>前往决策地图 <span>→</span></Link>
+      {workspaceId ? <Link href={`/geo/${workspaceId}?model=${selectedKey}` as Route}>前往决策地图 <span>→</span></Link> : <Link href="/">选择工作区 <span>→</span></Link>}
     </section>
   </main>;
 }

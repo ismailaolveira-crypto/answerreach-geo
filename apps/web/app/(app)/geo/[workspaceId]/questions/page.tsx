@@ -175,7 +175,7 @@ export default async function QuestionLibraryPage({
 						问题库
 					</Link>
 					<Link href={`/geo/${workspaceId}/actions`}>优化行动</Link>
-					<Link href="/admin/providers">模型与渠道</Link>
+					<Link href={`/admin/providers?workspace=${workspaceId}` as Route}>模型与渠道</Link>
 				</nav>
 			</header>
 			<main className="sy-question-library">

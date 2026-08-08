@@ -2,20 +2,20 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useState, type SVGProps } from "react";
 
 type IconName = "home" | "sources" | "compare" | "questions" | "actions" | "content" | "operations" | "providers" | "settings" | "chevron";
 
 const ITEMS: Array<{ key: string; label: string; icon: IconName; href: (id: string) => string }> = [
-	{ key: "overview", label: "决策地图", icon: "home", href: (id) => `/geo/${id}` },
-	{ key: "sources", label: "信源地图", icon: "sources", href: (id) => `/geo/${id}/sources` },
-	{ key: "competitors", label: "竞品对比", icon: "compare", href: (id) => `/geo/${id}/competitors` },
-	{ key: "questions", label: "问题库", icon: "questions", href: (id) => `/geo/${id}/questions` },
-	{ key: "actions", label: "优化行动", icon: "actions", href: (id) => `/geo/${id}/actions` },
-	{ key: "content", label: "内容库", icon: "content", href: (id) => `/geo/${id}/content` },
-	{ key: "operations", label: "运营状态", icon: "operations", href: (id) => `/geo/${id}/operations` },
-	{ key: "providers", label: "模型与渠道", icon: "providers", href: () => "/admin/providers" },
+	{ key: "overview", label: "决策地图", icon: "home", href: (id) => id ? `/geo/${id}` : "/" },
+	{ key: "sources", label: "信源地图", icon: "sources", href: (id) => id ? `/geo/${id}/sources` : "/" },
+	{ key: "competitors", label: "竞品对比", icon: "compare", href: (id) => id ? `/geo/${id}/competitors` : "/" },
+	{ key: "questions", label: "问题库", icon: "questions", href: (id) => id ? `/geo/${id}/questions` : "/" },
+	{ key: "actions", label: "优化行动", icon: "actions", href: (id) => id ? `/geo/${id}/actions` : "/" },
+	{ key: "content", label: "内容库", icon: "content", href: (id) => id ? `/geo/${id}/content` : "/" },
+	{ key: "operations", label: "运营状态", icon: "operations", href: (id) => id ? `/geo/${id}/operations` : "/" },
+	{ key: "providers", label: "模型与渠道", icon: "providers", href: (id) => id ? `/admin/providers?workspace=${encodeURIComponent(id)}` : "/admin/providers" },
 ];
 
 function activeKey(pathname: string) {
@@ -48,6 +48,7 @@ function NavIcon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement
 
 export function GeoFloatingSidebar() {
 	const pathname = usePathname();
+	const searchParams = useSearchParams();
 	const [expanded, setExpanded] = useState(true);
 
 	useEffect(() => {
@@ -60,7 +61,10 @@ export function GeoFloatingSidebar() {
 	}, []);
 
 	if (!pathname.startsWith("/geo/") && !pathname.startsWith("/admin/providers")) return null;
-	const workspaceId = pathname.match(/^\/geo\/([^/]+)/)?.[1] ?? "1";
+	const pathWorkspaceId = pathname.match(/^\/geo\/([^/]+)/)?.[1];
+	const queryWorkspaceId = searchParams.get("workspace") ?? "";
+	const workspaceId = pathWorkspaceId ?? (/^\d+$/.test(queryWorkspaceId) ? queryWorkspaceId : "");
+	const workspaceHome = workspaceId ? `/geo/${workspaceId}` : "/";
 	const current = activeKey(pathname);
 	const questionAnalysisActive = /^\/geo\/[^/]+\/questions\/(analysis|\d+)/.test(pathname);
 	const setSidebarExpanded = (next: boolean) => {
@@ -71,7 +75,7 @@ export function GeoFloatingSidebar() {
 	return <aside className={`geo-floating-sidebar${expanded ? " is-expanded" : ""}`} aria-label="春秋元泉 GEO 功能导航">
 		<div className="geo-floating-head">
 			{expanded ? <>
-				<Link className="geo-floating-brand" href={`/geo/${workspaceId}`} aria-label="返回决策地图">
+				<Link className="geo-floating-brand" href={workspaceHome as Route} aria-label={workspaceId ? "返回决策地图" : "返回工作区"}>
 					<span className="geo-floating-mark">◇</span><b>春秋元泉 GEO</b>
 				</Link>
 				<button type="button" className="geo-floating-toggle" onClick={() => setSidebarExpanded(false)} aria-expanded="true" aria-label="收起功能栏">
@@ -86,14 +90,14 @@ export function GeoFloatingSidebar() {
 				<Link href={item.href(workspaceId) as Route} className={current === item.key ? "is-active" : ""} aria-current={current === item.key ? "page" : undefined} title={!expanded ? item.label : undefined}>
 					<span className="geo-floating-icon"><NavIcon name={item.icon} /></span><span className="geo-floating-label">{item.label}</span>
 				</Link>
-				{item.key === "questions" && current === "questions" ? <Link className={`geo-floating-subnav${questionAnalysisActive ? " is-active" : ""}`} href={`/geo/${workspaceId}/questions/analysis` as Route} aria-current={questionAnalysisActive ? "page" : undefined} title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
+				{item.key === "questions" && current === "questions" && workspaceId ? <Link className={`geo-floating-subnav${questionAnalysisActive ? " is-active" : ""}`} href={`/geo/${workspaceId}/questions/analysis` as Route} aria-current={questionAnalysisActive ? "page" : undefined} title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
 			</div>)}
 		</nav>
 		<nav className="geo-floating-bottom-nav" aria-label="辅助导航">
-			<Link href={`/geo/${workspaceId}/settings` as Route} className={current === "settings" ? "is-active" : ""} aria-current={current === "settings" ? "page" : undefined} title={!expanded ? "设置" : undefined}>
+			<Link href={(workspaceId ? `/geo/${workspaceId}/settings` : "/") as Route} className={current === "settings" ? "is-active" : ""} aria-current={current === "settings" ? "page" : undefined} title={!expanded ? "设置" : undefined}>
 				<span className="geo-floating-icon"><NavIcon name="settings" /></span><span className="geo-floating-label">设置</span>
 			</Link>
-			<Link className="geo-floating-foot" href={`/geo/${workspaceId}/operations`} title={!expanded ? "查看运行状态" : undefined}>
+			<Link className="geo-floating-foot" href={(workspaceId ? `/geo/${workspaceId}/operations` : "/") as Route} title={!expanded ? "查看运行状态" : undefined}>
 				<span className="geo-floating-status is-neutral" aria-hidden="true" /><span className="geo-floating-label">查看运行状态</span>
 			</Link>
 		</nav>

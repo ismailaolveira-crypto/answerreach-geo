@@ -1497,6 +1497,10 @@ export async function saveOfficialProviderAction(formData: FormData) {
   if (!catalog) throw new Error("没有找到当前模型的官方渠道定义");
 
   const apiKey = String(formData.get("api_key") ?? "").trim();
+  const requestedReturnTo = String(formData.get("return_to") ?? "");
+  const returnTo = requestedReturnTo.startsWith("/admin/providers")
+    ? requestedReturnTo
+    : `/admin/providers?model=${platformKey}`;
   const modelName = String(formData.get("model_name") ?? catalog.defaultModel).trim() || catalog.defaultModel;
   const workspaceId = String(formData.get("workspace_id") ?? "").trim();
   const providers = await getLLMProviders();
@@ -1538,7 +1542,7 @@ export async function saveOfficialProviderAction(formData: FormData) {
   }
   revalidatePath("/admin/providers");
   revalidatePath(`/admin/providers/${saved.id}/test`);
-  redirect(`/admin/providers?model=${platformKey}&saved=1&provider=${saved.id}`);
+  redirect(`${returnTo}${returnTo.includes("?") ? "&" : "?"}saved=1&provider=${saved.id}` as Route);
 }
 
 export async function createProviderFromTemplateAction(formData: FormData) {

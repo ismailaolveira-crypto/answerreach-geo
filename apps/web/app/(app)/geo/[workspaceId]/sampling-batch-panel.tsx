@@ -2,6 +2,7 @@
 
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
+import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { SubmitButton } from "@/app/(app)/submit-button";
 import { BrandLogo } from "@/components/brand-logo";
@@ -102,7 +103,7 @@ export default function SamplingBatchPanel({
         <h2>组合一次真实联网观测</h2>
         <p>选择模型、问题与次数。提交前显示的数量，就是后台实际创建的任务矩阵。</p>
       </div>
-      <Link className="sy-channel-manager-link" href="/admin/providers">模型与渠道 <span>→</span></Link>
+      <Link className="sy-channel-manager-link" href={`/admin/providers?workspace=${workspaceId}` as Route}>模型与渠道 <span>→</span></Link>
     </header>
 
     <form action={runAction} className="sy-batch-form">

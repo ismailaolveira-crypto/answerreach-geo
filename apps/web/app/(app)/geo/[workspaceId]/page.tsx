@@ -454,7 +454,7 @@ export default async function SpringYuanDecisionMap({
 					<Link href={`/geo/${workspaceId}/actions`}>
 						优化行动{outstandingActions ? <b>{outstandingActions}</b> : null}
 					</Link>
-					<Link href="/admin/providers">模型与渠道</Link>
+					<Link href={`/admin/providers?workspace=${workspaceId}` as Route}>模型与渠道</Link>
 					<Link href={`/geo/${workspaceId}/operations`}>运营状态</Link>
 				</div>
 			</header>

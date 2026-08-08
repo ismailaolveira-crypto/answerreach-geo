@@ -52,6 +52,12 @@ function asRoute(value: string) {
   return value as Route;
 }
 
+function providerHubRoute(returnTo: string) {
+  if (returnTo.startsWith("/admin/providers")) return returnTo;
+  const workspaceId = returnTo.match(/^\/geo\/(\d+)(?:\/|$)/)?.[1];
+  return workspaceId ? `/admin/providers?workspace=${workspaceId}` : "/admin/providers";
+}
+
 function numberDefault(value: unknown, fallback = 0) {
   const parsed = Number(value ?? fallback);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -190,6 +196,7 @@ export default async function ProviderTestPage({ params, searchParams }: PagePro
   const hasResult = typeof result.ok === "string";
   const ok = result.ok === "1";
   const returnTo = result.return_to?.startsWith("/") ? result.return_to : "";
+  const providerHub = providerHubRoute(returnTo);
   const updated = result.updated === "1";
   const createdFromTemplate = result.created === "template";
   const promptText = result.prompt ?? "网络安全培训公司哪家好？";
@@ -210,7 +217,7 @@ export default async function ProviderTestPage({ params, searchParams }: PagePro
     const connectionLabel = connected ? "已连接" : configured ? "已配置，待测试" : "未配置";
     return <div className="sy-connect-page">
       <header className="sy-connect-topbar">
-        <Link href={asRoute(returnTo || "/geo/1/operations")}><i>←</i> 返回</Link>
+        <Link href={asRoute(returnTo || providerHub)}><i>←</i> 返回</Link>
         <span><i className={connected ? "is-connected" : configured ? "is-configured" : ""} />{connectionLabel}</span>
       </header>
       <main className="sy-connect-main">
@@ -273,7 +280,7 @@ export default async function ProviderTestPage({ params, searchParams }: PagePro
 
         <details className="sy-connect-details">
           <summary><b>⚙</b><span>{quickConnector.label} 技术设置</span><small>只对当前模型生效</small><i>⌄</i></summary>
-          <div><dl><div><dt>模型</dt><dd>{provider.model_name}</dd></div><div><dt>接口</dt><dd>{diagnostic?.endpoint_path ?? "官方搜索接口"}</dd></div><div><dt>联网方式</dt><dd>{quickConnector.searchMethod}</dd></div></dl><p>{quickConnector.caveat}</p><Link href="/admin/providers">管理全部渠道</Link></div>
+          <div><dl><div><dt>模型</dt><dd>{provider.model_name}</dd></div><div><dt>接口</dt><dd>{diagnostic?.endpoint_path ?? "官方搜索接口"}</dd></div><div><dt>联网方式</dt><dd>{quickConnector.searchMethod}</dd></div></dl><p>{quickConnector.caveat}</p><Link href={asRoute(providerHub)}>管理全部渠道</Link></div>
         </details>
       </main>
     </div>;
@@ -296,7 +303,7 @@ export default async function ProviderTestPage({ params, searchParams }: PagePro
               返回来源
             </Link>
           ) : null}
-          <Link className="button secondary" href="/admin/providers">
+          <Link className="button secondary" href={asRoute(providerHub)}>
             返回渠道
           </Link>
         </div>
