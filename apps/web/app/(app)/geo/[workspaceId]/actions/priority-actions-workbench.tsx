@@ -305,6 +305,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [discoveryFeedback, setDiscoveryFeedback] = useState("");
 	const [runtimeExpanded, setRuntimeExpanded] = useState(false);
 	const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
+	const timelineHeaderRef = useRef<HTMLElement>(null);
 	const [previewMessage, setPreviewMessage] = useState("");
 	const [syncOpen, setSyncOpen] = useState(false);
 	const [syncPhase, setSyncPhase] = useState<"idle" | "discovering" | "confirm" | "syncing" | "complete" | "partial" | "error">("idle");
@@ -315,6 +316,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [agentEvents, setAgentEvents] = useState<CleanroomAgentEvent[]>([]);
 	const [agentProgress, setAgentProgress] = useState<CleanroomAgentRunProgress | null>(null);
 	const [agentDetailsExpanded, setAgentDetailsExpanded] = useState(false);
+	const agentLogToggleRef = useRef<HTMLButtonElement>(null);
 	const [agentTransport, setAgentTransport] = useState<"idle" | "connecting" | "live" | "fallback" | "ended">("idle");
 	const [agentFeedback, setAgentFeedback] = useState("");
 	const [reviewPackages, setReviewPackages] = useState(initialReviewPackages);
@@ -332,6 +334,29 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [reviewNote, setReviewNote] = useState("");
 	const [reviewFeedback, setReviewFeedback] = useState("");
 	const [targetPlatforms, setTargetPlatforms] = useState<string[]>(["zhihu", "juejin"]);
+	function collapseTimeline() {
+		setIsTimelineCollapsed(true);
+		window.requestAnimationFrame(() => {
+			const header = timelineHeaderRef.current;
+			const toggle = header?.querySelector("button");
+			if (toggle instanceof HTMLButtonElement) toggle.focus({ preventScroll: true });
+			header?.scrollIntoView({
+				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+				block: "center",
+			});
+		});
+	}
+	function collapseAgentLog() {
+		setAgentDetailsExpanded(false);
+		window.requestAnimationFrame(() => {
+			const toggle = agentLogToggleRef.current;
+			toggle?.focus({ preventScroll: true });
+			toggle?.scrollIntoView({
+				behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+				block: "center",
+			});
+		});
+	}
 	const [websiteAudit, setWebsiteAudit] = useState(initialWebsiteAudit);
 	const [websiteAuditFeedback, setWebsiteAuditFeedback] = useState("");
 	const [isSaving, startSaving] = useTransition();
@@ -1094,8 +1119,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				</div>
 
 				<aside className={`pa-current-action ${isTimelineCollapsed ? "is-collapsed" : ""}`}>
-					<header><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)}>{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
-					{!isTimelineCollapsed && selected ? <ol>
+					<header ref={timelineHeaderRef}><h2>本次行动</h2><button type="button" onClick={() => setIsTimelineCollapsed((value) => !value)} aria-expanded={!isTimelineCollapsed} aria-controls="pa-current-action-timeline">{isTimelineCollapsed ? "展开" : "收起"} <Icon name="chevron" /></button></header>
+					{!isTimelineCollapsed && selected ? <ol id="pa-current-action-timeline">
 						<ActionStage index={1} label="选择信源" state={stage >= 1 ? "done" : "active"}>{stage === 0 ? <div className="pa-stage-card"><b>目标载体</b><p>{selected.recommendedAsset}</p><form action={(formData) => startSaving(() => createAction(formData))}><input type="hidden" name="title" value={`${selected.title}：${selected.questionText}`} /><input type="hidden" name="rationale" value={selected.summary} /><input type="hidden" name="hypothesis" value={selected.type === "website" ? "完成官网内容修复后，以新一轮同版本审计验证服务端可读性与页面结构变化。" : `下一轮相同问题中，期待“${selected.recommendedAsset}”补齐后，春秋元泉进入候选或获得引用。`} /><input type="hidden" name="priority" value={selected.priority} />{selected.questionId ? <input type="hidden" name="question_plan_id" value={selected.questionId} /> : null}{selected.evidenceIds[0] ? <input type="hidden" name="source_evidence_id" value={selected.evidenceIds[0]} /> : null}{selected.backendId ? <input type="hidden" name="opportunity_id" value={selected.backendId} /> : null}<button disabled={isSaving} type="submit">{isSaving ? "正在保存行动…" : "选择这个行动"}</button></form></div> : <p className="pa-stage-note">{selected.sourceType === "website_audit" ? `已关联官网审计 #${selected.websiteAuditId} 的原始响应与问题清单。` : "已关联当前问题的真实模型观测与行动记录。"}</p>}</ActionStage>
 						<ActionStage index={2} label="Agent 调研与生成" state={runActive ? "active" : currentReviewPackage ? "done" : currentRun ? "idle" : stage === 1 ? "active" : "idle"}>
 							{stage === 1 && selected.existingAction && !currentRun ? <div className="pa-stage-card"><b>目标平台</b><p>{selected.type === "website" ? !selected.generationReady ? "本轮没有回读到完整官网原始 HTML。请先恢复公网访问并重新检查，当前不会伪装生成内容。" : !websiteGenerationReady ? "官网没有可回读的产品正文，品牌事实库也为空。先补齐至少一条带公开来源的事实，避免只生成通用整改框架。" : "Codex 会读取官网审计和品牌事实库，再生成仅用于官网修复的待审核稿。" : "Codex 会先查阅平台官方规则，再根据真实观测和品牌官网生成差异化草稿。"}</p>{selected.type === "website" && !websiteGenerationReady ? <Link href={`/geo/${workspaceId}/settings`}>去设置补齐品牌事实 →</Link> : null}<div className="pa-platform-picker">{availableTargetPlatforms.map((platform) => <label key={platform.key} className={targetPlatforms.includes(platform.key) ? "is-selected" : ""}><input type="checkbox" checked={targetPlatforms.includes(platform.key)} disabled={selected.type === "website"} onChange={() => setTargetPlatforms((current) => current.includes(platform.key) ? current.filter((key) => key !== platform.key) : [...current, platform.key])} /><img src={platform.logo} alt={platform.key === "official_site" ? "春秋元泉 GEO 标志" : `${platform.label} 官方标志`} /><span>{platform.label}</span></label>)}</div><button disabled={isSaving || !targetPlatforms.length || !agentCanStart || !selected.generationReady || !websiteGenerationReady} type="button" onClick={beginAgent}><Icon name="spark" />{isSaving ? "正在入队…" : !selected.generationReady ? "等待官网重新检查" : !websiteGenerationReady ? "先补齐品牌事实" : !agentRuntime?.ready ? "Codex 未就绪，请先去设置" : !agentCapacityAvailable ? "Agent 正忙，请等待当前任务" : "启动本机 Codex Agent"}</button></div> : null}
@@ -1125,8 +1150,8 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 										{visibleAgentProgress.artifacts.length ? visibleAgentProgress.artifacts.map((artifact) => <span key={artifact.id}>{agentArtifactLabel(artifact.artifact_kind)} · {formatArtifactSize(artifact.size_bytes)} · 已校验归档</span>) : <span>尚未产生可审核工件</span>}
 										{currentReviewPackage && !(reviewNeedsRevision && runActive) ? <span>内容资产 #{currentReviewPackage.asset.id} · {currentReviewPackage.variants.length} 个平台稿 · {currentReviewPackage.claims.length} 条主张</span> : null}
 									</div>
-									{visibleAgentProgress.event_count ? <button className="pa-agent-log-toggle" type="button" onClick={() => setAgentDetailsExpanded((value) => !value)} aria-expanded={agentDetailsExpanded}>{agentDetailsExpanded ? "收起执行记录" : `查看 ${visibleAgentProgress.event_count} 条执行记录`} <Icon name="chevron" /></button> : null}
-									{agentDetailsExpanded ? <><small className="pa-agent-log-note">{visibleAgentProgress.attempt_number > 1 ? `当前为第 ${visibleAgentProgress.attempt_number} 轮；下方保留全部历史事件，` : ""}连续重复事件已合并展示，原始事件完整保留。</small><ul className="pa-agent-event-log">{groupedAgentEvents.map((event) => <li key={event.key}><time>{formatEventTime(event.firstAt)}{event.count > 1 ? `–${formatEventTime(event.lastAt)}` : ""}</time><span><b>{agentStageLabels[event.stage] || event.stage}{event.count > 1 ? ` · ${event.count} 次` : ""}</b>{event.message}</span></li>)}</ul></> : null}
+									{visibleAgentProgress.event_count ? <button ref={agentLogToggleRef} className="pa-agent-log-toggle" type="button" onClick={() => setAgentDetailsExpanded((value) => !value)} aria-expanded={agentDetailsExpanded}>{agentDetailsExpanded ? "收起执行记录" : `查看 ${visibleAgentProgress.event_count} 条执行记录`} <Icon name="chevron" /></button> : null}
+									{agentDetailsExpanded ? <><small className="pa-agent-log-note">{visibleAgentProgress.attempt_number > 1 ? `当前为第 ${visibleAgentProgress.attempt_number} 轮；下方保留全部历史事件，` : ""}连续重复事件已合并展示，原始事件完整保留。</small><ul className="pa-agent-event-log">{groupedAgentEvents.map((event) => <li key={event.key}><time>{formatEventTime(event.firstAt)}{event.count > 1 ? `–${formatEventTime(event.lastAt)}` : ""}</time><span><b>{agentStageLabels[event.stage] || event.stage}{event.count > 1 ? ` · ${event.count} 次` : ""}</b>{event.message}</span></li>)}</ul><button className="pa-agent-log-bottom-collapse" type="button" onClick={collapseAgentLog}><span aria-hidden="true">↑</span>收起执行记录</button></> : null}
 								</> : null}
 								{currentRun.status === "failed" && currentRun.error_message ? <p className="is-error">{currentRun.error_message}</p> : null}
 								<div className="pa-agent-actions">{runActive && currentRun.status !== "cancelling" ? <button type="button" onClick={requestInterrupt} disabled={isSaving}>中止运行</button> : null}{currentRun.status === "awaiting_review" && !hasCapturedVisual ? <button type="button" onClick={requestVisualCapture} disabled={isSaving}>{isSaving ? "正在采集…" : "补采官网素材"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && currentRun.codex_thread_id ? <button type="button" onClick={requestResume} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "恢复原任务" : "Agent 正忙"}</button> : null}{["cancelled", "failed"].includes(currentRun.status) && !currentRun.codex_thread_id ? <button type="button" onClick={beginAgent} disabled={isSaving || !agentCanStart}>{agentCapacityAvailable ? "重新启动" : "Agent 正忙"}</button> : null}</div>
@@ -1184,6 +1209,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							{allTargetsPublished ? <div className="pa-stage-card pa-retest-card"><b>{retestComplete ? retestConclusionLabel : retestActive ? "真实联网复测进行中" : "可以创建可比复测"}</b><p>{currentRetest ? `基线批次 #${currentRetest.baseline_batch_id} · ${retestProviderCount} 个模型 × ${retestRepeatCount} 次 · 原问题不变。` : "后端会复用基线问题、模型渠道、模型版本和重复次数；不允许前端自行改变口径。"}</p>{currentRetest?.batch ? <><div className="pa-retest-progress" role="progressbar" aria-label="真实联网复测进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={currentRetest.batch.progress_percent}><i style={{ width: `${currentRetest.batch.progress_percent}%` }} /></div><small>{currentRetest.batch.succeeded + currentRetest.batch.failed}/{currentRetest.batch.total} 已结束 · 成功 {currentRetest.batch.succeeded} · 失败 {currentRetest.batch.failed}</small></> : null}{!retestActive && (!retestComplete || !comparableRetestComplete) ? <button type="button" onClick={beginRetest} disabled={isSaving}>{isSaving ? "正在创建…" : currentRetest?.conclusion === "insufficient_evidence" ? "重新创建同口径复测" : "创建真实复测"}</button> : null}{retestComplete ? <p className={comparableRetestComplete ? "is-success" : "is-warning"}>{comparableRetestComplete ? `结论：${retestConclusionLabel}。该结论只描述同口径观测差异，不宣称发布构成因果。` : "本轮已经结束，但样本或模型版本不完整，不能得出变化结论。"}</p> : null}{retestMessage ? <p className="pa-inline-feedback" role="status">{retestMessage}</p> : null}</div> : <p className="pa-stage-note">{selected.type === "website" ? "记录真实官网上线 URL 后，复测入口才会开放。" : "全部目标平台记录真实公开 URL 后，复测入口才会开放。"}</p>}
 						</ActionStage>
 					</ol> : !isTimelineCollapsed ? <p className="pa-empty-copy">调整筛选条件后，选择一个机会开始。</p> : null}
+					{!isTimelineCollapsed && selected ? <div className="pa-current-action-collapse"><button type="button" onClick={collapseTimeline}><span aria-hidden="true">↑</span>收起本次行动</button></div> : null}
 				</aside>
 			</section>
 

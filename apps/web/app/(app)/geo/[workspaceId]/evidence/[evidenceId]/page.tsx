@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
 import { BrandLogo } from "@/components/brand-logo";
+import { DetailsCollapseButton } from "@/components/details-collapse-button";
 import { getCleanroomDecisionMap, getCleanroomEvidence, type CleanroomEvidence } from "@/lib/cleanroom-v1-api";
 
 type Props = {
@@ -169,6 +170,7 @@ function EvidenceSampleCard({ sample, fallbackIndex, focusedSource }: { sample: 
       {isSourceFocused ? sourceSection : null}
       <section className="sy-proof-section"><header><span>Aa</span><div><b>{isSourceFocused ? "对应原回答" : "回答原文"}</b><small>{isSourceFocused ? "这张回答与上方所选信源同一次归档。" : "已清除 Markdown 标记，保留原回答的内容结构"}</small></div></header><article className="sy-answer-text">{readableAnswer(sample.answer_text)}</article></section>
       {!isSourceFocused ? sourceSection : null}
+      <DetailsCollapseButton label="收起这次完整证据" />
     </div>
   </details>;
 }

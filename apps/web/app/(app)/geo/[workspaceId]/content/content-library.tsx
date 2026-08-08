@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { DetailsCollapseButton } from "@/components/details-collapse-button";
 import type { CleanroomContentLibraryItem } from "@/lib/cleanroom-v1-api";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
 import { getContentLibraryItemState } from "./content-library-state";
@@ -209,6 +210,7 @@ export function ContentLibrary({ workspaceId, items }: { workspaceId: string; it
 								<div className={styles.markdown} dangerouslySetInnerHTML={{ __html: markdownToSafeHtml(variant.body_markdown) }} />
 							</section>; })}
 						</div>
+						<DetailsCollapseButton label="收起正文与平台版本" />
 					</details>
 					<footer><span>{state === "superseded" ? "历史正文、原始 Agent 工件与退回意见已保留" : state === "stale" ? `当前事实库 ${item.available_sourced_brand_fact_count} 条，本稿使用 ${item.sourced_brand_fact_count} 条；直接通过已被阻止` : "原始 Agent 工件与审核记录已保留"}</span><Link href={`/geo/${workspaceId}/actions`}>{state === "stale" ? "处理并生成新版" : "回到优化行动"}</Link></footer>
 				</article>;

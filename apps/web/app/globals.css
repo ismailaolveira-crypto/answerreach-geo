@@ -1776,3 +1776,26 @@ body .sy-provider-facts{gap:14px;grid-template-columns:1.35fr .9fr 1fr}
   .pa-draft-readback-list > div,
   .pa-draft-readback-list a { border-color: #68778c; }
 }
+
+.sy-details-collapse { align-items: center; border-top: 1px solid #e5eaf1; display: flex; grid-column: 1 / -1; justify-content: center; margin-top: 14px; padding: 12px 0 2px; }
+.sy-details-collapse > button { align-items: center; background: transparent; border: 0; border-radius: 9px; color: #66778e; cursor: pointer; display: inline-flex; font: inherit; font-size: 11px; font-weight: 740; gap: 7px; justify-content: center; min-height: 44px; padding: 0 15px; transition: background .14s ease, color .14s ease, transform .1s ease; }
+.sy-details-collapse > button:hover { background: #f1f5fa; color: #285fbf; }
+.sy-details-collapse > button:active { transform: scale(.98); }
+.sy-details-collapse > button > span { font-size: 13px; }
+.sy-details-collapse > button:focus-visible { outline: 3px solid rgb(36 103 232 / 24%); outline-offset: 2px; }
+@media(prefers-reduced-motion:reduce) {
+  .sy-details-collapse > button { transition: none; }
+  .sy-details-collapse > button:active { transform: none; }
+}
+.pa-current-action-collapse { align-items: center; border-top: 1px solid #e5eaf1; display: flex; justify-content: center; padding: 10px 14px 12px; }
+.pa-current-action-collapse > button { align-items: center; background: transparent; border: 0; border-radius: 9px; color: #66778e; cursor: pointer; display: inline-flex; font: inherit; font-size: 10px; font-weight: 740; gap: 7px; justify-content: center; min-height: 44px; padding: 0 14px; transition: background .14s ease, color .14s ease, transform .1s ease; }
+.pa-current-action-collapse > button:hover { background: #f1f5fa; color: #285fbf; }
+.pa-current-action-collapse > button:active { transform: scale(.98); }
+.pa-current-action-collapse > button:focus-visible { outline: 3px solid rgb(36 103 232 / 24%); outline-offset: 2px; }
+.pa-agent-log-bottom-collapse { align-items: center; background: transparent!important; border: 0!important; border-top: 1px solid #e5eaf1!important; border-radius: 0!important; color: #526f9f!important; display: flex!important; font-size: 9px!important; gap: 6px; justify-content: center; margin-top: 8px; min-height: 44px!important; padding: 8px 0 0!important; width: 100%!important; }
+.pa-agent-log-bottom-collapse:hover { color: #285fbf!important; }
+.pa-agent-log-bottom-collapse:focus-visible { outline: 3px solid rgb(36 103 232 / 24%); outline-offset: 2px; }
+@media(prefers-reduced-motion:reduce) {
+  .pa-current-action-collapse > button { transition: none; }
+  .pa-current-action-collapse > button:active { transform: none; }
+}
