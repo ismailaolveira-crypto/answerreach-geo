@@ -23,7 +23,7 @@ from app.models.cleanroom_v1 import (
     GeoObservationTask,
     GeoWebsiteAudit,
 )
-from app.services.codex_agent_runtime import LocalCodexRuntime
+from app.services.agent_runtime import AgentRuntimeAdapter, get_agent_runtime
 from app.v1.action_opportunities import _fingerprint, _source_url
 from app.v1.opportunity_agent import build_opportunity_context
 
@@ -610,7 +610,7 @@ def execute_website_gap_analysis(
     db: Session,
     job: QueueJob,
     *,
-    runtime: LocalCodexRuntime | None = None,
+    runtime: AgentRuntimeAdapter | None = None,
 ) -> dict:
     payload = dict(job.payload_json or {})
     skill = load_skill_contract()
@@ -635,14 +635,16 @@ def execute_website_gap_analysis(
     db.add(job)
     db.commit()
 
-    runtime = runtime or LocalCodexRuntime()
+    runtime_key = str(payload.get("runtime_key") or "local_codex")
+    runtime = runtime or get_agent_runtime(runtime_key)
 
     def on_started(thread_id: str, turn_id: str) -> None:
         job.payload_json = {
             **dict(job.payload_json or {}),
             "stage": "analyzing",
-            "codex_thread_id": thread_id,
-            "codex_turn_id": turn_id,
+            "agent_session_id": thread_id,
+            "agent_turn_id": turn_id,
+            **({"codex_thread_id": thread_id, "codex_turn_id": turn_id} if runtime_key == "local_codex" else {}),
         }
         db.add(job)
         db.commit()
@@ -667,8 +669,9 @@ def execute_website_gap_analysis(
                 "result": parsed,
                 "deterministic_metrics": context["deterministic_metrics"],
                 "usage": turn.usage,
-                "codex_thread_id": turn.thread_id,
-                "codex_turn_id": turn.turn_id,
+                "runtime_key": runtime_key,
+                "agent_session_id": turn.thread_id,
+                "agent_turn_id": turn.turn_id,
             },
             ensure_ascii=False,
             indent=2,
@@ -715,8 +718,9 @@ def execute_website_gap_analysis(
         "recommendations": recommendations,
         "analysis_summary": parsed["analysis_summary"][:1000],
         "official_metrics": context["deterministic_metrics"],
-        "codex_thread_id": turn.thread_id,
-        "codex_turn_id": turn.turn_id,
+        "agent_session_id": turn.thread_id,
+        "agent_turn_id": turn.turn_id,
+        **({"codex_thread_id": turn.thread_id, "codex_turn_id": turn.turn_id} if runtime_key == "local_codex" else {}),
         "result_sha256": sha256(result_path.read_bytes()).hexdigest(),
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }

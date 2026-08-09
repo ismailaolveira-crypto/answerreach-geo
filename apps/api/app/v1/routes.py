@@ -192,8 +192,13 @@ from app.v1.website_audit import (
     verify_publication_page,
 )
 from app.services.article_sync_adapter import get_article_sync_adapter
+from app.services.agent_runtime import (
+    RUNTIME_KEYS,
+    diagnose_agent_runtime,
+    get_agent_runtime,
+    sanitize_agent_error,
+)
 from app.services.codex_agent_runtime import (
-    LocalCodexRuntime,
     diagnose_local_codex,
     invalidate_local_codex_diagnostic_cache,
 )
@@ -3746,6 +3751,7 @@ def _opportunity_analysis_read(job: QueueJob) -> dict:
         "result_count": int(payload.get("result_count") or 0),
         "no_action_count": int(payload.get("no_action_count") or 0),
         "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "runtime_key": str(payload.get("runtime_key") or "local_codex"),
         "model": payload.get("model"),
         "reasoning_effort": payload.get("reasoning_effort"),
         "codex_thread_id": payload.get("codex_thread_id"),
@@ -3784,6 +3790,7 @@ def _website_gap_analysis_read(job: QueueJob) -> dict:
         "recommendation_count": int(payload.get("recommendation_count") or 0),
         "recommendations": list(payload.get("recommendations") or []),
         "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "runtime_key": str(payload.get("runtime_key") or "local_codex"),
         "model": payload.get("model"),
         "reasoning_effort": payload.get("reasoning_effort"),
         "skill_name": str(payload.get("skill_name") or ""),
@@ -3962,16 +3969,15 @@ def discover_action_opportunities(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = diagnose_local_codex()
+    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
     if not diagnostic.get("ready"):
         raise HTTPException(
             status_code=409,
-            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
         )
-    codex_model, reasoning_effort = _resolve_codex_execution(
+    agent_model, reasoning_effort = _resolve_agent_execution(
         diagnostic,
-        requested_model=payload.codex_model,
+        requested_model=payload.model or payload.codex_model,
         requested_reasoning_effort=payload.reasoning_effort,
     )
 
@@ -3993,7 +3999,8 @@ def discover_action_opportunities(
             for job in active_jobs
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
-            and (job.payload_json or {}).get("model") == codex_model
+            and (job.payload_json or {}).get("runtime_key", "local_codex") == payload.runtime_key
+            and (job.payload_json or {}).get("model") == agent_model
             and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
@@ -4017,7 +4024,8 @@ def discover_action_opportunities(
             "max_items": payload.max_items,
             "input_fingerprint": context["input_fingerprint"],
             "evidence_count": len(context["evidence"]),
-            "model": codex_model,
+            "runtime_key": payload.runtime_key,
+            "model": agent_model,
             "reasoning_effort": reasoning_effort,
             "actor_user_id": user.id,
             "stage": "queued",
@@ -4038,7 +4046,8 @@ def discover_action_opportunities(
                 "question_plan_ids": payload.question_plan_ids,
                 "input_fingerprint": context["input_fingerprint"],
                 "evidence_count": len(context["evidence"]),
-                "model": codex_model,
+                "runtime_key": payload.runtime_key,
+                "model": agent_model,
                 "reasoning_effort": reasoning_effort,
                 "evidence_gate": (
                     "completed_task+real_answer+search_event+source_url+raw_artifact"
@@ -4141,16 +4150,15 @@ def create_website_gap_analysis(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = diagnose_local_codex()
+    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
     if not diagnostic.get("ready"):
         raise HTTPException(
             status_code=409,
-            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
         )
-    codex_model, reasoning_effort = _resolve_codex_execution(
+    agent_model, reasoning_effort = _resolve_agent_execution(
         diagnostic,
-        requested_model=payload.codex_model,
+        requested_model=payload.model or payload.codex_model,
         requested_reasoning_effort=payload.reasoning_effort,
     )
 
@@ -4172,7 +4180,8 @@ def create_website_gap_analysis(
             for job in active_jobs
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
-            and (job.payload_json or {}).get("model") == codex_model
+            and (job.payload_json or {}).get("runtime_key", "local_codex") == payload.runtime_key
+            and (job.payload_json or {}).get("model") == agent_model
             and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
@@ -4198,7 +4207,8 @@ def create_website_gap_analysis(
             "official_metrics": context["deterministic_metrics"],
             "skill_name": skill["name"],
             "skill_sha256": skill["sha256"],
-            "model": codex_model,
+            "runtime_key": payload.runtime_key,
+            "model": agent_model,
             "reasoning_effort": reasoning_effort,
             "actor_user_id": user.id,
             "stage": "queued",
@@ -4221,7 +4231,8 @@ def create_website_gap_analysis(
                 "evidence_count": len(context["evidence"]),
                 "skill_name": skill["name"],
                 "skill_sha256": skill["sha256"],
-                "model": codex_model,
+                "runtime_key": payload.runtime_key,
+                "model": agent_model,
                 "reasoning_effort": reasoning_effort,
             },
         )
@@ -6272,8 +6283,17 @@ def _agent_capacity(
     return limit, [*active_runs, *active_discovery_jobs]
 
 
-def _agent_runtime_diagnostic(db: Session, workspace_id: int) -> dict:
-    diagnostic = diagnose_local_codex()
+def _agent_runtime_diagnostic(
+    db: Session,
+    workspace_id: int,
+    runtime_key: str = "local_codex",
+    *,
+    invalidate: bool = False,
+) -> dict:
+    try:
+        diagnostic = _diagnose_runtime_for_request(runtime_key, invalidate=invalidate)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Agent runtime not found") from exc
     limit, active_runs = _agent_capacity(db, workspace_id)
     return {
         **diagnostic,
@@ -6287,7 +6307,15 @@ def _agent_runtime_diagnostic(db: Session, workspace_id: int) -> dict:
     }
 
 
-def _resolve_codex_execution(
+def _diagnose_runtime_for_request(runtime_key: str, *, invalidate: bool = False) -> dict:
+    if runtime_key == "local_codex":
+        if invalidate:
+            invalidate_local_codex_diagnostic_cache()
+        return diagnose_local_codex()
+    return diagnose_agent_runtime(runtime_key, invalidate=invalidate)
+
+
+def _resolve_agent_execution(
     diagnostic: dict,
     *,
     requested_model: str | None,
@@ -6296,7 +6324,7 @@ def _resolve_codex_execution(
     model = requested_model or diagnostic.get("default_model")
     available_models = list(diagnostic.get("available_models") or [])
     if model and model not in available_models:
-        raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
+        raise HTTPException(status_code=422, detail="Selected model is not available for this Agent")
 
     model_option = next(
         (
@@ -6316,9 +6344,24 @@ def _resolve_codex_execution(
     if effort and effort not in supported_efforts:
         raise HTTPException(
             status_code=422,
-            detail=f"Codex model {model} does not support reasoning effort {effort}",
+            detail=f"Agent model {model} does not support reasoning effort {effort}",
         )
     return model, effort
+
+
+def _resolve_codex_execution(
+    diagnostic: dict,
+    *,
+    requested_model: str | None,
+    requested_reasoning_effort: str | None,
+) -> tuple[str | None, str | None]:
+    """Backward-compatible name retained for focused tests and older callers."""
+
+    return _resolve_agent_execution(
+        diagnostic,
+        requested_model=requested_model,
+        requested_reasoning_effort=requested_reasoning_effort,
+    )
 
 
 def _assert_agent_capacity(
@@ -6353,6 +6396,23 @@ def read_agent_runtime(
     return _agent_runtime_diagnostic(db, workspace_id)
 
 
+@router.get(
+    "/workspaces/{workspace_id}/agent-runtimes",
+    response_model=list[AgentRuntimeRead],
+)
+def read_agent_runtimes(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    capacity = {
+        runtime_key: _agent_runtime_diagnostic(db, workspace_id, runtime_key)
+        for runtime_key in RUNTIME_KEYS
+    }
+    return [capacity[runtime_key] for runtime_key in RUNTIME_KEYS]
+
+
 @router.post(
     "/workspaces/{workspace_id}/agent-runtime/test",
     response_model=AgentRuntimeTestRead,
@@ -6363,8 +6423,7 @@ def test_agent_runtime(
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
     workspace_or_404(db, user, workspace_id)
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = _agent_runtime_diagnostic(db, workspace_id)
+    diagnostic = _agent_runtime_diagnostic(db, workspace_id, invalidate=True)
     started = perf_counter()
     if not diagnostic.get("ready"):
         return {
@@ -6384,9 +6443,75 @@ def test_agent_runtime(
 
     try:
         with tempfile.TemporaryDirectory(prefix="cqyq-codex-runtime-test-") as directory:
-            result = LocalCodexRuntime().run_structured(
+            result = get_agent_runtime("local_codex").run_structured(
                 task_directory=Path(directory),
                 prompt="Return JSON confirming that this local Codex runtime can complete a structured turn.",
+                output_schema={
+                    "type": "object",
+                    "properties": {"ok": {"type": "boolean"}},
+                    "required": ["ok"],
+                    "additionalProperties": False,
+                },
+                developer_instructions="Do not read or write files. Return only the requested JSON.",
+                model=diagnostic.get("default_model"),
+                reasoning_effort=diagnostic.get("default_reasoning_effort"),
+            )
+        parsed = json.loads(result.final_response)
+        return {
+            "ok": parsed.get("ok") is True,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "thread_id": result.thread_id,
+            "error": None,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": sanitize_agent_error(exc),
+        }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/agent-runtimes/{runtime_key}/test",
+    response_model=AgentRuntimeTestRead,
+)
+def test_selected_agent_runtime(
+    workspace_id: int,
+    runtime_key: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    diagnostic = _agent_runtime_diagnostic(
+        db,
+        workspace_id,
+        runtime_key,
+        invalidate=True,
+    )
+    started = perf_counter()
+    if not diagnostic.get("ready"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": diagnostic.get("error") or "Agent runtime is not ready",
+        }
+    if not diagnostic.get("capacity_available"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": "Agent 当前容量已满，请等待正在运行的任务结束",
+        }
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory(prefix=f"cqyq-{runtime_key}-runtime-test-") as directory:
+            result = get_agent_runtime(runtime_key).run_structured(
+                task_directory=Path(directory),
+                prompt="Return JSON confirming that this Agent runtime can complete a structured turn.",
                 output_schema={
                     "type": "object",
                     "properties": {"ok": {"type": "boolean"}},
@@ -6445,6 +6570,13 @@ def _website_requires_sourced_brand_facts(opportunity: GeoActionOpportunity | No
     )
 
 
+def _agent_run_session_id(run: GeoAgentRun) -> str | None:
+    if run.runtime_key == "local_codex":
+        return run.codex_thread_id
+    value = (run.result_snapshot or {}).get("agent_session_id")
+    return str(value) if value else None
+
+
 @router.post(
     "/workspaces/{workspace_id}/actions/{action_id}/agent-runs",
     response_model=AgentRunRead,
@@ -6496,12 +6628,11 @@ def create_agent_run(
                     "已验证搜索事件、公开来源 URL 和原始工件。"
                 ),
             )
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = diagnose_local_codex()
+    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
     if not diagnostic.get("ready"):
         raise HTTPException(
             status_code=409,
-            detail=diagnostic.get("error") or "Local Codex Agent is not ready; sign in with ChatGPT first",
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
         )
     active = db.scalar(
         select(GeoAgentRun)
@@ -6534,7 +6665,7 @@ def create_agent_run(
                     "请先在设置中核验品牌事实，避免只生成通用整改框架"
                 ),
             )
-    model, reasoning_effort = _resolve_codex_execution(
+    model, reasoning_effort = _resolve_agent_execution(
         diagnostic,
         requested_model=payload.model,
         requested_reasoning_effort=payload.reasoning_effort,
@@ -6543,7 +6674,7 @@ def create_agent_run(
         workspace_id=workspace_id,
         action_id=action_id,
         requested_by_user_id=user.id,
-        runtime_key="local_codex",
+        runtime_key=payload.runtime_key,
         model=model,
         status="queued",
         stage="queued",
@@ -6551,6 +6682,7 @@ def create_agent_run(
         request_snapshot={
             "action_id": action_id,
             "selected_platforms": platforms,
+            "runtime_key": payload.runtime_key,
             "model": model,
             "reasoning_effort": reasoning_effort,
         },
@@ -6590,6 +6722,7 @@ def create_agent_run(
             "platforms": platforms,
             "model": model,
             "reasoning_effort": reasoning_effort,
+            "runtime_key": payload.runtime_key,
             "from_action_stage": previous_stage,
         },
     )
@@ -7141,8 +7274,8 @@ def resume_agent_run(
 ):
     workspace_or_404(db, user, workspace_id)
     run = _agent_run_or_404(db, workspace_id, run_id)
-    if run.status not in {"cancelled", "failed"} or not run.codex_thread_id:
-        raise HTTPException(status_code=409, detail="Only an interrupted/failed run with a Codex thread can resume")
+    if run.status not in {"cancelled", "failed"} or not _agent_run_session_id(run):
+        raise HTTPException(status_code=409, detail="Only an interrupted/failed run with an Agent session can resume")
     _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     job = QueueJob(
         job_type="geo_agent.run",
@@ -7173,8 +7306,8 @@ def resume_agent_run(
         run,
         event_type="resume_queued",
         stage="queued",
-        message="已使用原 Codex thread 恢复任务",
-        detail={"job_id": job.id},
+        message="已使用原 Agent 会话恢复任务",
+        detail={"job_id": job.id, "runtime_key": run.runtime_key},
     )
     return run
 
@@ -7197,10 +7330,10 @@ def revise_agent_run(
     brief = scoped_or_404(db, GeoContentBrief, workspace_id, asset.brief_id)
     if brief.action_id != run.action_id or int((run.result_snapshot or {}).get("asset_id") or 0) != asset.id:
         raise HTTPException(status_code=409, detail="The rejected asset is not the current result of this Agent run")
-    if run.status != "awaiting_review" or asset.status != "changes_requested" or not run.codex_thread_id:
+    if run.status != "awaiting_review" or asset.status != "changes_requested" or not _agent_run_session_id(run):
         raise HTTPException(
             status_code=409,
-            detail="Only the current rejected draft with an existing Codex thread can be revised",
+            detail="Only the current rejected draft with an existing Agent session can be revised",
         )
     _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     review = db.scalar(

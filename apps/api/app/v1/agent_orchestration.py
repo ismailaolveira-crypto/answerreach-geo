@@ -30,10 +30,10 @@ from app.models.cleanroom_v1 import (
     GeoWebsiteAudit,
     GeoWorkspace,
 )
+from app.services.agent_runtime import AgentRuntimeAdapter, get_agent_runtime
 from app.services.codex_agent_runtime import (
     CodexRunInterrupted,
     CodexRunTimedOut,
-    LocalCodexRuntime,
 )
 from app.services.official_site_capture import CaptureOutcome, OfficialSiteCapture
 from app.v1.action_opportunities import valid_action_evidence
@@ -670,7 +670,7 @@ def _persist_result(
         prompt_hash=_hash(run.request_snapshot),
         raw_artifact_uri=str(raw_path),
         generation_usage={
-            "runtime": "local_codex",
+            "runtime": run.runtime_key,
             "token_usage": usage,
             "revision_of_asset_id": revision_source_id or None,
         },
@@ -720,14 +720,14 @@ def _persist_result(
                 content_asset_id=asset.id,
                 platform_key=platform_key,
                 version=1,
-                policy_version="codex-research.v1",
+                policy_version="agent-research.v1",
                 title=str(variant["title"])[:255],
                 summary=str(variant["summary"]),
                 body_markdown=body,
                 tags=list(variant.get("tags") or []),
                 image_manifest=platform_visuals,
                 adaptation_contract={
-                    "method": "codex_live_platform_research",
+                    "method": f"{run.runtime_key}_live_platform_research",
                     "notes": variant.get("adaptation_notes") or [],
                     "research": next(
                         (
@@ -836,7 +836,7 @@ def execute_agent_run(
     db: Session,
     run: GeoAgentRun,
     *,
-    runtime: LocalCodexRuntime | None = None,
+    runtime: AgentRuntimeAdapter | None = None,
     material_capture: OfficialSiteCapture | None = None,
 ) -> GeoAgentRun:
     if run.status == "cancelling":
@@ -860,7 +860,7 @@ def execute_agent_run(
         return run
     if run.status not in {"queued", "resuming"}:
         raise ValueError(f"Agent run {run.id} cannot execute from {run.status}")
-    runtime = runtime or LocalCodexRuntime()
+    runtime = runtime or get_agent_runtime(run.runtime_key or "local_codex")
     material_capture = material_capture or OfficialSiteCapture()
     timeout_seconds = max(60, min(int(get_settings().agent_run_timeout_seconds), 3600))
     is_resume = run.status == "resuming"
@@ -896,8 +896,15 @@ def execute_agent_run(
         )
 
         def on_started(thread_id: str, turn_id: str) -> None:
-            run.codex_thread_id = thread_id
-            run.codex_turn_id = turn_id
+            if run.runtime_key == "local_codex":
+                run.codex_thread_id = thread_id
+                run.codex_turn_id = turn_id
+            else:
+                run.result_snapshot = {
+                    **dict(run.result_snapshot or {}),
+                    "agent_session_id": thread_id,
+                    "agent_turn_id": turn_id,
+                }
             db.add(run)
             db.commit()
 
@@ -923,7 +930,11 @@ def execute_agent_run(
             developer_instructions=DEVELOPER_INSTRUCTIONS,
             model=run.model,
             reasoning_effort=run.reasoning_effort,
-            thread_id=run.codex_thread_id if is_resume else None,
+            thread_id=(
+                run.codex_thread_id
+                if run.runtime_key == "local_codex"
+                else str((run.result_snapshot or {}).get("agent_session_id") or "") or None
+            ) if is_resume else None,
             on_started=on_started,
             on_event=on_event,
             cancellation_requested=lambda: _cancellation_requested(run.id),
@@ -955,7 +966,19 @@ def execute_agent_run(
                 uri=str(raw_path),
                 sha256=sha256(raw_bytes).hexdigest(),
                 size_bytes=len(raw_bytes),
-                metadata_json={"codex_thread_id": turn_result.thread_id, "codex_turn_id": turn_result.turn_id},
+                metadata_json={
+                    "runtime_key": run.runtime_key,
+                    "agent_session_id": turn_result.thread_id,
+                    "agent_turn_id": turn_result.turn_id,
+                    **(
+                        {
+                            "codex_thread_id": turn_result.thread_id,
+                            "codex_turn_id": turn_result.turn_id,
+                        }
+                        if run.runtime_key == "local_codex"
+                        else {}
+                    ),
+                },
             )
         )
         capture_outcome, visual_manifest = capture_agent_visuals(
@@ -1000,6 +1023,9 @@ def execute_agent_run(
         run.status = "awaiting_review"
         run.stage = "awaiting_review"
         run.result_snapshot = {
+            "runtime_key": run.runtime_key,
+            "agent_session_id": turn_result.thread_id,
+            "agent_turn_id": turn_result.turn_id,
             "asset_id": asset.id,
             "brief_id": brief.id,
             "variant_count": len(parsed.get("variants") or []),

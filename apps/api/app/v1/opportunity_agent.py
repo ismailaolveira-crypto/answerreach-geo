@@ -22,7 +22,7 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoWorkspace,
 )
-from app.services.codex_agent_runtime import LocalCodexRuntime
+from app.services.agent_runtime import AgentRuntimeAdapter, get_agent_runtime
 from app.v1.action_opportunities import (
     _fingerprint,
     _source_candidates,
@@ -548,7 +548,7 @@ def execute_opportunity_analysis(
     db: Session,
     job: QueueJob,
     *,
-    runtime: LocalCodexRuntime | None = None,
+    runtime: AgentRuntimeAdapter | None = None,
 ) -> dict:
     payload = dict(job.payload_json or {})
     context = build_opportunity_context(
@@ -569,15 +569,17 @@ def execute_opportunity_analysis(
     db.add(job)
     db.commit()
 
-    runtime = runtime or LocalCodexRuntime()
+    runtime_key = str(payload.get("runtime_key") or "local_codex")
+    runtime = runtime or get_agent_runtime(runtime_key)
 
     def on_started(thread_id: str, turn_id: str) -> None:
         current = dict(job.payload_json or {})
         job.payload_json = {
             **current,
             "stage": "analyzing",
-            "codex_thread_id": thread_id,
-            "codex_turn_id": turn_id,
+            "agent_session_id": thread_id,
+            "agent_turn_id": turn_id,
+            **({"codex_thread_id": thread_id, "codex_turn_id": turn_id} if runtime_key == "local_codex" else {}),
         }
         db.add(job)
         db.commit()
@@ -599,8 +601,9 @@ def execute_opportunity_analysis(
             {
                 "result": parsed,
                 "usage": result.usage,
-                "codex_thread_id": result.thread_id,
-                "codex_turn_id": result.turn_id,
+                "runtime_key": runtime_key,
+                "agent_session_id": result.thread_id,
+                "agent_turn_id": result.turn_id,
             },
             ensure_ascii=False,
             indent=2,
@@ -619,8 +622,9 @@ def execute_opportunity_analysis(
         "result_count": len(opportunities),
         "analysis_summary": str(parsed.get("analysis_summary") or "")[:1000],
         "no_action_count": len(parsed.get("no_action_reasons") or []),
-        "codex_thread_id": result.thread_id,
-        "codex_turn_id": result.turn_id,
+        "agent_session_id": result.thread_id,
+        "agent_turn_id": result.turn_id,
+        **({"codex_thread_id": result.thread_id, "codex_turn_id": result.turn_id} if runtime_key == "local_codex" else {}),
         "result_sha256": sha256(result_path.read_bytes()).hexdigest(),
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }

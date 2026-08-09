@@ -575,10 +575,15 @@ export type CleanroomAction = {
 
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
-export type CodexExecutionSelection = {
+export type AgentRuntimeKey = "local_codex" | "claude_agent" | "hermes" | "openclaw";
+
+export type AgentExecutionSelection = {
+	runtime_key: AgentRuntimeKey;
 	model: string | null;
 	reasoning_effort: CodexReasoningEffort | null;
 };
+
+export type CodexExecutionSelection = AgentExecutionSelection;
 
 export type AgentRuntimeModel = {
 	id: string;
@@ -589,7 +594,12 @@ export type AgentRuntimeModel = {
 };
 
 export type AgentRuntime = {
-	runtime_key: "local_codex";
+	runtime_key: AgentRuntimeKey;
+	display_name: string;
+	description: string;
+	logo_path: string;
+	transport: string;
+	configuration_hint: string;
 	sdk_installed: boolean;
 	sdk_version?: string | null;
 	runtime_version?: string | null;
@@ -748,6 +758,7 @@ export type CleanroomOpportunityAnalysisRun = {
 	result_count: number;
 	no_action_count: number;
 	input_fingerprint: string;
+	runtime_key: AgentRuntimeKey;
 	model?: string | null;
 	reasoning_effort?: CodexReasoningEffort | null;
 	codex_thread_id?: string | null;
@@ -782,6 +793,7 @@ export type WebsiteGapAnalysisRun = {
 		source_urls: string[];
 	}>;
 	input_fingerprint: string;
+	runtime_key: AgentRuntimeKey;
 	model?: string | null;
 	reasoning_effort?: CodexReasoningEffort | null;
 	skill_name: string;
@@ -1545,8 +1557,12 @@ export function getAgentRuntime(workspaceId: string | number) {
 	return apiRequest<AgentRuntime>(`/workspaces/${workspaceId}/agent-runtime`);
 }
 
-export function testAgentRuntime(workspaceId: string | number) {
-	return apiRequest<AgentRuntimeTest>(`/workspaces/${workspaceId}/agent-runtime/test`, {
+export function getAgentRuntimes(workspaceId: string | number) {
+	return apiRequest<AgentRuntime[]>(`/workspaces/${workspaceId}/agent-runtimes`);
+}
+
+export function testAgentRuntime(workspaceId: string | number, runtimeKey: AgentRuntimeKey = "local_codex") {
+	return apiRequest<AgentRuntimeTest>(`/workspaces/${workspaceId}/agent-runtimes/${runtimeKey}/test`, {
 		method: "POST",
 	});
 }
@@ -1556,6 +1572,7 @@ export function createCleanroomAgentRun(
 	actionId: number,
 	payload: {
 		selected_platforms?: string[];
+		runtime_key?: AgentRuntimeKey;
 		model?: string | null;
 		reasoning_effort?: CodexReasoningEffort | null;
 	} = {},
@@ -1627,7 +1644,8 @@ export function discoverCleanroomActionOpportunities(
 		question_plan_ids?: number[];
 		model_keys?: string[];
 		max_items?: number;
-		codex_model?: string | null;
+		runtime_key?: AgentRuntimeKey;
+		model?: string | null;
 		reasoning_effort?: CodexReasoningEffort | null;
 	} = {},
 ) {
@@ -1657,7 +1675,8 @@ export function createWebsiteGapAnalysis(
 		batch_id: number;
 		question_plan_ids?: number[];
 		model_keys?: string[];
-		codex_model?: string | null;
+		runtime_key?: AgentRuntimeKey;
+		model?: string | null;
 		reasoning_effort?: CodexReasoningEffort | null;
 	},
 ) {

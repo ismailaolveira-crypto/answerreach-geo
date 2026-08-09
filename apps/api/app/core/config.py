@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     xiaoma_api_key: str | None = None
     article_sync_mcp_server_path: str | None = None
     article_sync_mcp_token: str | None = None
+    anthropic_api_key: str | None = None
+    claude_agent_models: str = "claude-sonnet-4-6,claude-opus-4-6,claude-haiku-4-5"
+    hermes_api_url: str = "http://127.0.0.1:8642"
+    hermes_api_key: str | None = None
+    openclaw_agent_id: str = "main"
     agent_max_concurrent_runs: int = 10
     agent_run_timeout_seconds: int = 900
     auth_secret: str = "dev-secret-change-me"

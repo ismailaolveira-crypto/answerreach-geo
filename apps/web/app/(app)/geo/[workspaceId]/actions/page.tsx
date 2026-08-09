@@ -1,6 +1,7 @@
 import { revalidatePath } from "next/cache";
 import {
-	type CodexExecutionSelection,
+	type AgentExecutionSelection,
+	type AgentRuntimeKey,
 	type CodexReasoningEffort,
 	captureAgentRunVisuals,
 	createCleanroomAction,
@@ -13,7 +14,7 @@ import {
 	getCleanroomActionWorkbenchState,
 	getCleanroomActionRetest,
 	getAgentRunProgress,
-	getAgentRuntime,
+	getAgentRuntimes,
 	getCleanroomBrandFacts,
 	getCleanroomActionOpportunityScope,
 	getCleanroomActionOpportunities,
@@ -68,8 +69,8 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		model_key: modelKey,
 		question_plan_id: questionPlanId,
 	});
-	const [agentRuntime, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis, websiteGapAnalysis] = await Promise.all([
-		getAgentRuntime(workspaceId).catch(() => null),
+	const [agentRuntimes, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis, websiteGapAnalysis] = await Promise.all([
+		getAgentRuntimes(workspaceId).catch(() => []),
 		getCleanroomActionWorkbenchState(workspaceId),
 		getLatestWebsiteAudit(workspaceId).catch(() => ({ website_url: null, latest: null })),
 		getCleanroomBrandFacts(workspaceId).catch(() => []),
@@ -89,14 +90,15 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	const requestedActionId = Number(firstValue(query.action_id));
 	const initialSelectedId = opportunities.find((item) => item.existingAction?.id === requestedActionId)?.id;
 
-	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
+	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; runtimeKey: AgentRuntimeKey; agentModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
 		"use server";
 		return discoverCleanroomActionOpportunities(workspaceId, {
 			batch_id: scope.batchId,
 			model_keys: scope.modelKey ? [scope.modelKey] : [],
 			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
 			max_items: 50,
-			codex_model: scope.codexModel,
+			runtime_key: scope.runtimeKey,
+			model: scope.agentModel,
 			reasoning_effort: scope.reasoningEffort,
 		});
 	}
@@ -106,14 +108,15 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return getCleanroomOpportunityAnalysis(workspaceId, jobId);
 	}
 
-	async function analyzeWebsiteGap(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
+	async function analyzeWebsiteGap(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; runtimeKey: AgentRuntimeKey; agentModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
 		"use server";
 		if (!scope.batchId) throw new Error("请先选择一个已完成的观测批次");
 		return createWebsiteGapAnalysis(workspaceId, {
 			batch_id: scope.batchId,
 			model_keys: scope.modelKey ? [scope.modelKey] : [],
 			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
-			codex_model: scope.codexModel,
+			runtime_key: scope.runtimeKey,
+			model: scope.agentModel,
 			reasoning_effort: scope.reasoningEffort,
 		});
 	}
@@ -142,10 +145,11 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		revalidatePath(`/geo/${workspaceId}/actions`);
 	}
 
-	async function startAgent(actionId: number, platforms: string[], execution: CodexExecutionSelection) {
+	async function startAgent(actionId: number, platforms: string[], execution: AgentExecutionSelection) {
 		"use server";
 		const run = await createCleanroomAgentRun(workspaceId, actionId, {
 			selected_platforms: platforms,
+			runtime_key: execution.runtime_key,
 			model: execution.model,
 			reasoning_effort: execution.reasoning_effort,
 		});
@@ -265,7 +269,7 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return getCleanroomActionRetest(workspaceId, actionId);
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntime={agentRuntime} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntimes={agentRuntimes} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
 		fact.status === "active"
 		&& fact.source_verification?.status === "source_and_statement_verified"
 	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialWebsiteGapAnalysis={websiteGapAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} analyzeWebsiteGap={analyzeWebsiteGap} readWebsiteGapAnalysis={readWebsiteGapAnalysis} />;

@@ -990,6 +990,8 @@ class ActionOpportunityDiscoverRequest(BaseModel):
     question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
     model_keys: list[str] = Field(default_factory=list, max_length=20)
     max_items: int = Field(default=50, ge=1, le=100)
+    runtime_key: Literal["local_codex", "claude_agent", "hermes", "openclaw"] = "local_codex"
+    model: str | None = Field(default=None, max_length=220)
     codex_model: str | None = Field(default=None, max_length=120)
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
@@ -1008,6 +1010,7 @@ class OpportunityAnalysisRunRead(BaseModel):
     result_count: int = 0
     no_action_count: int = 0
     input_fingerprint: str
+    runtime_key: str = "local_codex"
     model: str | None = None
     reasoning_effort: str | None = None
     codex_thread_id: str | None = None
@@ -1023,6 +1026,8 @@ class WebsiteGapAnalysisRequest(BaseModel):
     batch_id: int = Field(ge=1)
     question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
     model_keys: list[str] = Field(default_factory=list, max_length=20)
+    runtime_key: Literal["local_codex", "claude_agent", "hermes", "openclaw"] = "local_codex"
+    model: str | None = Field(default=None, max_length=220)
     codex_model: str | None = Field(default=None, max_length=120)
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
@@ -1054,6 +1059,7 @@ class WebsiteGapAnalysisRunRead(BaseModel):
     recommendation_count: int = 0
     recommendations: list[WebsiteGapRecommendationRead] = Field(default_factory=list)
     input_fingerprint: str
+    runtime_key: str = "local_codex"
     model: str | None = None
     reasoning_effort: str | None = None
     skill_name: str
@@ -1127,6 +1133,11 @@ class AgentRuntimeModelRead(BaseModel):
 
 class AgentRuntimeRead(BaseModel):
     runtime_key: str = "local_codex"
+    display_name: str = "Codex"
+    description: str = ""
+    logo_path: str = "/brand/openai.svg"
+    transport: str = "official_sdk"
+    configuration_hint: str = ""
     sdk_installed: bool
     sdk_version: str | None = None
     runtime_version: str | None = None
@@ -1162,6 +1173,7 @@ class AgentRunCreate(BaseModel):
     ] = Field(
         default_factory=list, max_length=7
     )
+    runtime_key: Literal["local_codex", "claude_agent", "hermes", "openclaw"] = "local_codex"
     model: str | None = Field(default=None, max_length=120)
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
