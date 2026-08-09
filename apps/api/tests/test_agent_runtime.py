@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import subprocess
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,13 @@ import pytest
 from app.services import agent_runtime
 from app.services.codex_agent_runtime import CodexRunInterrupted, CodexRuntimeUnavailable
 from app.v1.schemas import AgentRuntimeRead
+
+
+@pytest.fixture(autouse=True)
+def clear_runtime_diagnostic_cache() -> None:
+    agent_runtime.invalidate_agent_runtime_diagnostic_cache()
+    yield
+    agent_runtime.invalidate_agent_runtime_diagnostic_cache()
 
 
 def _settings(**overrides):
@@ -38,6 +46,40 @@ def test_catalog_keeps_unconfigured_runtimes_honest(monkeypatch) -> None:
     assert hermes["login_status"] == "cli_missing"
     assert openclaw["ready"] is False
     assert openclaw["login_status"] == "cli_missing"
+
+
+def test_runtime_diagnostic_cache_returns_copy_and_explicitly_invalidates(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def diagnose(runtime_key: str) -> dict:
+        calls.append(runtime_key)
+        return {"runtime_key": runtime_key, "ready": True, "model_options": []}
+
+    monkeypatch.setattr(agent_runtime, "_diagnose_agent_runtime_uncached", diagnose)
+
+    first = agent_runtime.diagnose_agent_runtime("claude_agent")
+    first["ready"] = False
+    second = agent_runtime.diagnose_agent_runtime("claude_agent")
+    refreshed = agent_runtime.diagnose_agent_runtime("claude_agent", invalidate=True)
+
+    assert second["ready"] is True
+    assert refreshed["ready"] is True
+    assert calls == ["claude_agent", "claude_agent"]
+
+
+def test_runtime_catalog_diagnoses_in_parallel_and_keeps_order(monkeypatch) -> None:
+    barrier = Barrier(len(agent_runtime.RUNTIME_KEYS))
+
+    def diagnose(runtime_key: str, *, invalidate: bool = False) -> dict:
+        assert invalidate is False
+        barrier.wait(timeout=1)
+        return {"runtime_key": runtime_key}
+
+    monkeypatch.setattr(agent_runtime, "diagnose_agent_runtime", diagnose)
+
+    diagnostics = agent_runtime.list_agent_runtimes()
+
+    assert [item["runtime_key"] for item in diagnostics] == list(agent_runtime.RUNTIME_KEYS)
 
 
 def test_claude_diagnostic_reuses_local_cli_login(monkeypatch) -> None:

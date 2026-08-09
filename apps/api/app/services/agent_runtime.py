@@ -7,12 +7,15 @@ stay in the runtime's own environment/configuration and are never serialized.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
+from threading import Lock
 from time import monotonic
 from typing import Callable, Protocol
 from uuid import uuid4
@@ -33,6 +36,10 @@ from app.services.codex_agent_runtime import (
 
 RUNTIME_KEYS = ("local_codex", "claude_agent", "hermes", "openclaw")
 DEFAULT_REASONING_EFFORTS = ["low", "medium", "high"]
+AGENT_DIAGNOSTIC_CACHE_TTL_SECONDS = 30.0
+_agent_diagnostic_cache: dict[str, tuple[float, dict]] = {}
+_agent_diagnostic_cache_lock = Lock()
+_agent_diagnostic_runtime_locks = {runtime_key: Lock() for runtime_key in RUNTIME_KEYS}
 
 
 class AgentRuntimeAdapter(Protocol):
@@ -433,12 +440,8 @@ def diagnose_openclaw() -> dict:
         )
 
 
-def diagnose_agent_runtime(runtime_key: str, *, invalidate: bool = False) -> dict:
-    if runtime_key not in RUNTIME_KEYS:
-        raise KeyError(runtime_key)
+def _diagnose_agent_runtime_uncached(runtime_key: str) -> dict:
     if runtime_key == "local_codex":
-        if invalidate:
-            invalidate_local_codex_diagnostic_cache()
         return _with_metadata("local_codex", diagnose_local_codex())
     if runtime_key == "claude_agent":
         return diagnose_claude_agent()
@@ -447,8 +450,55 @@ def diagnose_agent_runtime(runtime_key: str, *, invalidate: bool = False) -> dic
     return diagnose_openclaw()
 
 
+def invalidate_agent_runtime_diagnostic_cache(runtime_key: str | None = None) -> None:
+    if runtime_key is not None and runtime_key not in RUNTIME_KEYS:
+        raise KeyError(runtime_key)
+    with _agent_diagnostic_cache_lock:
+        if runtime_key is None:
+            _agent_diagnostic_cache.clear()
+        else:
+            _agent_diagnostic_cache.pop(runtime_key, None)
+    if runtime_key in {None, "local_codex"}:
+        invalidate_local_codex_diagnostic_cache()
+
+
+def diagnose_agent_runtime(runtime_key: str, *, invalidate: bool = False) -> dict:
+    if runtime_key not in RUNTIME_KEYS:
+        raise KeyError(runtime_key)
+    if invalidate:
+        with _agent_diagnostic_runtime_locks[runtime_key]:
+            invalidate_agent_runtime_diagnostic_cache(runtime_key)
+            diagnostic = _diagnose_agent_runtime_uncached(runtime_key)
+            with _agent_diagnostic_cache_lock:
+                _agent_diagnostic_cache[runtime_key] = (monotonic(), deepcopy(diagnostic))
+            return deepcopy(diagnostic)
+    now = monotonic()
+    with _agent_diagnostic_cache_lock:
+        cached = _agent_diagnostic_cache.get(runtime_key)
+        if cached and now - cached[0] < AGENT_DIAGNOSTIC_CACHE_TTL_SECONDS:
+            return deepcopy(cached[1])
+
+    # Only one caller may run a given CLI diagnostic at a time. Other runtimes
+    # still diagnose in parallel through list_agent_runtimes().
+    with _agent_diagnostic_runtime_locks[runtime_key]:
+        now = monotonic()
+        with _agent_diagnostic_cache_lock:
+            cached = _agent_diagnostic_cache.get(runtime_key)
+            if cached and now - cached[0] < AGENT_DIAGNOSTIC_CACHE_TTL_SECONDS:
+                return deepcopy(cached[1])
+        diagnostic = _diagnose_agent_runtime_uncached(runtime_key)
+        with _agent_diagnostic_cache_lock:
+            _agent_diagnostic_cache[runtime_key] = (monotonic(), deepcopy(diagnostic))
+        return deepcopy(diagnostic)
+
+
 def list_agent_runtimes() -> list[dict]:
-    return [diagnose_agent_runtime(runtime_key) for runtime_key in RUNTIME_KEYS]
+    with ThreadPoolExecutor(max_workers=len(RUNTIME_KEYS), thread_name_prefix="agent-diagnostic") as executor:
+        diagnostics = {
+            runtime_key: executor.submit(diagnose_agent_runtime, runtime_key)
+            for runtime_key in RUNTIME_KEYS
+        }
+        return [diagnostics[runtime_key].result() for runtime_key in RUNTIME_KEYS]
 
 
 def _structured_prompt(prompt: str, developer_instructions: str, output_schema: dict) -> str:

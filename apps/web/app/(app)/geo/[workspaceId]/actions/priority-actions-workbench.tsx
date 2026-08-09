@@ -40,7 +40,7 @@ type Props = {
 	initialScope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null };
 	initialSelectedId?: string;
 	actions: CleanroomAction[];
-	agentRuntimes: AgentRuntime[];
+	initialAgentRuntimes: AgentRuntime[];
 	activeSourcedBrandFactCount: number;
 	websiteUrl: string | null;
 	initialOpportunityAnalysis: CleanroomOpportunityAnalysisRun | null;
@@ -68,6 +68,7 @@ type Props = {
 	readOpportunityAnalysis: (jobId: number) => Promise<CleanroomOpportunityAnalysisRun>;
 	analyzeWebsiteGap: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; runtimeKey: AgentRuntimeKey; agentModel: string | null; reasoningEffort: CodexReasoningEffort | null }) => Promise<WebsiteGapAnalysisRun>;
 	readWebsiteGapAnalysis: (jobId: number) => Promise<WebsiteGapAnalysisRun>;
+	readAgentRuntimes: () => Promise<AgentRuntime[]>;
 };
 
 function syncVariant(
@@ -317,7 +318,7 @@ const agentProgressStateLabels = {
 	failed: "未完成",
 } as const;
 
-export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, agentRuntimes, activeSourcedBrandFactCount, websiteUrl, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis }: Props) {
+export function PriorityActionsWorkbench({ workspaceId, opportunities, opportunityScope, initialScope, initialSelectedId, actions, initialAgentRuntimes, activeSourcedBrandFactCount, websiteUrl, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, recordDistributionResults, confirmDraftReadback, recordHumanPublication, createRetest, readRetest, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis, readAgentRuntimes }: Props) {
 	const router = useRouter();
 	const [selectedId, setSelectedId] = useState(() => initialSelectedId && opportunities.some((item) => item.id === initialSelectedId)
 		? initialSelectedId
@@ -325,7 +326,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
 	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
-	const initialAgentRuntime = agentRuntimes.find((runtime) => runtime.runtime_key === "local_codex") ?? agentRuntimes[0] ?? null;
+	const [agentRuntimes, setAgentRuntimes] = useState(initialAgentRuntimes);
+	const [agentRuntimesLoading, setAgentRuntimesLoading] = useState(initialAgentRuntimes.length === 0);
+	const [agentRuntimesError, setAgentRuntimesError] = useState("");
+	const initialAgentRuntime = initialAgentRuntimes.find((runtime) => runtime.runtime_key === "local_codex") ?? initialAgentRuntimes[0] ?? null;
 	const [selectedRuntimeKey, setSelectedRuntimeKey] = useState<AgentRuntimeKey>(initialAgentRuntime?.runtime_key ?? "local_codex");
 	const initialAgentModel = initialAgentRuntime?.default_model || initialAgentRuntime?.model_options?.[0]?.id || initialAgentRuntime?.available_models?.[0] || "";
 	const initialAgentModelOption = initialAgentRuntime?.model_options?.find((model) => model.id === initialAgentModel);
@@ -642,6 +646,23 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		: platformOptions.filter((platform) => platform.key !== "official_site");
 
 	useEffect(() => {
+		let cancelled = false;
+		async function refreshRuntimeCatalog() {
+			setAgentRuntimesLoading(true);
+			setAgentRuntimesError("");
+			try {
+				const runtimes = await readAgentRuntimes();
+				if (!cancelled) setAgentRuntimes(runtimes);
+			} catch (error) {
+				if (!cancelled) setAgentRuntimesError(error instanceof Error ? error.message : "无法检测本机 Agent");
+			} finally {
+				if (!cancelled) setAgentRuntimesLoading(false);
+			}
+		}
+		void refreshRuntimeCatalog();
+		return () => { cancelled = true; };
+	}, [readAgentRuntimes]);
+	useEffect(() => {
 		setSelectedBatchId(initialScope.batchId);
 		setSelectedModel(initialScope.modelKey ?? "all");
 		setSelectedQuestion(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
@@ -652,6 +673,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		if (!opportunityAnalysisActive || !opportunityAnalysis) return;
 		let cancelled = false;
 		async function refreshAnalysis() {
+			if (document.visibilityState !== "visible") return;
 			try {
 				const result = await readOpportunityAnalysis(opportunityAnalysis!.job_id);
 				if (cancelled) return;
@@ -670,15 +692,19 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		}
 		void refreshAnalysis();
 		const timer = window.setInterval(refreshAnalysis, 1800);
+		const handleVisibility = () => { if (document.visibilityState === "visible") void refreshAnalysis(); };
+		document.addEventListener("visibilitychange", handleVisibility);
 		return () => {
 			cancelled = true;
 			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", handleVisibility);
 		};
 	}, [opportunityAnalysis?.job_id, opportunityAnalysisActive, readOpportunityAnalysis, router]);
 	useEffect(() => {
 		if (!websiteGapAnalysisActive || !websiteGapAnalysis) return;
 		let cancelled = false;
 		async function refreshAnalysis() {
+			if (document.visibilityState !== "visible") return;
 			try {
 				const result = await readWebsiteGapAnalysis(websiteGapAnalysis!.job_id);
 				if (cancelled) return;
@@ -697,9 +723,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		}
 		void refreshAnalysis();
 		const timer = window.setInterval(refreshAnalysis, 1800);
+		const handleVisibility = () => { if (document.visibilityState === "visible") void refreshAnalysis(); };
+		document.addEventListener("visibilitychange", handleVisibility);
 		return () => {
 			cancelled = true;
 			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", handleVisibility);
 		};
 	}, [websiteGapAnalysis?.job_id, websiteGapAnalysisActive, readWebsiteGapAnalysis, router]);
 
@@ -781,6 +810,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setAgentProgress(null);
 		setAgentDetailsExpanded(false);
 		async function refresh() {
+			if (document.visibilityState !== "visible") return;
 			try {
 				const result = await readAgentProgress(activeActionId);
 				if (!cancelled) {
@@ -795,7 +825,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		}
 		void refresh();
 		const timer = window.setInterval(() => { if (runActive) void refresh(); }, 1500);
-		return () => { cancelled = true; window.clearInterval(timer); };
+		const handleVisibility = () => { if (document.visibilityState === "visible") void refresh(); };
+		document.addEventListener("visibilitychange", handleVisibility);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", handleVisibility);
+		};
 	}, [readAgentProgress, runActive, selected?.existingAction?.id]);
 
 	useEffect(() => {
@@ -805,21 +841,49 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		}
 		const latestKnownEvent = agentEvents.at(-1);
 		const after = latestKnownEvent?.agent_run_id === currentRunId ? latestKnownEvent.sequence : 0;
-		setAgentTransport("connecting");
-		const source = new EventSource(`/api/geo/${workspaceId}/agent-runs/${currentRunId}/events?after=${after}`);
-		source.onopen = () => setAgentTransport("live");
-		source.addEventListener("agent_event", (raw) => {
-			const event = JSON.parse((raw as MessageEvent<string>).data) as CleanroomAgentEvent;
-			setAgentEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event].sort((a, b) => a.sequence - b.sequence));
-			setAgentRuns((current) => current.map((run) => run.id === currentRunId ? {
-				...run,
-				stage: event.stage,
-				status: event.event_type === "awaiting_human_review" ? "awaiting_review" : event.event_type === "run_cancelled" ? "cancelled" : ["run_failed", "run_timed_out"].includes(event.event_type) ? "failed" : run.status === "queued" ? "running" : run.status,
-			} : run));
-		});
-		source.addEventListener("end", () => { setAgentTransport("ended"); source.close(); router.refresh(); });
-		source.onerror = () => { setAgentTransport("fallback"); source.close(); };
-		return () => source.close();
+		let active = true;
+		let source: EventSource | null = null;
+		function disconnect() {
+			source?.close();
+			source = null;
+		}
+		function connect() {
+			if (!active || document.visibilityState !== "visible" || source) return;
+			setAgentTransport("connecting");
+			const nextSource = new EventSource(`/api/geo/${workspaceId}/agent-runs/${currentRunId}/events?after=${after}`);
+			source = nextSource;
+			nextSource.onopen = () => { if (active) setAgentTransport("live"); };
+			nextSource.addEventListener("agent_event", (raw) => {
+				if (!active) return;
+				const event = JSON.parse((raw as MessageEvent<string>).data) as CleanroomAgentEvent;
+				setAgentEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event].sort((a, b) => a.sequence - b.sequence));
+				setAgentRuns((current) => current.map((run) => run.id === currentRunId ? {
+					...run,
+					stage: event.stage,
+					status: event.event_type === "awaiting_human_review" ? "awaiting_review" : event.event_type === "run_cancelled" ? "cancelled" : ["run_failed", "run_timed_out"].includes(event.event_type) ? "failed" : run.status === "queued" ? "running" : run.status,
+				} : run));
+			});
+			nextSource.addEventListener("end", () => {
+				if (active) setAgentTransport("ended");
+				disconnect();
+				router.refresh();
+			});
+			nextSource.onerror = () => {
+				if (active) setAgentTransport("fallback");
+				disconnect();
+			};
+		}
+		function handleVisibility() {
+			if (document.visibilityState === "visible") connect();
+			else disconnect();
+		}
+		connect();
+		document.addEventListener("visibilitychange", handleVisibility);
+		return () => {
+			active = false;
+			document.removeEventListener("visibilitychange", handleVisibility);
+			disconnect();
+		};
 	// The polling path above remains active as the authoritative fallback. Do not
 	// reconnect the stream every time a new event is appended.
 	// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -831,6 +895,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		const activeActionId = actionId;
 		let cancelled = false;
 		async function refreshRetest() {
+			if (document.visibilityState !== "visible") return;
 			try {
 				const result = await readRetest(activeActionId);
 				if (cancelled) return;
@@ -842,7 +907,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		}
 		void refreshRetest();
 		const timer = window.setInterval(() => void refreshRetest(), 2000);
-		return () => { cancelled = true; window.clearInterval(timer); };
+		const handleVisibility = () => { if (document.visibilityState === "visible") void refreshRetest(); };
+		document.addEventListener("visibilitychange", handleVisibility);
+		return () => {
+			cancelled = true;
+			window.clearInterval(timer);
+			document.removeEventListener("visibilitychange", handleVisibility);
+		};
 	}, [readRetest, retestActive, router, selected?.existingAction?.id]);
 
 	function changeScope(next: { batchId?: number | null; modelKey?: string; questionPlanId?: number | null }) {
@@ -1308,16 +1379,17 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 			<header className="pa-hero">
 				<div><h1>优先行动</h1><span>Agent 生成平台稿 → 你修改并审核 → 写入草稿 → 人工发布。</span>
 					<div className="pa-runtime-wrap">
-						<button type="button" className={`pa-runtime-status${!agentRuntime?.ready ? " is-warning" : agentCapacityAvailable ? " is-ready" : " is-busy"}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
-							<i />{!agentRuntime ? "Agent 未配置" : !agentCapacityAvailable && agentRuntime.ready ? `${agentRuntime.display_name} 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}` : `${agentRuntime.display_name} ${runtimeConnectionLabel(agentRuntime, true)}`}<Icon name="chevron" />
+						<button type="button" className={`pa-runtime-status${!agentRuntime?.ready && !agentRuntimesLoading ? " is-warning" : agentRuntime?.ready && agentCapacityAvailable ? " is-ready" : agentRuntime?.ready ? " is-busy" : ""}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
+							<i />{agentRuntimesLoading ? "正在检测本机 Agent…" : !agentRuntime ? agentRuntimesError ? "Agent 检测失败" : "Agent 未配置" : !agentCapacityAvailable && agentRuntime.ready ? `${agentRuntime.display_name} 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}` : `${agentRuntime.display_name} ${runtimeConnectionLabel(agentRuntime, true)}`}<Icon name="chevron" />
 						</button>
 						{runtimeExpanded ? <div className="pa-runtime-popover" role="menu" aria-label="选择执行 Agent">
 							<b>选择本机 Agent</b>
+							{agentRuntimesLoading ? <small>正在并行检测本机 Agent，请稍候…</small> : null}
 							<div className="pa-runtime-options">{agentRuntimes.map((runtime) => <button key={runtime.runtime_key} type="button" role="menuitemradio" aria-checked={runtime.runtime_key === selectedRuntimeKey} className={runtime.runtime_key === selectedRuntimeKey ? "is-selected" : ""} onClick={() => selectAgentRuntime(runtime)}>
 								<span>{runtime.logo_path ? <img src={runtime.logo_path} alt="" /> : runtime.display_name.slice(0, 1)}</span>
 								<div><strong>{runtime.display_name}</strong><small>{runtimeConnectionLabel(runtime)}</small></div><i className={runtime.ready ? "is-ready" : ""} />
 							</button>)}</div>
-							<span>{agentRuntime?.default_model || "未检测到默认模型"}</span><small>{agentRuntime?.ready ? `运行容量 ${agentCapacityUsed}/${agentCapacityLimit} · 单次最长 ${agentTimeoutMinutes} 分钟${agentRuntime.runtime_key === "local_codex" ? ` · ${runtimeVersionLabel(agentRuntime.runtime_version)}` : ""}` : agentRuntime?.error || agentRuntime?.configuration_hint || "请完成本机 Agent 配置。"}</small><Link href={`/geo/${workspaceId}/settings`}>查看 Agent 设置</Link>
+							<span>{agentRuntimesLoading ? "正在读取运行时信息" : agentRuntime?.default_model || "未检测到默认模型"}</span><small>{agentRuntimesLoading ? "页面其他功能已可使用，检测完成后会自动更新。" : agentRuntime?.ready ? `运行容量 ${agentCapacityUsed}/${agentCapacityLimit} · 单次最长 ${agentTimeoutMinutes} 分钟${agentRuntime.runtime_key === "local_codex" ? ` · ${runtimeVersionLabel(agentRuntime.runtime_version)}` : ""}` : agentRuntime?.error || agentRuntimesError || agentRuntime?.configuration_hint || "请完成本机 Agent 配置。"}</small><Link href={`/geo/${workspaceId}/settings`}>查看 Agent 设置</Link>
 						</div> : null}
 					</div>
 				</div>

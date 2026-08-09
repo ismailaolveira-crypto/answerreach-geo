@@ -69,8 +69,7 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		model_key: modelKey,
 		question_plan_id: questionPlanId,
 	});
-	const [agentRuntimes, workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis, websiteGapAnalysis] = await Promise.all([
-		getAgentRuntimes(workspaceId).catch(() => []),
+	const [workbenchState, websiteAuditOverview, brandFacts, opportunityAnalysis, websiteGapAnalysis] = await Promise.all([
 		getCleanroomActionWorkbenchState(workspaceId),
 		getLatestWebsiteAudit(workspaceId).catch(() => ({ website_url: null, latest: null })),
 		getCleanroomBrandFacts(workspaceId).catch(() => []),
@@ -124,6 +123,11 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	async function readWebsiteGapAnalysis(jobId: number) {
 		"use server";
 		return getWebsiteGapAnalysis(workspaceId, jobId);
+	}
+
+	async function readAgentRuntimes() {
+		"use server";
+		return getAgentRuntimes(workspaceId);
 	}
 
 	async function createAction(formData: FormData) {
@@ -269,8 +273,8 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return getCleanroomActionRetest(workspaceId, actionId);
 	}
 
-	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} agentRuntimes={agentRuntimes} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
+	return <PriorityActionsWorkbench workspaceId={workspaceId} opportunities={opportunities} opportunityScope={opportunityScope} initialScope={{ batchId, modelKey, questionPlanId }} initialSelectedId={initialSelectedId} actions={actions} initialAgentRuntimes={[]} activeSourcedBrandFactCount={brandFacts.filter((fact) => (
 		fact.status === "active"
 		&& fact.source_verification?.status === "source_and_statement_verified"
-	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialWebsiteGapAnalysis={websiteGapAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} analyzeWebsiteGap={analyzeWebsiteGap} readWebsiteGapAnalysis={readWebsiteGapAnalysis} />;
+	)).length} websiteUrl={websiteAuditOverview.website_url ?? null} initialOpportunityAnalysis={opportunityAnalysis} initialWebsiteGapAnalysis={websiteGapAnalysis} initialAgentRuns={agentRuns} initialReviewPackages={reviewPackages} initialDistributionRuns={distributionRuns} initialRetests={retests} createAction={createAction} startAgent={startAgent} interruptAgent={interruptAgent} resumeAgent={resumeAgent} reviseAgent={reviseAgent} captureAgentVisuals={captureAgentVisuals} readAgentProgress={readAgentProgress} decideReview={decideReview} savePlatformVariant={savePlatformVariant} createDistribution={createDistribution} recordDistributionResults={recordDistributionResults} confirmDraftReadback={confirmDraftReadback} recordHumanPublication={recordHumanPublication} createRetest={createRetest} readRetest={readRetest} discoverActions={discoverActions} readOpportunityAnalysis={readOpportunityAnalysis} analyzeWebsiteGap={analyzeWebsiteGap} readWebsiteGapAnalysis={readWebsiteGapAnalysis} readAgentRuntimes={readAgentRuntimes} />;
 }
