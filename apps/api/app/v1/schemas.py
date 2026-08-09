@@ -990,6 +990,10 @@ class ActionOpportunityDiscoverRequest(BaseModel):
     question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
     model_keys: list[str] = Field(default_factory=list, max_length=20)
     max_items: int = Field(default=50, ge=1, le=100)
+    codex_model: str | None = Field(default=None, max_length=120)
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
 
 
 class OpportunityAnalysisRunRead(BaseModel):
@@ -1004,6 +1008,8 @@ class OpportunityAnalysisRunRead(BaseModel):
     result_count: int = 0
     no_action_count: int = 0
     input_fingerprint: str
+    model: str | None = None
+    reasoning_effort: str | None = None
     codex_thread_id: str | None = None
     codex_turn_id: str | None = None
     analysis_summary: str | None = None
@@ -1017,6 +1023,10 @@ class WebsiteGapAnalysisRequest(BaseModel):
     batch_id: int = Field(ge=1)
     question_plan_ids: list[int] = Field(default_factory=list, max_length=100)
     model_keys: list[str] = Field(default_factory=list, max_length=20)
+    codex_model: str | None = Field(default=None, max_length=120)
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
 
 
 class WebsiteGapRecommendationRead(BaseModel):
@@ -1044,6 +1054,8 @@ class WebsiteGapAnalysisRunRead(BaseModel):
     recommendation_count: int = 0
     recommendations: list[WebsiteGapRecommendationRead] = Field(default_factory=list)
     input_fingerprint: str
+    model: str | None = None
+    reasoning_effort: str | None = None
     skill_name: str
     skill_sha256: str
     official_metrics: dict = Field(default_factory=dict)
@@ -1105,6 +1117,14 @@ class ActionEventRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AgentRuntimeModelRead(BaseModel):
+    id: str
+    display_name: str
+    description: str = ""
+    default_reasoning_effort: str | None = None
+    supported_reasoning_efforts: list[str] = Field(default_factory=list)
+
+
 class AgentRuntimeRead(BaseModel):
     runtime_key: str = "local_codex"
     sdk_installed: bool
@@ -1113,7 +1133,9 @@ class AgentRuntimeRead(BaseModel):
     ready: bool
     login_status: str
     default_model: str | None = None
+    default_reasoning_effort: str | None = None
     available_models: list[str] = Field(default_factory=list)
+    model_options: list[AgentRuntimeModelRead] = Field(default_factory=list)
     connection_status: Literal["cold", "warm"] = "cold"
     connected_since: datetime | None = None
     reuse_count: int = 0
@@ -1141,6 +1163,9 @@ class AgentRunCreate(BaseModel):
         default_factory=list, max_length=7
     )
     model: str | None = Field(default=None, max_length=120)
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
 
 
 class AgentRunRead(BaseModel):
@@ -1151,6 +1176,7 @@ class AgentRunRead(BaseModel):
     requested_by_user_id: int | None
     runtime_key: str
     model: str | None
+    reasoning_effort: str | None = None
     codex_thread_id: str | None
     codex_turn_id: str | None
     status: str

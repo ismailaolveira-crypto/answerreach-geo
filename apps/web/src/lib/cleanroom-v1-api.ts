@@ -573,6 +573,21 @@ export type CleanroomAction = {
 	completed_at?: string | null;
 };
 
+export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
+export type CodexExecutionSelection = {
+	model: string | null;
+	reasoning_effort: CodexReasoningEffort | null;
+};
+
+export type AgentRuntimeModel = {
+	id: string;
+	display_name: string;
+	description: string;
+	default_reasoning_effort?: CodexReasoningEffort | null;
+	supported_reasoning_efforts: CodexReasoningEffort[];
+};
+
 export type AgentRuntime = {
 	runtime_key: "local_codex";
 	sdk_installed: boolean;
@@ -581,7 +596,9 @@ export type AgentRuntime = {
 	ready: boolean;
 	login_status: string;
 	default_model?: string | null;
+	default_reasoning_effort?: CodexReasoningEffort | null;
 	available_models: string[];
+	model_options: AgentRuntimeModel[];
 	connection_status: "cold" | "warm";
 	connected_since?: string | null;
 	reuse_count: number;
@@ -608,6 +625,7 @@ export type CleanroomAgentRun = {
 	requested_by_user_id?: number | null;
 	runtime_key: string;
 	model?: string | null;
+	reasoning_effort?: CodexReasoningEffort | null;
 	codex_thread_id?: string | null;
 	codex_turn_id?: string | null;
 	status: string;
@@ -730,6 +748,8 @@ export type CleanroomOpportunityAnalysisRun = {
 	result_count: number;
 	no_action_count: number;
 	input_fingerprint: string;
+	model?: string | null;
+	reasoning_effort?: CodexReasoningEffort | null;
 	codex_thread_id?: string | null;
 	codex_turn_id?: string | null;
 	analysis_summary?: string | null;
@@ -762,6 +782,8 @@ export type WebsiteGapAnalysisRun = {
 		source_urls: string[];
 	}>;
 	input_fingerprint: string;
+	model?: string | null;
+	reasoning_effort?: CodexReasoningEffort | null;
 	skill_name: string;
 	skill_sha256: string;
 	official_metrics: Record<string, unknown>;
@@ -1532,7 +1554,11 @@ export function testAgentRuntime(workspaceId: string | number) {
 export function createCleanroomAgentRun(
 	workspaceId: string | number,
 	actionId: number,
-	payload: { selected_platforms?: string[]; model?: string | null } = {},
+	payload: {
+		selected_platforms?: string[];
+		model?: string | null;
+		reasoning_effort?: CodexReasoningEffort | null;
+	} = {},
 ) {
 	return apiRequest<CleanroomAgentRun>(`/workspaces/${workspaceId}/actions/${actionId}/agent-runs`, {
 		method: "POST",
@@ -1596,7 +1622,14 @@ export function getCleanroomActionOpportunities(
 
 export function discoverCleanroomActionOpportunities(
 	workspaceId: string | number,
-	payload: { batch_id?: number | null; question_plan_ids?: number[]; model_keys?: string[]; max_items?: number } = {},
+	payload: {
+		batch_id?: number | null;
+		question_plan_ids?: number[];
+		model_keys?: string[];
+		max_items?: number;
+		codex_model?: string | null;
+		reasoning_effort?: CodexReasoningEffort | null;
+	} = {},
 ) {
 	return apiRequest<CleanroomOpportunityAnalysisRun>(`/workspaces/${workspaceId}/action-opportunities/discover`, {
 		method: "POST",
@@ -1620,7 +1653,13 @@ export function getCleanroomOpportunityAnalysis(workspaceId: string | number, jo
 
 export function createWebsiteGapAnalysis(
 	workspaceId: string | number,
-	payload: { batch_id: number; question_plan_ids?: number[]; model_keys?: string[] },
+	payload: {
+		batch_id: number;
+		question_plan_ids?: number[];
+		model_keys?: string[];
+		codex_model?: string | null;
+		reasoning_effort?: CodexReasoningEffort | null;
+	},
 ) {
 	return apiRequest<WebsiteGapAnalysisRun>(`/workspaces/${workspaceId}/website-gap-analyses`, {
 		method: "POST",

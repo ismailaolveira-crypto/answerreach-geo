@@ -653,6 +653,7 @@ def execute_website_gap_analysis(
         output_schema=OUTPUT_SCHEMA,
         developer_instructions=_developer_instructions(skill),
         model=payload.get("model"),
+        reasoning_effort=payload.get("reasoning_effort"),
         on_started=on_started,
         timeout_seconds=max(60, min(int(get_settings().agent_run_timeout_seconds), 3600)),
     )

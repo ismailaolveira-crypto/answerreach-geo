@@ -1348,9 +1348,15 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
 
     queued = review_client.post(
         "/api/v1/workspaces/1/actions/2/agent-runs",
-        json={"selected_platforms": ["zhihu", "wechat"]},
+        json={
+            "selected_platforms": ["zhihu", "wechat"],
+            "model": "gpt-5-codex",
+            "reasoning_effort": "low",
+        },
     )
     assert queued.status_code == 202
+    assert queued.json()["model"] == "gpt-5-codex"
+    assert queued.json()["reasoning_effort"] == "low"
     run_id = queued.json()["id"]
     job_id = queued.json()["job_id"]
 

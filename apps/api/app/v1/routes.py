@@ -3746,6 +3746,8 @@ def _opportunity_analysis_read(job: QueueJob) -> dict:
         "result_count": int(payload.get("result_count") or 0),
         "no_action_count": int(payload.get("no_action_count") or 0),
         "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "model": payload.get("model"),
+        "reasoning_effort": payload.get("reasoning_effort"),
         "codex_thread_id": payload.get("codex_thread_id"),
         "codex_turn_id": payload.get("codex_turn_id"),
         "analysis_summary": payload.get("analysis_summary"),
@@ -3782,6 +3784,8 @@ def _website_gap_analysis_read(job: QueueJob) -> dict:
         "recommendation_count": int(payload.get("recommendation_count") or 0),
         "recommendations": list(payload.get("recommendations") or []),
         "input_fingerprint": str(payload.get("input_fingerprint") or ""),
+        "model": payload.get("model"),
+        "reasoning_effort": payload.get("reasoning_effort"),
         "skill_name": str(payload.get("skill_name") or ""),
         "skill_sha256": str(payload.get("skill_sha256") or ""),
         "official_metrics": dict(payload.get("official_metrics") or {}),
@@ -3958,6 +3962,19 @@ def discover_action_opportunities(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    invalidate_local_codex_diagnostic_cache()
+    diagnostic = diagnose_local_codex()
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+        )
+    codex_model, reasoning_effort = _resolve_codex_execution(
+        diagnostic,
+        requested_model=payload.codex_model,
+        requested_reasoning_effort=payload.reasoning_effort,
+    )
+
     active_jobs = [
         job
         for job in db.scalars(
@@ -3976,19 +3993,14 @@ def discover_action_opportunities(
             for job in active_jobs
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
+            and (job.payload_json or {}).get("model") == codex_model
+            and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
     )
     if same_scope is not None:
         return _opportunity_analysis_read(same_scope)
 
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = diagnose_local_codex()
-    if not diagnostic.get("ready"):
-        raise HTTPException(
-            status_code=409,
-            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
-        )
     _assert_agent_capacity(db, workspace_id)
     job = QueueJob(
         job_type="geo_opportunity.discover",
@@ -4005,7 +4017,8 @@ def discover_action_opportunities(
             "max_items": payload.max_items,
             "input_fingerprint": context["input_fingerprint"],
             "evidence_count": len(context["evidence"]),
-            "model": diagnostic.get("default_model"),
+            "model": codex_model,
+            "reasoning_effort": reasoning_effort,
             "actor_user_id": user.id,
             "stage": "queued",
         },
@@ -4025,6 +4038,8 @@ def discover_action_opportunities(
                 "question_plan_ids": payload.question_plan_ids,
                 "input_fingerprint": context["input_fingerprint"],
                 "evidence_count": len(context["evidence"]),
+                "model": codex_model,
+                "reasoning_effort": reasoning_effort,
                 "evidence_gate": (
                     "completed_task+real_answer+search_event+source_url+raw_artifact"
                 ),
@@ -4125,6 +4140,20 @@ def create_website_gap_analysis(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+
+    invalidate_local_codex_diagnostic_cache()
+    diagnostic = diagnose_local_codex()
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
+        )
+    codex_model, reasoning_effort = _resolve_codex_execution(
+        diagnostic,
+        requested_model=payload.codex_model,
+        requested_reasoning_effort=payload.reasoning_effort,
+    )
+
     active_jobs = [
         job
         for job in db.scalars(
@@ -4143,19 +4172,14 @@ def create_website_gap_analysis(
             for job in active_jobs
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
+            and (job.payload_json or {}).get("model") == codex_model
+            and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
     )
     if same_scope is not None:
         return _website_gap_analysis_read(same_scope)
 
-    invalidate_local_codex_diagnostic_cache()
-    diagnostic = diagnose_local_codex()
-    if not diagnostic.get("ready"):
-        raise HTTPException(
-            status_code=409,
-            detail=diagnostic.get("error") or "Local Codex Agent is not ready",
-        )
     _assert_agent_capacity(db, workspace_id)
     job = QueueJob(
         job_type=WEBSITE_GAP_JOB_TYPE,
@@ -4174,7 +4198,8 @@ def create_website_gap_analysis(
             "official_metrics": context["deterministic_metrics"],
             "skill_name": skill["name"],
             "skill_sha256": skill["sha256"],
-            "model": diagnostic.get("default_model"),
+            "model": codex_model,
+            "reasoning_effort": reasoning_effort,
             "actor_user_id": user.id,
             "stage": "queued",
         },
@@ -4196,6 +4221,8 @@ def create_website_gap_analysis(
                 "evidence_count": len(context["evidence"]),
                 "skill_name": skill["name"],
                 "skill_sha256": skill["sha256"],
+                "model": codex_model,
+                "reasoning_effort": reasoning_effort,
             },
         )
     )
@@ -6206,6 +6233,16 @@ def enqueue_content_generation(
 
 
 ACTIVE_AGENT_RUN_STATUSES = ("queued", "resuming", "running", "cancelling")
+KNOWN_CODEX_REASONING_EFFORTS = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
 
 
 def _agent_capacity(
@@ -6248,6 +6285,40 @@ def _agent_runtime_diagnostic(db: Session, workspace_id: int) -> dict:
             min(int(get_settings().agent_run_timeout_seconds), 3600),
         ),
     }
+
+
+def _resolve_codex_execution(
+    diagnostic: dict,
+    *,
+    requested_model: str | None,
+    requested_reasoning_effort: str | None,
+) -> tuple[str | None, str | None]:
+    model = requested_model or diagnostic.get("default_model")
+    available_models = list(diagnostic.get("available_models") or [])
+    if model and model not in available_models:
+        raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
+
+    model_option = next(
+        (
+            item
+            for item in list(diagnostic.get("model_options") or [])
+            if str(item.get("id") or "") == str(model or "")
+        ),
+        None,
+    )
+    if model_option is None:
+        supported_efforts = list(KNOWN_CODEX_REASONING_EFFORTS)
+        default_effort = diagnostic.get("default_reasoning_effort")
+    else:
+        supported_efforts = list(model_option.get("supported_reasoning_efforts") or [])
+        default_effort = model_option.get("default_reasoning_effort")
+    effort = requested_reasoning_effort or default_effort
+    if effort and effort not in supported_efforts:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Codex model {model} does not support reasoning effort {effort}",
+        )
+    return model, effort
 
 
 def _assert_agent_capacity(
@@ -6324,6 +6395,7 @@ def test_agent_runtime(
                 },
                 developer_instructions="Do not read or write files. Return only the requested JSON.",
                 model=diagnostic.get("default_model"),
+                reasoning_effort=diagnostic.get("default_reasoning_effort"),
             )
         parsed = json.loads(result.final_response)
         return {
@@ -6462,9 +6534,11 @@ def create_agent_run(
                     "请先在设置中核验品牌事实，避免只生成通用整改框架"
                 ),
             )
-    model = payload.model or diagnostic.get("default_model")
-    if model and model not in diagnostic.get("available_models", []):
-        raise HTTPException(status_code=422, detail="Selected Codex model is not available locally")
+    model, reasoning_effort = _resolve_codex_execution(
+        diagnostic,
+        requested_model=payload.model,
+        requested_reasoning_effort=payload.reasoning_effort,
+    )
     run = GeoAgentRun(
         workspace_id=workspace_id,
         action_id=action_id,
@@ -6474,7 +6548,12 @@ def create_agent_run(
         status="queued",
         stage="queued",
         selected_platforms=platforms,
-        request_snapshot={"action_id": action_id, "selected_platforms": platforms},
+        request_snapshot={
+            "action_id": action_id,
+            "selected_platforms": platforms,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+        },
     )
     db.add(run)
     db.flush()
@@ -6506,7 +6585,13 @@ def create_agent_run(
         event_type="run_queued",
         stage="queued",
         message="Agent 任务已入队，等待本机 worker 执行",
-        detail={"job_id": job.id, "platforms": platforms, "from_action_stage": previous_stage},
+        detail={
+            "job_id": job.id,
+            "platforms": platforms,
+            "model": model,
+            "reasoning_effort": reasoning_effort,
+            "from_action_stage": previous_stage,
+        },
     )
     db.refresh(run)
     return run

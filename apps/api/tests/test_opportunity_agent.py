@@ -3,6 +3,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,30 @@ from app.services.codex_agent_runtime import CodexTurnResult
 from app.v1 import opportunity_agent
 from app.v1 import routes
 from app.v1.schemas import ActionOpportunityDiscoverRequest
+
+
+def test_runtime_selection_rejects_effort_not_supported_by_model() -> None:
+    diagnostic = {
+        "default_model": "gpt-fast",
+        "available_models": ["gpt-fast"],
+        "model_options": [
+            {
+                "id": "gpt-fast",
+                "default_reasoning_effort": "low",
+                "supported_reasoning_efforts": ["low", "medium"],
+            }
+        ],
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        routes._resolve_codex_execution(
+            diagnostic,
+            requested_model="gpt-fast",
+            requested_reasoning_effort="ultra",
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "does not support" in str(exc_info.value.detail)
 
 
 def _seed(db: Session) -> None:
@@ -303,6 +328,8 @@ def test_route_queues_codex_before_any_opportunity_is_visible(monkeypatch) -> No
                 batch_id=1,
                 model_keys=["deepseek"],
                 question_plan_ids=[],
+                codex_model="gpt-test",
+                reasoning_effort="low",
             ),
             db,
             user,
@@ -329,6 +356,8 @@ def test_route_queues_codex_before_any_opportunity_is_visible(monkeypatch) -> No
         )
 
         assert run["status"] == "queued"
+        assert run["model"] == "gpt-test"
+        assert run["reasoning_effort"] == "low"
         assert run["result_count"] == 0
         assert visible == []
         assert [row["title"] for row in legacy] == ["旧规则机会"]

@@ -167,6 +167,32 @@ def _probe_local_codex() -> dict:
                 (getattr(item, "id", None) for item in models if getattr(item, "is_default", False)),
                 getattr(models[0], "id", None) if models else None,
             )
+            model_options = []
+            for item in models:
+                model_id = str(getattr(item, "id", "") or "")
+                if not model_id:
+                    continue
+                supported_efforts = [
+                    str(getattr(getattr(option, "reasoning_effort", None), "value", "") or "")
+                    for option in list(getattr(item, "supported_reasoning_efforts", []) or [])
+                ]
+                supported_efforts = [value for value in supported_efforts if value]
+                default_effort = str(
+                    getattr(getattr(item, "default_reasoning_effort", None), "value", "") or ""
+                )
+                model_options.append(
+                    {
+                        "id": model_id,
+                        "display_name": str(getattr(item, "display_name", "") or model_id),
+                        "description": str(getattr(item, "description", "") or ""),
+                        "default_reasoning_effort": default_effort or None,
+                        "supported_reasoning_efforts": supported_efforts,
+                    }
+                )
+            default_model_option = next(
+                (item for item in model_options if item["id"] == default_model),
+                model_options[0] if model_options else None,
+            )
             metadata = codex.metadata
             user_agent = getattr(metadata, "userAgent", None)
             return {
@@ -177,7 +203,13 @@ def _probe_local_codex() -> dict:
                 "ready": account is not None and bool(models),
                 "login_status": "chatgpt_authenticated" if account is not None else "login_required",
                 "default_model": default_model,
-                "available_models": [getattr(item, "id", "") for item in models if getattr(item, "id", "")],
+                "default_reasoning_effort": (
+                    default_model_option.get("default_reasoning_effort")
+                    if default_model_option
+                    else None
+                ),
+                "available_models": [item["id"] for item in model_options],
+                "model_options": model_options,
                 "error": None,
                 **_warm_codex_client.snapshot(),
             }
@@ -235,6 +267,7 @@ class LocalCodexRuntime:
         output_schema: dict,
         developer_instructions: str,
         model: str | None = None,
+        reasoning_effort: str | None = None,
         thread_id: str | None = None,
         on_started: Callable[[str, str], None] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
@@ -242,6 +275,7 @@ class LocalCodexRuntime:
         timeout_seconds: float | None = 900.0,
     ) -> CodexTurnResult:
         from openai_codex import ApprovalMode, Sandbox
+        from openai_codex.types import ReasoningEffort
 
         task_directory = task_directory.resolve()
         task_directory.mkdir(parents=True, exist_ok=True)
@@ -272,6 +306,7 @@ class LocalCodexRuntime:
                 )
             handle = thread.turn(
                 prompt,
+                effort=ReasoningEffort(reasoning_effort) if reasoning_effort else None,
                 output_schema=output_schema,
                 sandbox=Sandbox.workspace_write,
                 approval_mode=ApprovalMode.deny_all,

@@ -922,6 +922,7 @@ def execute_agent_run(
             output_schema=OUTPUT_SCHEMA,
             developer_instructions=DEVELOPER_INSTRUCTIONS,
             model=run.model,
+            reasoning_effort=run.reasoning_effort,
             thread_id=run.codex_thread_id if is_resume else None,
             on_started=on_started,
             on_event=on_event,

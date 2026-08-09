@@ -432,6 +432,10 @@ class GeoAgentRun(CleanRoomTimestamp, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    @property
+    def reasoning_effort(self) -> str | None:
+        return str((self.request_snapshot or {}).get("reasoning_effort") or "") or None
+
 
 class GeoAgentEvent(CleanRoomTimestamp, Base):
     __tablename__ = "geo_agent_events_v1"

@@ -313,6 +313,8 @@ def test_route_queues_selected_scope_with_skill_hash(monkeypatch) -> None:
                 batch_id=1,
                 model_keys=["qianwen"],
                 question_plan_ids=[1],
+                codex_model="gpt-test",
+                reasoning_effort="high",
             ),
             db,
             user,
@@ -322,6 +324,9 @@ def test_route_queues_selected_scope_with_skill_hash(monkeypatch) -> None:
     assert run["status"] == "queued"
     assert run["model_keys"] == ["qianwen"]
     assert run["question_plan_ids"] == [1]
+    assert run["model"] == "gpt-test"
+    assert run["reasoning_effort"] == "high"
     assert job is not None
     assert job.payload_json["skill_name"] == website_gap_agent.SKILL_NAME
+    assert job.payload_json["reasoning_effort"] == "high"
     assert len(job.payload_json["skill_sha256"]) == 64

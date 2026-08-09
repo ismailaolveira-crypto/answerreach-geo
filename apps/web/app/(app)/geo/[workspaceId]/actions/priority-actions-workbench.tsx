@@ -6,6 +6,8 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { BrandLogo } from "@/components/brand-logo";
 import type {
 	AgentRuntime,
+	CodexExecutionSelection,
+	CodexReasoningEffort,
 	CleanroomAction,
 	CleanroomActionOpportunityScope,
 	CleanroomActionRetest,
@@ -47,7 +49,7 @@ type Props = {
 	initialDistributionRuns: CleanroomDistributionRun[];
 	initialRetests: CleanroomActionRetest[];
 	createAction: (formData: FormData) => Promise<void>;
-	startAgent: (actionId: number, platforms: string[]) => Promise<CleanroomAgentRun>;
+	startAgent: (actionId: number, platforms: string[], execution: CodexExecutionSelection) => Promise<CleanroomAgentRun>;
 	interruptAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	resumeAgent: (runId: number) => Promise<CleanroomAgentRun>;
 	reviseAgent: (runId: number, contentAssetId: number) => Promise<CleanroomAgentRun>;
@@ -61,9 +63,9 @@ type Props = {
 	recordHumanPublication: (runId: number, targetId: number, publicUrl: string) => Promise<CleanroomDistributionRun>;
 	createRetest: (actionId: number) => Promise<CleanroomActionRetest>;
 	readRetest: (actionId: number) => Promise<CleanroomActionRetest>;
-	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<CleanroomOpportunityAnalysisRun>;
+	discoverActions: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) => Promise<CleanroomOpportunityAnalysisRun>;
 	readOpportunityAnalysis: (jobId: number) => Promise<CleanroomOpportunityAnalysisRun>;
-	analyzeWebsiteGap: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) => Promise<WebsiteGapAnalysisRun>;
+	analyzeWebsiteGap: (scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) => Promise<WebsiteGapAnalysisRun>;
 	readWebsiteGapAnalysis: (jobId: number) => Promise<WebsiteGapAnalysisRun>;
 };
 
@@ -105,6 +107,20 @@ function syncVariant(
 
 const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
 const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先", website: "官网审计" } as const;
+const reasoningEffortLabels: Record<CodexReasoningEffort, string> = {
+	none: "关闭",
+	minimal: "极低",
+	low: "低",
+	medium: "中",
+	high: "高",
+	xhigh: "超高",
+	max: "最高",
+	ultra: "极致",
+};
+
+function codexExecutionLabel(model?: string | null, effort?: CodexReasoningEffort | null) {
+	return [model, effort ? `${reasoningEffortLabels[effort]}推理` : null].filter(Boolean).join(" · ");
+}
 
 type ReviewVisualAsset = {
 	artifactId: number;
@@ -301,6 +317,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const [selectedBatchId, setSelectedBatchId] = useState(initialScope.batchId);
 	const [selectedModel, setSelectedModel] = useState(initialScope.modelKey ?? "all");
 	const [selectedQuestion, setSelectedQuestion] = useState(initialScope.questionPlanId ? String(initialScope.questionPlanId) : "all");
+	const initialCodexModel = agentRuntime?.default_model || agentRuntime?.model_options?.[0]?.id || agentRuntime?.available_models?.[0] || "";
+	const initialCodexModelOption = agentRuntime?.model_options?.find((model) => model.id === initialCodexModel);
+	const [selectedCodexModel, setSelectedCodexModel] = useState(initialCodexModel);
+	const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<CodexReasoningEffort | "">(
+		initialCodexModelOption?.default_reasoning_effort || agentRuntime?.default_reasoning_effort || "",
+	);
 	const [discoveryFeedback, setDiscoveryFeedback] = useState("");
 	const [opportunityAnalysis, setOpportunityAnalysis] = useState(initialOpportunityAnalysis);
 	const [websiteGapAnalysis, setWebsiteGapAnalysis] = useState(initialWebsiteGapAnalysis);
@@ -389,6 +411,27 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 	const selectedQuestionLabel = selectedQuestion === "all"
 		? "全部问题"
 		: questions.find((question) => String(question.id) === selectedQuestion)?.label ?? `问题 #${selectedQuestion}`;
+	const codexModels = agentRuntime?.model_options?.length
+		? agentRuntime.model_options
+		: (agentRuntime?.available_models ?? []).map((model) => ({
+			id: model,
+			display_name: model,
+			description: "",
+			default_reasoning_effort: agentRuntime?.default_reasoning_effort,
+			supported_reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as CodexReasoningEffort[],
+		}));
+	const selectedCodexModelOption = codexModels.find((model) => model.id === selectedCodexModel) ?? codexModels[0];
+	const supportedReasoningEfforts = selectedCodexModelOption?.supported_reasoning_efforts ?? [];
+	const executionSelection: CodexExecutionSelection = {
+		model: selectedCodexModel || null,
+		reasoning_effort: selectedReasoningEffort || null,
+	};
+	useEffect(() => {
+		if (!selectedCodexModelOption) return;
+		if (selectedCodexModel !== selectedCodexModelOption.id) setSelectedCodexModel(selectedCodexModelOption.id);
+		if (selectedReasoningEffort && supportedReasoningEfforts.includes(selectedReasoningEffort)) return;
+		setSelectedReasoningEffort(selectedCodexModelOption.default_reasoning_effort || supportedReasoningEfforts[0] || "");
+	}, [selectedCodexModel, selectedCodexModelOption, selectedReasoningEffort, supportedReasoningEfforts]);
 	// The server has already applied the exact batch/model/question scope. Do not
 	// compare model keys with user-facing model labels a second time in the client.
 	const filtered = opportunities;
@@ -808,9 +851,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					batchId: selectedBatchId,
 					modelKey: selectedModel === "all" ? null : selectedModel,
 					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
+					codexModel: executionSelection.model,
+					reasoningEffort: executionSelection.reasoning_effort,
 				});
 				setOpportunityAnalysis(run);
-				setDiscoveryFeedback(`Codex 已接收批次 #${run.batch_id} 的 ${run.evidence_count} 条真实证据，完成前不会显示新机会。`);
+				setDiscoveryFeedback(`Codex 已接收批次 #${run.batch_id} 的 ${run.evidence_count} 条真实证据 · ${codexExecutionLabel(run.model, run.reasoning_effort)}，完成前不会显示新机会。`);
 			} catch (error) {
 				setDiscoveryFeedback(error instanceof Error ? error.message : "无法启动 Codex 机会判断");
 			}
@@ -825,9 +870,11 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					batchId: selectedBatchId,
 					modelKey: selectedModel === "all" ? null : selectedModel,
 					questionPlanId: selectedQuestion === "all" ? null : Number(selectedQuestion),
+					codexModel: executionSelection.model,
+					reasoningEffort: executionSelection.reasoning_effort,
 				});
 				setWebsiteGapAnalysis(run);
-				setWebsiteGapFeedback(`Codex 已接收当前范围的 ${run.evidence_count} 条真实证据；完成前不会显示诊断结论。`);
+				setWebsiteGapFeedback(`Codex 已接收当前范围的 ${run.evidence_count} 条真实证据 · ${codexExecutionLabel(run.model, run.reasoning_effort)}；完成前不会显示诊断结论。`);
 			} catch (error) {
 				setWebsiteGapFeedback(error instanceof Error ? error.message : "无法启动 Codex 官网差距分析");
 			}
@@ -839,9 +886,10 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 		setAgentFeedback("");
 		startSaving(async () => {
 			try {
-				const run = await startAgent(selected.existingAction!.id, targetPlatforms);
+				const run = await startAgent(selected.existingAction!.id, targetPlatforms, executionSelection);
 				setAgentRuns((current) => [run, ...current]);
 				setAgentEvents([]);
+				setAgentFeedback(`已使用 ${codexExecutionLabel(run.model, run.reasoning_effort)} 启动。`);
 				router.refresh();
 			} catch (error) {
 				setAgentFeedback(error instanceof Error ? error.message : "Agent 启动失败");
@@ -1255,7 +1303,12 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 					<label><Icon name="filter" /><select aria-label="模型范围" value={selectedModel} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ modelKey: event.target.value })}><option value="all">全部模型</option>{models.map((model) => <option key={model.key} value={model.key}>{model.label}</option>)}</select><Icon name="chevron" /></label>
 					<label><Icon name="spark" /><select aria-label="问题范围" value={selectedQuestion} disabled={isScopePending || !selectedBatch} onChange={(event) => changeScope({ questionPlanId: event.target.value === "all" ? null : Number(event.target.value) })}><option value="all">全部问题</option>{questions.map((question) => <option key={question.id} value={question.id}>{question.label}</option>)}</select><Icon name="chevron" /></label>
 				</div>
-				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Codex Run #${opportunityAnalysis.job_id} 已分析批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Codex 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
+				<div className="pa-codex-settings" aria-label="Codex 执行设置">
+					<span><img src="/brand/openai.svg" alt="" /><b>Codex 执行</b><small>只影响 Agent，不改变上方观测数据范围</small></span>
+					<label><small>模型</small><select aria-label="Codex 执行模型" value={selectedCodexModel} disabled={!agentRuntime?.ready || !codexModels.length} onChange={(event) => setSelectedCodexModel(event.target.value)}>{codexModels.map((model) => <option key={model.id} value={model.id}>{model.display_name}</option>)}</select></label>
+					<label><small>推理强度</small><select aria-label="Codex 推理强度" value={selectedReasoningEffort} disabled={!agentRuntime?.ready || !supportedReasoningEfforts.length} onChange={(event) => setSelectedReasoningEffort(event.target.value as CodexReasoningEffort)}>{supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabels[effort]}</option>)}</select></label>
+				</div>
+				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready || !executionSelection.model}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Codex 等待执行…" : "Codex 正在判断…" : "让 Codex 分析当前批次"}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Codex Run #${opportunityAnalysis.job_id} · ${codexExecutionLabel(opportunityAnalysis.model, opportunityAnalysis.reasoning_effort)} · 批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Codex 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
 			</div>
 		</section>
 
@@ -1265,7 +1318,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<small>Codex 官网差距分析 · 独立诊断</small>
 				<h2 id="website-analysis-title">{websiteAnalysisState === "switching" ? "正在切换官网分析范围" : ["submitting", "running"].includes(websiteAnalysisState) ? "Codex 正在分析官网差距" : websiteAnalysisState === "failed" ? "官网分析未完成" : websiteAnalysisState === "success" ? "官网差距分析已完成" : websiteAnalysisState === "empty" ? "当前范围未发现官网差距" : websiteAnalysisState === "missing-batch" ? "请先选择真实观测批次" : websiteAnalysisState === "missing-website" ? "请先配置官网地址" : websiteAnalysisState === "not-ready" ? "Codex 尚未就绪" : websiteAnalysisState === "busy" ? "Codex 正在处理其他任务" : "让 Codex 分析官网差距"}</h2>
 				<p>{websiteAnalysisState === "switching" ? "新范围返回前不展示旧结果。" : ["submitting", "running"].includes(websiteAnalysisState) ? websiteGapFeedback || `正在读取 ${websiteGapAnalysis?.evidence_count ?? 0} 条真实证据；诊断不会进入内容发布流程。` : websiteAnalysisState === "failed" ? websiteGapFeedback || websiteGapAnalysis?.error_message || "Codex 未能返回通过证据校验的官网诊断。" : websiteAnalysisState === "success" ? `已形成 ${websiteGapAnalysis?.recommendation_count ?? 0} 项官网诊断建议；它们不会变成优先机会，也不会启动写稿和发布。` : websiteAnalysisState === "empty" ? "Codex 已完成分析，但当前数据不支持具体官网改进结论。" : websiteAnalysisState === "missing-batch" ? "官网分析只使用你选定的批次、模型和问题数据。" : websiteAnalysisState === "missing-website" ? "官网地址用来限定诊断边界，系统不会接受任意站点。" : websiteAnalysisState === "not-ready" ? "完成本机 Codex 登录与自检后才能运行官网分析。" : websiteAnalysisState === "busy" ? `当前运行容量 ${agentCapacityUsed}/${agentCapacityLimit}，有空位后可继续。` : "只有你点击后，Codex 才会读取当前范围的官网表现和竞品内容。"}</p>
-				{selectedBatchId ? <span className="pa-website-analysis-scope">批次 #{selectedBatchId} · {selectedModelLabel} · {selectedQuestionLabel}</span> : null}
+				{selectedBatchId ? <span className="pa-website-analysis-scope">批次 #{selectedBatchId} · {selectedModelLabel} · {selectedQuestionLabel} · {codexExecutionLabel(websiteGapAnalysis?.model || executionSelection.model, websiteGapAnalysis?.reasoning_effort || executionSelection.reasoning_effort)}</span> : null}
 				{websiteAnalysisState === "success" ? <div className="pa-website-analysis-results">
 					<div className="pa-website-analysis-metric"><b>官网引用 {websiteCitationCount}/{websiteEligibleCount}</b><span>{websiteGapAnalysis?.recommendation_count ?? 0} 项诊断建议</span></div>
 					{websiteRecommendations.slice(0, 3).map((recommendation, index) => <article key={`${recommendation.title}-${index}`}><div><em>{recommendation.priority === "high" ? "高优先级" : recommendation.priority === "medium" ? "中优先级" : "低优先级"}</em><b>{recommendation.title}</b></div><span>{recommendation.required_content.slice(0, 3).join(" · ") || recommendation.target_page}</span></article>)}
@@ -1307,7 +1360,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 							{currentRun ? <div className="pa-agent-run">
 								<div className="pa-agent-runtime">
 									<span><img src="/brand/openai.svg" alt="OpenAI 官方标志" /></span>
-									<div><b>{currentRun.model || "Local Codex"}</b><small>Run #{currentRun.id}{visibleAgentProgress && visibleAgentProgress.attempt_number > 1 ? ` · 第 ${visibleAgentProgress.attempt_number} 轮执行` : ""} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div>
+									<div><b>{codexExecutionLabel(currentRun.model || "Local Codex", currentRun.reasoning_effort)}</b><small>Run #{currentRun.id}{visibleAgentProgress && visibleAgentProgress.attempt_number > 1 ? ` · 第 ${visibleAgentProgress.attempt_number} 轮执行` : ""} · {agentStageLabels[currentRun.stage] || currentRun.stage}</small></div>
 									{visibleAgentProgress ? <strong>{visibleAgentProgress.progress_percent}%</strong> : null}
 								</div>
 								<p>{agentEvents.at(-1)?.message || (currentRun.status === "queued" ? "已入队，等待 worker 接受。" : "正在读取持久化进度…")}</p>

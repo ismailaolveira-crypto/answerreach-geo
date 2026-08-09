@@ -61,10 +61,13 @@ class FakeHandle:
 class FakeThread:
     id = "thread-test"
 
-    def __init__(self, handle: FakeHandle) -> None:
+    def __init__(self, handle: FakeHandle, turn_kwargs: dict | None = None) -> None:
         self.handle = handle
+        self.turn_kwargs = turn_kwargs
 
-    def turn(self, *_args, **_kwargs) -> FakeHandle:
+    def turn(self, *_args, **kwargs) -> FakeHandle:
+        if self.turn_kwargs is not None:
+            self.turn_kwargs.update(kwargs)
         return self.handle
 
 
@@ -78,6 +81,7 @@ def reset_warm_codex_client():
 def install_fake_codex(
     monkeypatch: pytest.MonkeyPatch,
     handle: FakeHandle,
+    turn_kwargs: dict | None = None,
 ) -> dict[str, int]:
     import openai_codex
 
@@ -94,10 +98,10 @@ def install_fake_codex(
             return None
 
         def thread_start(self, **_kwargs) -> FakeThread:
-            return FakeThread(handle)
+            return FakeThread(handle, turn_kwargs)
 
         def thread_resume(self, *_args, **_kwargs) -> FakeThread:
-            return FakeThread(handle)
+            return FakeThread(handle, turn_kwargs)
 
         def close(self) -> None:
             lifecycle["closed"] += 1
@@ -144,6 +148,53 @@ def test_diagnostic_cache_reuses_snapshot_until_invalidated(
         codex_agent_runtime.invalidate_local_codex_diagnostic_cache()
 
 
+def test_runtime_catalog_exposes_model_specific_reasoning_efforts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai_codex
+
+    class CatalogCodex:
+        metadata = SimpleNamespace(userAgent="Codex Desktop/test")
+
+        def account(self):
+            return SimpleNamespace(account=SimpleNamespace(type="chatgpt"))
+
+        def models(self):
+            return SimpleNamespace(
+                data=[
+                    SimpleNamespace(
+                        id="gpt-fast",
+                        is_default=True,
+                        display_name="GPT Fast",
+                        description="Fast test model",
+                        default_reasoning_effort=SimpleNamespace(value="low"),
+                        supported_reasoning_efforts=[
+                            SimpleNamespace(reasoning_effort=SimpleNamespace(value="low")),
+                            SimpleNamespace(reasoning_effort=SimpleNamespace(value="ultra")),
+                        ],
+                    )
+                ]
+            )
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(openai_codex, "Codex", CatalogCodex)
+    diagnostic = codex_agent_runtime._probe_local_codex()
+
+    assert diagnostic["default_model"] == "gpt-fast"
+    assert diagnostic["default_reasoning_effort"] == "low"
+    assert diagnostic["model_options"] == [
+        {
+            "id": "gpt-fast",
+            "display_name": "GPT Fast",
+            "description": "Fast test model",
+            "default_reasoning_effort": "low",
+            "supported_reasoning_efforts": ["low", "ultra"],
+        }
+    ]
+
+
 def test_timeout_interrupts_the_real_turn_handle_and_surfaces_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -169,6 +220,29 @@ def test_completed_turn_disarms_timeout_watchdog(
     assert result.final_response == '{"ok": true}'
     assert result.thread_id == "thread-test"
     assert handle.interrupt_calls == 0
+
+
+@pytest.mark.parametrize("reasoning_effort", ["high", "max", "ultra"])
+def test_selected_reasoning_effort_is_forwarded_to_codex_turn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reasoning_effort: str,
+) -> None:
+    handle = FakeHandle(complete_immediately=True)
+    turn_kwargs: dict = {}
+    install_fake_codex(monkeypatch, handle, turn_kwargs)
+
+    LocalCodexRuntime().run_structured(
+        task_directory=tmp_path,
+        prompt="Return JSON",
+        output_schema={"type": "object"},
+        developer_instructions="Test only",
+        model="gpt-test",
+        reasoning_effort=reasoning_effort,
+        timeout_seconds=0.1,
+    )
+
+    assert turn_kwargs["effort"].value == reasoning_effort
 
 
 def test_completed_turns_reuse_one_warm_codex_client(

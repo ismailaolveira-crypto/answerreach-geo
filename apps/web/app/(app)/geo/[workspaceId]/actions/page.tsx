@@ -1,5 +1,7 @@
 import { revalidatePath } from "next/cache";
 import {
+	type CodexExecutionSelection,
+	type CodexReasoningEffort,
 	captureAgentRunVisuals,
 	createCleanroomAction,
 	createCleanroomAgentRun,
@@ -87,13 +89,15 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	const requestedActionId = Number(firstValue(query.action_id));
 	const initialSelectedId = opportunities.find((item) => item.existingAction?.id === requestedActionId)?.id;
 
-	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) {
+	async function discoverActions(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
 		"use server";
 		return discoverCleanroomActionOpportunities(workspaceId, {
 			batch_id: scope.batchId,
 			model_keys: scope.modelKey ? [scope.modelKey] : [],
 			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
 			max_items: 50,
+			codex_model: scope.codexModel,
+			reasoning_effort: scope.reasoningEffort,
 		});
 	}
 
@@ -102,13 +106,15 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		return getCleanroomOpportunityAnalysis(workspaceId, jobId);
 	}
 
-	async function analyzeWebsiteGap(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null }) {
+	async function analyzeWebsiteGap(scope: { batchId: number | null; modelKey: string | null; questionPlanId: number | null; codexModel: string | null; reasoningEffort: CodexReasoningEffort | null }) {
 		"use server";
 		if (!scope.batchId) throw new Error("请先选择一个已完成的观测批次");
 		return createWebsiteGapAnalysis(workspaceId, {
 			batch_id: scope.batchId,
 			model_keys: scope.modelKey ? [scope.modelKey] : [],
 			question_plan_ids: scope.questionPlanId ? [scope.questionPlanId] : [],
+			codex_model: scope.codexModel,
+			reasoning_effort: scope.reasoningEffort,
 		});
 	}
 
@@ -136,9 +142,13 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 		revalidatePath(`/geo/${workspaceId}/actions`);
 	}
 
-	async function startAgent(actionId: number, platforms: string[]) {
+	async function startAgent(actionId: number, platforms: string[], execution: CodexExecutionSelection) {
 		"use server";
-		const run = await createCleanroomAgentRun(workspaceId, actionId, { selected_platforms: platforms });
+		const run = await createCleanroomAgentRun(workspaceId, actionId, {
+			selected_platforms: platforms,
+			model: execution.model,
+			reasoning_effort: execution.reasoning_effort,
+		});
 		revalidatePath(`/geo/${workspaceId}/actions`);
 		return run;
 	}
