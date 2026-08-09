@@ -609,7 +609,7 @@ export type AgentRuntime = {
 	default_reasoning_effort?: CodexReasoningEffort | null;
 	available_models: string[];
 	model_options: AgentRuntimeModel[];
-	connection_status: "cold" | "warm";
+	connection_status: "cold" | "warm" | "configured";
 	connected_since?: string | null;
 	reuse_count: number;
 	active_run_count: number;

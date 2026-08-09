@@ -205,8 +205,8 @@ pnpm run verify
 
 ## 2026-08-09 · 可切换 Agent 运行时
 
-- 优先行动页原“Codex 常驻已连接”位置已改为 Agent 切换器，目前支持 Codex、Claude Agent、Hermes 和 OpenClaw。每一项都显示真实安装/登录/连接状态；未配置时模型与推理强度不可执行。
-- 后端新增统一 `AgentRuntimeAdapter` 协议，四种适配器返回同一结构化结果：Codex 复用原官方 SDK 常驻池；Claude 使用 Anthropic 官方 Agent SDK；Hermes 使用官方 OpenAI-compatible HTTP API；OpenClaw 使用官方 headless Agent CLI JSON 输出。
+- 优先行动页原“Codex 常驻已连接”位置已改为 Agent 切换器，目前支持 Codex、Claude Code、Hermes 和 OpenClaw。每一项都显示真实安装/登录/配置状态；未配置时模型与推理强度不可执行。
+- 后端新增统一 `AgentRuntimeAdapter` 协议，四种适配器返回同一结构化结果：Codex 复用原官方 SDK 常驻池；Claude Code 使用官方本机 CLI 结构化输出并复用自身登录；Hermes 优先使用官方本机 CLI profile，明确配置时才回退到 OpenAI-compatible HTTP API；OpenClaw 使用官方 headless Agent CLI JSON 输出。
 - 机会发现、官网差距分析、平台内容生成、修订和恢复共用同一运行时选择。任务快照保存 `runtime_key`、模型和推理强度，但不改动现有数据库模式，也不保存任何密钥。
 - 兼容性保留原 `/agent-runtime` 与 `/agent-runtime/test`，新增 `/agent-runtimes` 和 `/agent-runtimes/{runtimeKey}/test`。旧任务缺少 `runtime_key` 时按 `local_codex` 处理。
 - 下载者配置方式见 [`docs/AGENT_RUNTIME_SETUP.md`](AGENT_RUNTIME_SETUP.md)；密钥只放本机私密环境，不进入 Git 或业务快照。

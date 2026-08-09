@@ -1147,7 +1147,7 @@ class AgentRuntimeRead(BaseModel):
     default_reasoning_effort: str | None = None
     available_models: list[str] = Field(default_factory=list)
     model_options: list[AgentRuntimeModelRead] = Field(default_factory=list)
-    connection_status: Literal["cold", "warm"] = "cold"
+    connection_status: Literal["cold", "warm", "configured"] = "cold"
     connected_since: datetime | None = None
     reuse_count: int = 0
     active_run_count: int = 0

@@ -123,6 +123,13 @@ function agentExecutionLabel(model?: string | null, effort?: CodexReasoningEffor
 	return [model, effort ? `${reasoningEffortLabels[effort]}推理` : null].filter(Boolean).join(" · ");
 }
 
+function runtimeConnectionLabel(runtime: AgentRuntime, long = false) {
+	if (!runtime.ready) return "未配置";
+	if (runtime.connection_status === "warm") return long ? "常驻已连接" : "已连接";
+	if (runtime.connection_status === "configured") return "已配置";
+	return "已就绪";
+}
+
 type ReviewVisualAsset = {
 	artifactId: number;
 	altText: string;
@@ -1302,13 +1309,13 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<div><h1>优先行动</h1><span>Agent 生成平台稿 → 你修改并审核 → 写入草稿 → 人工发布。</span>
 					<div className="pa-runtime-wrap">
 						<button type="button" className={`pa-runtime-status${!agentRuntime?.ready ? " is-warning" : agentCapacityAvailable ? " is-ready" : " is-busy"}`} onClick={() => setRuntimeExpanded((value) => !value)} aria-expanded={runtimeExpanded}>
-							<i />{!agentRuntime?.ready ? `${agentRuntime?.display_name || "Agent"} 未配置` : agentCapacityAvailable ? agentRuntime.connection_status === "warm" ? `${agentRuntime.display_name} 常驻已连接` : `${agentRuntime.display_name} 已就绪` : `${agentRuntime.display_name} 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}`}<Icon name="chevron" />
+							<i />{!agentRuntime ? "Agent 未配置" : !agentCapacityAvailable && agentRuntime.ready ? `${agentRuntime.display_name} 正在执行 ${agentCapacityUsed}/${agentCapacityLimit}` : `${agentRuntime.display_name} ${runtimeConnectionLabel(agentRuntime, true)}`}<Icon name="chevron" />
 						</button>
 						{runtimeExpanded ? <div className="pa-runtime-popover" role="menu" aria-label="选择执行 Agent">
 							<b>选择本机 Agent</b>
 							<div className="pa-runtime-options">{agentRuntimes.map((runtime) => <button key={runtime.runtime_key} type="button" role="menuitemradio" aria-checked={runtime.runtime_key === selectedRuntimeKey} className={runtime.runtime_key === selectedRuntimeKey ? "is-selected" : ""} onClick={() => selectAgentRuntime(runtime)}>
 								<span>{runtime.logo_path ? <img src={runtime.logo_path} alt="" /> : runtime.display_name.slice(0, 1)}</span>
-								<div><strong>{runtime.display_name}</strong><small>{runtime.ready ? runtime.connection_status === "warm" ? "已连接" : "已就绪" : "未配置"}</small></div><i className={runtime.ready ? "is-ready" : ""} />
+								<div><strong>{runtime.display_name}</strong><small>{runtimeConnectionLabel(runtime)}</small></div><i className={runtime.ready ? "is-ready" : ""} />
 							</button>)}</div>
 							<span>{agentRuntime?.default_model || "未检测到默认模型"}</span><small>{agentRuntime?.ready ? `运行容量 ${agentCapacityUsed}/${agentCapacityLimit} · 单次最长 ${agentTimeoutMinutes} 分钟${agentRuntime.runtime_key === "local_codex" ? ` · ${runtimeVersionLabel(agentRuntime.runtime_version)}` : ""}` : agentRuntime?.error || agentRuntime?.configuration_hint || "请完成本机 Agent 配置。"}</small><Link href={`/geo/${workspaceId}/settings`}>查看 Agent 设置</Link>
 						</div> : null}
@@ -1332,7 +1339,7 @@ export function PriorityActionsWorkbench({ workspaceId, opportunities, opportuni
 				<div className="pa-codex-settings" aria-label="Agent 执行设置">
 					<span>{agentRuntime?.logo_path ? <img src={agentRuntime.logo_path} alt="" /> : null}<b>{agentRuntime?.display_name || "Agent"} 执行</b><small>只影响 Agent，不改变上方观测数据范围</small></span>
 					<label><small>模型</small><select aria-label="Agent 执行模型" value={selectedAgentModel} disabled={!agentRuntime?.ready || !agentModels.length} onChange={(event) => setSelectedAgentModel(event.target.value)}>{agentModels.map((model) => <option key={model.id} value={model.id}>{model.display_name}</option>)}</select></label>
-					<label><small>推理强度</small><select aria-label="Agent 推理强度" value={selectedReasoningEffort} disabled={!agentRuntime?.ready || !supportedReasoningEfforts.length} onChange={(event) => setSelectedReasoningEffort(event.target.value as CodexReasoningEffort)}>{supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabels[effort]}</option>)}</select></label>
+					<label><small>推理强度</small><select aria-label="Agent 推理强度" value={selectedReasoningEffort} disabled={!agentRuntime?.ready || !supportedReasoningEfforts.length} onChange={(event) => setSelectedReasoningEffort(event.target.value as CodexReasoningEffort)}>{supportedReasoningEfforts.length ? supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabels[effort]}</option>) : <option value="">使用 Agent 本机配置</option>}</select></label>
 				</div>
 				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready || !executionSelection.model}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Agent 等待执行…" : "Agent 正在判断…" : `让 ${agentRuntime?.display_name || "Agent"} 分析当前批次`}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Agent Run #${opportunityAnalysis.job_id} · ${agentExecutionLabel(opportunityAnalysis.model, opportunityAnalysis.reasoning_effort)} · 批次 #${opportunityAnalysis.batch_id}` : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Agent 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
 			</div>

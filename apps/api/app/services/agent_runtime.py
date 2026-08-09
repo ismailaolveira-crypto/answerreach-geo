@@ -7,10 +7,10 @@ stay in the runtime's own environment/configuration and are never serialized.
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from time import monotonic
@@ -75,18 +75,18 @@ def _runtime_metadata(runtime_key: str) -> dict:
             "configuration_hint": "在本机 Codex 完成 ChatGPT 登录。",
         },
         "claude_agent": {
-            "display_name": "Claude Agent",
-            "description": "Anthropic 官方 Agent SDK，使用下载者自己的 API 配置。",
+            "display_name": "Claude Code",
+            "description": "Anthropic 官方本机 CLI，复用下载者自己的 Claude 登录。",
             "logo_path": "/brand/claude.svg",
-            "transport": "official_sdk",
-            "configuration_hint": "配置 ANTHROPIC_API_KEY 后重启 API 与 worker。",
+            "transport": "official_cli",
+            "configuration_hint": "安装 Claude Code 并执行 claude auth login。",
         },
         "hermes": {
             "display_name": "Hermes",
-            "description": "通过 Hermes 官方 OpenAI 兼容 HTTP API 调用本机 Agent。",
+            "description": "Hermes 官方本机 CLI，优先复用用户已选的 provider 和模型。",
             "logo_path": "/brand/hermes.svg",
-            "transport": "http_api",
-            "configuration_hint": "启动 Hermes API Server，并配置 HERMES_API_KEY。",
+            "transport": "official_cli",
+            "configuration_hint": "安装 Hermes 并执行 hermes model 完成本机 provider 配置。",
         },
         "openclaw": {
             "display_name": "OpenClaw",
@@ -112,7 +112,7 @@ def _claude_models() -> list[dict]:
         {
             "id": model,
             "display_name": model,
-            "description": "由 Claude Agent SDK 执行",
+            "description": "由本机 Claude Code CLI 执行",
             "default_reasoning_effort": "medium",
             "supported_reasoning_efforts": ["low", "medium", "high", "xhigh"],
         }
@@ -120,32 +120,70 @@ def _claude_models() -> list[dict]:
     ]
 
 
+def _claude_environment() -> dict[str, str]:
+    environment = dict(os.environ)
+    configured_key = get_settings().anthropic_api_key
+    if configured_key:
+        environment["ANTHROPIC_API_KEY"] = configured_key
+    return environment
+
+
 def diagnose_claude_agent() -> dict:
-    installed = importlib.util.find_spec("claude_agent_sdk") is not None
-    configured = bool(get_settings().anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"))
+    executable = shutil.which("claude")
     options = _claude_models()
+    if not executable:
+        return _with_metadata(
+            "claude_agent",
+            {
+                "sdk_installed": False,
+                "ready": False,
+                "login_status": "cli_missing",
+                "default_model": options[0]["id"] if options else None,
+                "default_reasoning_effort": "medium",
+                "available_models": [item["id"] for item in options],
+                "model_options": options,
+                "connection_status": "cold",
+                "error": "未安装 Claude Code CLI，或 API/worker 的 PATH 中找不到 claude",
+            },
+        )
+    try:
+        auth = _run_json_command(
+            [executable, "auth", "status", "--json"],
+            env=_claude_environment(),
+        )
+        logged_in = auth.get("loggedIn") is True
+        version = _run_text_command([executable, "--version"], timeout=5.0).strip()
+    except Exception as exc:
+        return _with_metadata(
+            "claude_agent",
+            {
+                "sdk_installed": True,
+                "ready": False,
+                "login_status": "auth_check_failed",
+                "default_model": options[0]["id"] if options else None,
+                "default_reasoning_effort": "medium",
+                "available_models": [item["id"] for item in options],
+                "model_options": options,
+                "connection_status": "cold",
+                "error": sanitize_agent_error(exc),
+            },
+        )
     return _with_metadata(
         "claude_agent",
         {
-            "sdk_installed": installed,
-            "sdk_version": None,
-            "runtime_version": None,
-            "ready": installed and configured and bool(options),
-            "login_status": (
-                "api_key_configured"
-                if configured
-                else "api_key_required" if installed else "sdk_missing"
-            ),
+            "sdk_installed": True,
+            "sdk_version": version or None,
+            "runtime_version": version or None,
+            "ready": logged_in and bool(options),
+            "login_status": "local_cli_authenticated" if logged_in else "login_required",
             "default_model": options[0]["id"] if options else None,
             "default_reasoning_effort": "medium",
             "available_models": [item["id"] for item in options],
             "model_options": options,
-            "connection_status": "cold",
+            "connection_status": "warm" if logged_in else "cold",
             "connected_since": None,
             "reuse_count": 0,
-            "error": None if installed and configured else (
-                "未配置 ANTHROPIC_API_KEY" if installed else "未安装 Claude Agent SDK"
-            ),
+            "error": None if logged_in else "Claude Code 尚未登录，请执行 claude auth login",
         },
     )
 
@@ -155,7 +193,7 @@ def _hermes_headers() -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"} if key else {}
 
 
-def diagnose_hermes() -> dict:
+def _diagnose_hermes_http() -> dict:
     settings = get_settings()
     base_url = settings.hermes_api_url.rstrip("/")
     if not settings.hermes_api_key:
@@ -168,6 +206,7 @@ def diagnose_hermes() -> dict:
                 "available_models": [],
                 "model_options": [],
                 "connection_status": "cold",
+                "transport": "http_api",
                 "error": "未配置 HERMES_API_KEY",
             },
         )
@@ -201,6 +240,7 @@ def diagnose_hermes() -> dict:
                 "available_models": models,
                 "model_options": options,
                 "connection_status": "warm",
+                "transport": "http_api",
                 "connected_since": None,
                 "reuse_count": 0,
                 "error": None if models else "Hermes 未返回可用模型",
@@ -216,22 +256,116 @@ def diagnose_hermes() -> dict:
                 "available_models": [],
                 "model_options": [],
                 "connection_status": "cold",
+                "transport": "http_api",
                 "error": sanitize_agent_error(exc),
             },
         )
 
 
-def _run_json_command(command: list[str], *, timeout: float = 8.0) -> dict:
+def _run_text_command(
+    command: list[str],
+    *,
+    timeout: float = 8.0,
+    env: dict[str, str] | None = None,
+) -> str:
     completed = subprocess.run(
         command,
         check=False,
         capture_output=True,
         text=True,
         timeout=timeout,
+        env=env,
     )
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "command failed")
-    return json.loads(completed.stdout)
+    return completed.stdout
+
+
+def _run_json_command(
+    command: list[str],
+    *,
+    timeout: float = 8.0,
+    env: dict[str, str] | None = None,
+) -> dict:
+    return json.loads(_run_text_command(command, timeout=timeout, env=env))
+
+
+def _hermes_status_value(status: str, label: str) -> str | None:
+    match = re.search(rf"^\s*{re.escape(label)}:\s*(.+?)\s*$", status, flags=re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _diagnose_hermes_cli(executable: str) -> dict:
+    try:
+        _run_text_command([executable, "config", "check"], timeout=8.0)
+        status = _run_text_command([executable, "status", "--all"], timeout=8.0)
+        model = _hermes_status_value(status, "Model")
+        provider = _hermes_status_value(status, "Provider")
+        version = _run_text_command([executable, "--version"], timeout=5.0).splitlines()[0].strip()
+        if not model or not provider:
+            raise RuntimeError("Hermes local profile has no default provider or model")
+        option = {
+            "id": model,
+            "display_name": model,
+            "description": f"Hermes 本机 {provider} profile",
+            "default_reasoning_effort": None,
+            "supported_reasoning_efforts": [],
+        }
+        return _with_metadata(
+            "hermes",
+            {
+                "sdk_installed": True,
+                "sdk_version": version or None,
+                "runtime_version": version or None,
+                "ready": True,
+                "login_status": "local_profile_configured",
+                "default_model": model,
+                "default_reasoning_effort": None,
+                "available_models": [model],
+                "model_options": [option],
+                "connection_status": "configured",
+                "connected_since": None,
+                "reuse_count": 0,
+                "transport": "official_cli",
+                "error": None,
+            },
+        )
+    except Exception as exc:
+        return _with_metadata(
+            "hermes",
+            {
+                "sdk_installed": True,
+                "ready": False,
+                "login_status": "local_profile_invalid",
+                "available_models": [],
+                "model_options": [],
+                "connection_status": "cold",
+                "transport": "official_cli",
+                "error": sanitize_agent_error(exc),
+            },
+        )
+
+
+def diagnose_hermes() -> dict:
+    executable = shutil.which("hermes")
+    if executable:
+        cli_diagnostic = _diagnose_hermes_cli(executable)
+        if cli_diagnostic.get("ready") or not get_settings().hermes_api_key:
+            return cli_diagnostic
+    if get_settings().hermes_api_key:
+        return _diagnose_hermes_http()
+    return _with_metadata(
+        "hermes",
+        {
+            "sdk_installed": False,
+            "ready": False,
+            "login_status": "cli_missing",
+            "available_models": [],
+            "model_options": [],
+            "connection_status": "cold",
+            "error": "未安装 Hermes CLI，或 API/worker 的 PATH 中找不到 hermes",
+        },
+    )
 
 
 def diagnose_openclaw() -> dict:
@@ -326,68 +460,140 @@ def _structured_prompt(prompt: str, developer_instructions: str, output_schema: 
     )
 
 
-class ClaudeAgentRuntime:
-    def run_structured(self, **kwargs) -> CodexTurnResult:
-        import anyio
-        from claude_agent_sdk import ClaudeAgentOptions, ResultMessage, query
+def _stop_process(process: subprocess.Popen[str]) -> tuple[str, str]:
+    process.terminate()
+    try:
+        return process.communicate(timeout=2.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return process.communicate()
 
+
+def _run_cancellable_cli(
+    command: list[str],
+    *,
+    cwd: Path,
+    timeout_seconds: float,
+    cancellation_requested: Callable[[], bool] | None,
+    input_text: str | None = None,
+    env: dict[str, str] | None = None,
+    runtime_name: str,
+) -> tuple[str, str, int]:
+    process = subprocess.Popen(
+        command,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if input_text is not None and process.stdin is not None:
+        process.stdin.write(input_text)
+        process.stdin.close()
+        process.stdin = None
+    started_at = monotonic()
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.25)
+            return stdout, stderr, int(process.returncode or 0)
+        except subprocess.TimeoutExpired:
+            if cancellation_requested and cancellation_requested():
+                _stop_process(process)
+                raise CodexRunInterrupted(f"{runtime_name} run was interrupted by the user")
+            if monotonic() - started_at > timeout_seconds:
+                _stop_process(process)
+                raise CodexRunTimedOut(f"{runtime_name} exceeded {timeout_seconds:g} seconds")
+
+
+def _extract_json_object(value: str) -> dict:
+    normalized = value.strip()
+    if normalized.startswith("```"):
+        normalized = re.sub(r"^```(?:json)?\s*", "", normalized, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s*```$", "", normalized)
+    start = normalized.find("{")
+    if start < 0:
+        raise json.JSONDecodeError("no JSON object", normalized, 0)
+    parsed, _end = json.JSONDecoder().raw_decode(normalized[start:])
+    if not isinstance(parsed, dict):
+        raise json.JSONDecodeError("expected JSON object", normalized, start)
+    return parsed
+
+
+class ClaudeCodeRuntime:
+    def run_structured(self, **kwargs) -> CodexTurnResult:
+        executable = shutil.which("claude")
+        if not executable:
+            raise CodexRuntimeUnavailable("Claude Code CLI is not installed")
         task_directory = Path(kwargs["task_directory"]).resolve()
         task_directory.mkdir(parents=True, exist_ok=True)
         timeout_seconds = float(kwargs.get("timeout_seconds") or 900)
-        started = kwargs.get("on_started")
-        on_event = kwargs.get("on_event")
-        thread_id = kwargs.get("thread_id")
+        existing_session = str(kwargs.get("thread_id") or "") or None
+        session_id = existing_session or str(uuid4())
         turn_id = f"claude-{uuid4()}"
-
-        async def execute() -> CodexTurnResult:
-            final: dict | None = None
-            session_id = thread_id or ""
-            usage: dict = {}
-            options = ClaudeAgentOptions(
-                cwd=task_directory,
-                system_prompt=kwargs["developer_instructions"],
-                model=kwargs.get("model"),
-                effort=kwargs.get("reasoning_effort"),
-                resume=thread_id,
-                tools=["WebSearch", "WebFetch"],
-                output_format={"type": "json_schema", "schema": kwargs["output_schema"]},
-                strict_mcp_config=True,
-                setting_sources=[],
-                env={
-                    **os.environ,
-                    **(
-                        {"ANTHROPIC_API_KEY": get_settings().anthropic_api_key}
-                        if get_settings().anthropic_api_key
-                        else {}
-                    ),
-                },
-            )
-            with anyio.fail_after(timeout_seconds):
-                async for message in query(prompt=kwargs["prompt"], options=options):
-                    if kwargs.get("cancellation_requested") and kwargs["cancellation_requested"]():
-                        raise CodexRunInterrupted("Claude Agent run was interrupted by the user")
-                    if on_event:
-                        on_event("agent/message", {"type": type(message).__name__})
-                    if isinstance(message, ResultMessage):
-                        session_id = str(message.session_id or session_id)
-                        final = message.structured_output
-                        usage = dict(message.usage or {})
-            if not session_id:
-                session_id = f"claude-session-{uuid4()}"
-            if started:
-                started(session_id, turn_id)
-            if final is None:
-                raise CodexRuntimeUnavailable("Claude Agent returned no structured output")
-            final_response = json.dumps(final, ensure_ascii=False)
-            return CodexTurnResult(session_id, turn_id, final_response, usage, [])
-
+        command = [
+            executable,
+            "--safe-mode",
+            "-p",
+            "--output-format",
+            "json",
+            "--json-schema",
+            json.dumps(kwargs["output_schema"], ensure_ascii=False),
+            "--permission-mode",
+            "dontAsk",
+            "--tools",
+            "WebSearch,WebFetch",
+            "--allowedTools",
+            "WebSearch,WebFetch",
+        ]
+        if kwargs.get("model"):
+            command.extend(["--model", str(kwargs["model"])])
+        if kwargs.get("reasoning_effort"):
+            command.extend(["--effort", str(kwargs["reasoning_effort"])])
+        if existing_session:
+            command.extend(["--resume", existing_session])
+        else:
+            command.extend(["--session-id", session_id])
+        if kwargs.get("on_started"):
+            kwargs["on_started"](session_id, turn_id)
+        if kwargs.get("on_event"):
+            kwargs["on_event"]("agent/cli_started", {"runtime": "claude_code"})
+        stdout, stderr, returncode = _run_cancellable_cli(
+            command,
+            cwd=task_directory,
+            timeout_seconds=timeout_seconds,
+            cancellation_requested=kwargs.get("cancellation_requested"),
+            input_text=_structured_prompt(
+                kwargs["prompt"], kwargs["developer_instructions"], kwargs["output_schema"]
+            ),
+            env=_claude_environment(),
+            runtime_name="Claude Code",
+        )
+        if returncode != 0:
+            raise CodexRuntimeUnavailable(sanitize_agent_error(stderr or stdout or "Claude Code failed"))
         try:
-            return anyio.run(execute)
-        except TimeoutError as exc:
-            raise CodexRunTimedOut(f"Claude Agent exceeded {timeout_seconds:g} seconds") from exc
+            payload = json.loads(stdout)
+            if payload.get("is_error"):
+                raise CodexRuntimeUnavailable(str(payload.get("result") or "Claude Code failed"))
+            final = payload.get("structured_output")
+            if not isinstance(final, dict):
+                final = _extract_json_object(str(payload.get("result") or ""))
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise CodexRuntimeUnavailable("Claude Code returned no valid structured JSON") from exc
+        actual_session = str(payload.get("session_id") or session_id)
+        usage = dict(payload.get("usage") or {})
+        if payload.get("total_cost_usd") is not None:
+            usage["total_cost_usd"] = payload["total_cost_usd"]
+        return CodexTurnResult(
+            actual_session,
+            turn_id,
+            json.dumps(final, ensure_ascii=False),
+            usage,
+            [],
+        )
 
 
-class HermesRuntime:
+class HermesHttpRuntime:
     def run_structured(self, **kwargs) -> CodexTurnResult:
         settings = get_settings()
         base_url = settings.hermes_api_url.rstrip("/")
@@ -436,6 +642,77 @@ class HermesRuntime:
         if kwargs.get("on_started"):
             kwargs["on_started"](session_id, turn_id)
         return CodexTurnResult(session_id, turn_id, final_response, payload.get("usage") or {}, [])
+
+
+class HermesCliRuntime:
+    def run_structured(self, **kwargs) -> CodexTurnResult:
+        executable = shutil.which("hermes")
+        if not executable:
+            raise CodexRuntimeUnavailable("Hermes CLI is not installed")
+        task_directory = Path(kwargs["task_directory"]).resolve()
+        task_directory.mkdir(parents=True, exist_ok=True)
+        timeout_seconds = float(kwargs.get("timeout_seconds") or 900)
+        prompt = _structured_prompt(
+            kwargs["prompt"], kwargs["developer_instructions"], kwargs["output_schema"]
+        )
+        if len(prompt.encode("utf-8")) > 180_000:
+            raise CodexRuntimeUnavailable("Hermes CLI prompt exceeds the safe local command limit")
+        command = [
+            executable,
+            "chat",
+            "--quiet",
+            "--source",
+            "tool",
+            "--max-turns",
+            "90",
+            "-q",
+            prompt,
+        ]
+        if kwargs.get("model"):
+            command.extend(["--model", str(kwargs["model"])])
+        if kwargs.get("thread_id"):
+            command.extend(["--resume", str(kwargs["thread_id"])])
+        turn_id = f"hermes-turn-{uuid4()}"
+        if kwargs.get("on_event"):
+            kwargs["on_event"]("agent/cli_started", {"runtime": "hermes"})
+        stdout, stderr, returncode = _run_cancellable_cli(
+            command,
+            cwd=task_directory,
+            timeout_seconds=timeout_seconds,
+            cancellation_requested=kwargs.get("cancellation_requested"),
+            runtime_name="Hermes",
+        )
+        combined = "\n".join(value for value in (stdout, stderr) if value)
+        session_match = re.search(r"(?im)^\s*session_id:\s*([^\s]+)\s*$", combined)
+        session_id = str(
+            (session_match.group(1) if session_match else None)
+            or kwargs.get("thread_id")
+            or f"hermes-session-{uuid4()}"
+        )
+        if kwargs.get("on_started"):
+            kwargs["on_started"](session_id, turn_id)
+        if returncode != 0:
+            if re.search(r"(?i)(HTTP\s*401|invalid api key|authentication failed)", combined):
+                raise CodexRuntimeUnavailable(
+                    "Hermes 本机 provider 鉴权失败，请运行 hermes model 或更新 Hermes 私密配置"
+                )
+            raise CodexRuntimeUnavailable(sanitize_agent_error(stderr or stdout or "Hermes failed"))
+        clean_output = re.sub(r"(?im)^\s*session_id:\s*[^\s]+\s*$", "", stdout).strip()
+        try:
+            final = _extract_json_object(clean_output)
+        except json.JSONDecodeError as exc:
+            if re.search(r"(?i)(HTTP\s*401|invalid api key|authentication failed)", combined):
+                raise CodexRuntimeUnavailable(
+                    "Hermes 本机 provider 鉴权失败，请运行 hermes model 或更新 Hermes 私密配置"
+                ) from exc
+            raise CodexRuntimeUnavailable("Hermes returned no valid structured JSON") from exc
+        return CodexTurnResult(
+            session_id,
+            turn_id,
+            json.dumps(final, ensure_ascii=False),
+            {},
+            [],
+        )
 
 
 class OpenClawRuntime:
@@ -502,9 +779,10 @@ def get_agent_runtime(runtime_key: str) -> AgentRuntimeAdapter:
     if runtime_key == "local_codex":
         return LocalCodexRuntime()
     if runtime_key == "claude_agent":
-        return ClaudeAgentRuntime()
+        return ClaudeCodeRuntime()
     if runtime_key == "hermes":
-        return HermesRuntime()
+        diagnostic = diagnose_hermes()
+        return HermesHttpRuntime() if diagnostic.get("transport") == "http_api" else HermesCliRuntime()
     if runtime_key == "openclaw":
         return OpenClawRuntime()
     raise KeyError(runtime_key)
