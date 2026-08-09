@@ -9,6 +9,7 @@ from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models import Company, User
 from app.models.cleanroom_v1 import GeoWorkspace
+from app.services.workspace_access import add_membership
 from app.schemas.user import (
     LoginRequest,
     LoginResponse,
@@ -93,6 +94,13 @@ def register_tenant(
         status="active",
     )
     db.add_all([new_user, workspace])
+    db.flush()
+    add_membership(
+        db,
+        workspace_id=workspace.id,
+        user_id=new_user.id,
+        role="owner",
+    )
     try:
         db.commit()
     except SQLAlchemyError:

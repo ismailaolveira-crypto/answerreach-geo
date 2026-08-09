@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, type SVGProps } from "react";
 
 type IconName = "home" | "sources" | "compare" | "questions" | "actions" | "content" | "operations" | "providers" | "settings" | "chevron";
@@ -46,8 +46,9 @@ function NavIcon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement
 	</svg>;
 }
 
-export function GeoFloatingSidebar() {
+export function GeoFloatingSidebar({ workspaces = [] }: { workspaces?: Array<{ id: number; name: string }> }) {
 	const pathname = usePathname();
+	const router = useRouter();
 	const searchParams = useSearchParams();
 	const [expanded, setExpanded] = useState(true);
 
@@ -85,13 +86,17 @@ export function GeoFloatingSidebar() {
 				<span className="geo-floating-mark">◇</span><span className="geo-floating-collapsed-chevron"><NavIcon name="chevron" /></span>
 			</button>}
 		</div>
+		{expanded && workspaces.length ? <label className="geo-floating-workspace-switcher"><span>当前工作区</span><select value={workspaceId || String(workspaces[0].id)} onChange={(event) => router.push(`/geo/${event.target.value}` as Route)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label> : null}
 		<nav className="geo-floating-nav">
-			{ITEMS.map((item) => <div key={item.key} className="geo-floating-nav-group">
-				<Link href={item.href(workspaceId) as Route} className={current === item.key ? "is-active" : ""} aria-current={current === item.key ? "page" : undefined} title={!expanded ? item.label : undefined}>
-					<span className="geo-floating-icon"><NavIcon name={item.icon} /></span><span className="geo-floating-label">{item.label}</span>
-				</Link>
-				{item.key === "questions" && current === "questions" && workspaceId ? <Link className={`geo-floating-subnav${questionAnalysisActive ? " is-active" : ""}`} href={`/geo/${workspaceId}/questions/analysis` as Route} aria-current={questionAnalysisActive ? "page" : undefined} title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
-			</div>)}
+			{ITEMS.map((item) => {
+				const itemActive = current === item.key && !(item.key === "questions" && questionAnalysisActive);
+				return <div key={item.key} className={`geo-floating-nav-group${current === item.key ? " is-active-group" : ""}`}>
+					<Link href={item.href(workspaceId) as Route} className={itemActive ? "is-active" : ""} aria-current={itemActive ? "page" : undefined} title={!expanded ? item.label : undefined}>
+						<span className="geo-floating-icon"><NavIcon name={item.icon} /></span><span className="geo-floating-label">{item.label}</span>
+					</Link>
+					{item.key === "questions" && current === "questions" && workspaceId ? <Link className={`geo-floating-subnav${questionAnalysisActive ? " is-active" : ""}`} href={`/geo/${workspaceId}/questions/analysis` as Route} aria-current={questionAnalysisActive ? "page" : undefined} title={!expanded ? "问题分析" : undefined}><span className="geo-floating-subnav-mark" /><span className="geo-floating-label">问题分析</span></Link> : null}
+				</div>;
+			})}
 		</nav>
 		<nav className="geo-floating-bottom-nav" aria-label="辅助导航">
 			<Link href={(workspaceId ? `/geo/${workspaceId}/settings` : "/") as Route} className={current === "settings" ? "is-active" : ""} aria-current={current === "settings" ? "page" : undefined} title={!expanded ? "设置" : undefined}>

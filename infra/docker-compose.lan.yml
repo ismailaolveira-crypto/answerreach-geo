@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: geo_platform
+      POSTGRES_USER: geo_platform
+      POSTGRES_PASSWORD: ${GEO_POSTGRES_PASSWORD:?Run generate_deployment_config.py first}
+    volumes:
+      - geo_lan_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geo_platform -d geo_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    environment:
+      DEPLOYMENT_MODE: lan
+      ENVIRONMENT: production
+      AUTO_CREATE_TABLES: "false"
+      DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
+      AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
+      CORS_ORIGINS: http://${GEO_LAN_HOST}:${GEO_HTTP_PORT:-3000}
+    volumes:
+      - geo_lan_artifacts:/app/private_artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "125"]
+    environment:
+      DEPLOYMENT_MODE: lan
+      ENVIRONMENT: production
+      AUTO_CREATE_TABLES: "false"
+      DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
+      AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
+    volumes:
+      - geo_lan_artifacts:/app/private_artifacts
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ""
+    environment:
+      INTERNAL_API_BASE_URL: http://api:8000
+      SESSION_COOKIE_SECURE: "false"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:1.27-alpine
+    ports:
+      - "0.0.0.0:${GEO_HTTP_PORT:-3000}:80"
+    volumes:
+      - ./nginx.local.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - api
+    restart: unless-stopped
+
+volumes:
+  geo_lan_postgres:
+  geo_lan_artifacts:

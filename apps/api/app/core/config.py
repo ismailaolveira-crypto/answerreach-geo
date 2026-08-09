@@ -6,6 +6,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     app_name: str = "GEO Optimization Platform API"
     environment: str = "development"
+    deployment_mode: str = "personal"
     database_url: str = "sqlite:///./geo_platform.db"
     cors_origins: str = "http://localhost:3000"
     openai_api_key: str | None = None
@@ -27,6 +28,15 @@ class Settings(BaseSettings):
     agent_run_timeout_seconds: int = 900
     auth_secret: str = "dev-secret-change-me"
     auto_create_tables: bool = True
+
+    def validate_deployment(self) -> None:
+        mode = self.deployment_mode.strip().lower()
+        if mode not in {"personal", "lan"}:
+            raise RuntimeError("DEPLOYMENT_MODE must be personal or lan")
+        if mode == "lan" and self.database_url.startswith("sqlite"):
+            raise RuntimeError("LAN deployment requires PostgreSQL; SQLite is personal mode only")
+        if mode == "lan" and self.auth_secret == "dev-secret-change-me":
+            raise RuntimeError("LAN deployment requires a unique AUTH_SECRET")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -83,6 +83,14 @@ def test_registration_creates_a_private_company_workspace_and_login_token(
     )
     assert denied.status_code == 404
 
+    login = tenant_client.post(
+        "/api/auth/login",
+        json={"email": "first@example.com", "password": "a-safe-password-2026"},
+    )
+    assert login.status_code == 200, login.text
+    assert login.json()["user"]["email"] == "first@example.com"
+    assert login.json()["access_token"]
+
 
 def test_legacy_user_provisioning_is_not_public(tenant_client: TestClient) -> None:
     response = tenant_client.post(

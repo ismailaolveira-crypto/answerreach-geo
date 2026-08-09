@@ -30,7 +30,16 @@ from app.services.usage import enforce_monthly_search_budget, record_usage
 
 router = APIRouter(prefix="/llm-providers", tags=["llm-providers"])
 
-LATEST_NETWORK_CHECK_OUTPUT = Path(__file__).resolve().parents[5] / "outputs" / "latest_provider_network_check.json"
+
+def _project_output_root() -> Path:
+    """Resolve the shared output directory in both source and container layouts."""
+    api_root = Path(__file__).resolve().parents[3]
+    if api_root.name == "api" and api_root.parent.name == "apps":
+        return api_root.parents[1] / "outputs"
+    return api_root / "outputs"
+
+
+LATEST_NETWORK_CHECK_OUTPUT = _project_output_root() / "latest_provider_network_check.json"
 
 
 def get_provider_or_404(db: Session, provider_id: int) -> LLMProvider:

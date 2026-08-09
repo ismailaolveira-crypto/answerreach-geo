@@ -185,7 +185,7 @@ def upgrade() -> None:
         sa.Column("support_id", sa.Integer()),
         sa.Column("source_url", sa.String(1500)),
         sa.Column("verification_status", sa.String(32), nullable=False, server_default="pending"),
-        sa.Column("introduced_by_model", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        sa.Column("introduced_by_model", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("review_note", sa.Text()),
         *_timestamps(),
     )
@@ -267,7 +267,7 @@ def upgrade() -> None:
         sa.Column("waiting_human_reason", sa.Text()),
         sa.Column("blocked_reason", sa.Text()),
         sa.Column("last_error_code", sa.String(80)),
-        sa.Column("final_action_clicked", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("final_action_clicked", sa.Boolean(), nullable=False, server_default=sa.false()),
         *_timestamps(),
     )
     for column in ("distribution_run_id", "platform_variant_id", "platform_key", "request_fingerprint"):

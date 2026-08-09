@@ -3,18 +3,27 @@ import type { Route } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
 import { getCleanroomWorkspaces } from "@/lib/cleanroom-v1-api";
+import { getCurrentUser } from "@/lib/session";
 import { WorkspaceSettingsForm } from "./workspace-settings-form";
 import { IntegrationSettingsForm } from "./integration-settings-form";
 import { BrandFactsSettingsForm } from "./brand-facts-settings-form";
-import { readAgentRuntime, readBrandFacts, readWorkspaceIntegrations } from "./actions";
+import { CollaborationSettings } from "./collaboration-settings";
+import {
+	readAgentRuntime,
+	readBrandFacts,
+	readLocalAgentNodes,
+	readWorkspaceIntegrations,
+	readWorkspaceInvitations,
+	readWorkspaceMembers,
+} from "./actions";
 import styles from "./settings.module.css";
 
-async function IntegrationSettingsSection({ workspaceId }: { workspaceId: number }) {
+async function IntegrationSettingsSection({ workspaceId, readOnly }: { workspaceId: number; readOnly: boolean }) {
 	const [integrations, agentRuntime] = await Promise.all([
 		readWorkspaceIntegrations(workspaceId),
 		readAgentRuntime(workspaceId),
 	]);
-	return <IntegrationSettingsForm workspaceId={workspaceId} initialSettings={integrations} initialRuntime={agentRuntime} />;
+	return <IntegrationSettingsForm workspaceId={workspaceId} initialSettings={integrations} initialRuntime={agentRuntime} readOnly={readOnly} />;
 }
 
 function IntegrationSettingsLoading() {
@@ -29,20 +38,28 @@ export default async function GeoSettingsPage({ params }: { params: Promise<{ wo
 	const { workspaceId } = await params;
 	const numericWorkspaceId = Number(workspaceId);
 	if (!Number.isInteger(numericWorkspaceId) || numericWorkspaceId < 1) notFound();
-	const [workspaces, brandFacts] = await Promise.all([
+	const [workspaces, brandFacts, members, invitations, localAgentNodes, currentUser] = await Promise.all([
 		getCleanroomWorkspaces(),
 		readBrandFacts(numericWorkspaceId),
+		readWorkspaceMembers(numericWorkspaceId),
+		readWorkspaceInvitations(numericWorkspaceId),
+		readLocalAgentNodes(numericWorkspaceId),
+		getCurrentUser(),
 	]);
 	const workspace = workspaces.find((item) => item.id === numericWorkspaceId);
 	if (!workspace) notFound();
+	const currentMembership = members.find((item) => item.user_id === currentUser?.id);
+	const canManage = currentUser?.role === "super_admin" || currentMembership?.role === "owner" || currentMembership?.role === "admin";
+	const canWrite = currentUser?.role === "super_admin" || Boolean(currentMembership && currentMembership.role !== "viewer");
 	return <main className={styles.page}>
 		<header className={styles.header}><div><p>工作区设置</p><h1>让每一次观测有一致的识别口径</h1><span>品牌名称、别名和官网只影响之后归档的识别，不会改写历史回答。</span></div><Link href={`/geo/${workspaceId}`}>返回决策地图</Link></header>
 		<div className={styles.grid}>
-			<section className={styles.card}><header><span>01</span><div><h2>品牌识别</h2><p>这是指标、竞品对比和问题分析共用的品牌口径。</p></div></header><WorkspaceSettingsForm workspace={workspace} /></section>
+			<section className={styles.card}><header><span>01</span><div><h2>品牌识别</h2><p>这是指标、竞品对比和问题分析共用的品牌口径。</p></div></header><WorkspaceSettingsForm workspace={workspace} readOnly={!canWrite} /></section>
 			<section className={styles.card}><header><span>02</span><div><h2>模型与渠道</h2><p>API 连接和联网验证在独立页面完成。</p></div></header><Link className={styles.cardLink} href={`/admin/providers?workspace=${workspaceId}` as Route}>管理模型与渠道 <b>→</b></Link></section>
 			<section className={styles.card}><header><span>03</span><div><h2>真实运行</h2><p>查看采集任务、失败原因与证据归档。</p></div></header><div className={styles.linkStack}><Link href={`/geo/${workspaceId}/operations`}>运营状态 <b>→</b></Link><Link href={`/geo/${workspaceId}/questions`}>问题库 <b>→</b></Link></div></section>
 		</div>
-		<BrandFactsSettingsForm workspaceId={workspace.id} initialFacts={brandFacts} />
-		<Suspense fallback={<IntegrationSettingsLoading />}><IntegrationSettingsSection workspaceId={workspace.id} /></Suspense>
+		<CollaborationSettings workspaceId={workspace.id} initialMembers={members} initialInvitations={invitations} initialNodes={localAgentNodes} canManage={canManage} canEnrollAgent={canWrite} currentUserId={currentUser?.id ?? null} />
+		<BrandFactsSettingsForm workspaceId={workspace.id} initialFacts={brandFacts} readOnly={!canWrite} />
+		<Suspense fallback={<IntegrationSettingsLoading />}><IntegrationSettingsSection workspaceId={workspace.id} readOnly={!canWrite} /></Suspense>
 	</main>;
 }

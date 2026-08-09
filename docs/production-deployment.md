@@ -1,5 +1,7 @@
 # GEO 平台正式部署方案
 
+> 纯本地个人版与局域网团队版请先阅读 [`local-deployment-modes.md`](./local-deployment-modes.md)。该方案不依赖公有云，并明确保留 EgoLite/Local Agent 的本机凭据边界。
+
 ## 结论
 
 当前项目不建议“整个系统只发布到 Vercel”。

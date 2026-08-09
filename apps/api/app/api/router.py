@@ -18,6 +18,7 @@ from app.api.routes import (
     review_rules,
     usage,
     users,
+    workspace_access,
 )
 from app.v1.routes import router as cleanroom_v1_router
 
@@ -28,6 +29,9 @@ api_router.include_router(alerts.router)
 api_router.include_router(audit.router)
 api_router.include_router(usage.router)
 api_router.include_router(users.router)
+api_router.include_router(workspace_access.invite_router)
+api_router.include_router(workspace_access.workspace_router)
+api_router.include_router(workspace_access.agent_router)
 api_router.include_router(companies.router)
 api_router.include_router(projects.router)
 api_router.include_router(geo_config.router)

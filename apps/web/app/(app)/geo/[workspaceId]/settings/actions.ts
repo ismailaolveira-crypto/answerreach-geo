@@ -3,19 +3,33 @@
 import { revalidatePath } from "next/cache";
 import {
 	createCleanroomBrandFact,
+	createLocalAgentEnrollment,
+	createWorkspaceInvitation,
+	disableLocalAgentNode,
 	discoverCleanroomBrandFactSourceCandidates,
 	getAgentRuntime,
+	getLocalAgentNodes,
 	getCleanroomBrandFacts,
+	getWorkspaceInvitations,
+	getWorkspaceMembers,
 	getWorkspaceIntegrations,
 	testWorkspaceIntegration,
 	testAgentRuntime,
 	updateCleanroomWorkspace,
 	updateCleanroomBrandFact,
 	updateWorkspaceIntegrations,
+	revokeWorkspaceInvitation,
+	revokeWorkspaceMembership,
+	updateWorkspaceMembership,
 	type CleanroomBrandFact,
 	type CleanroomBrandFactSourceCandidates,
 	type WorkspaceIntegrationSettings,
 	type AgentRuntime,
+	type LocalAgentEnrollment,
+	type LocalAgentNode,
+	type WorkspaceInvitation,
+	type WorkspaceInvitationCreated,
+	type WorkspaceMembership,
 } from "@/lib/cleanroom-v1-api";
 
 export type SettingsActionState = { status: "idle" | "success" | "error"; message?: string };
@@ -34,6 +48,56 @@ export async function readAgentRuntime(workspaceId: number): Promise<AgentRuntim
 	} catch {
 		return null;
 	}
+}
+
+export async function readWorkspaceMembers(workspaceId: number): Promise<WorkspaceMembership[]> {
+	return getWorkspaceMembers(workspaceId).catch(() => []);
+}
+
+export async function readWorkspaceInvitations(workspaceId: number): Promise<WorkspaceInvitation[]> {
+	return getWorkspaceInvitations(workspaceId).catch(() => []);
+}
+
+export async function readLocalAgentNodes(workspaceId: number): Promise<LocalAgentNode[]> {
+	return getLocalAgentNodes(workspaceId).catch(() => []);
+}
+
+export async function inviteWorkspaceMember(
+	workspaceId: number,
+	payload: { email: string; role: WorkspaceMembership["role"] },
+): Promise<WorkspaceInvitationCreated> {
+	const invitation = await createWorkspaceInvitation(workspaceId, payload);
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	return invitation;
+}
+
+export async function changeWorkspaceMemberRole(
+	workspaceId: number,
+	membershipId: number,
+	role: WorkspaceMembership["role"],
+) {
+	const membership = await updateWorkspaceMembership(workspaceId, membershipId, role);
+	revalidatePath(`/geo/${workspaceId}/settings`);
+	return membership;
+}
+
+export async function removeWorkspaceMember(workspaceId: number, membershipId: number) {
+	await revokeWorkspaceMembership(workspaceId, membershipId);
+	revalidatePath(`/geo/${workspaceId}/settings`);
+}
+
+export async function cancelWorkspaceInvitation(workspaceId: number, invitationId: number) {
+	await revokeWorkspaceInvitation(workspaceId, invitationId);
+	revalidatePath(`/geo/${workspaceId}/settings`);
+}
+
+export async function enrollLocalAgent(workspaceId: number): Promise<LocalAgentEnrollment> {
+	return createLocalAgentEnrollment(workspaceId);
+}
+
+export async function removeLocalAgent(workspaceId: number, nodeId: number) {
+	await disableLocalAgentNode(workspaceId, nodeId);
+	revalidatePath(`/geo/${workspaceId}/settings`);
 }
 
 export async function runAgentRuntimeTest(workspaceId: number) {

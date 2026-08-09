@@ -11,6 +11,10 @@
     "dev:api:reload": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000",
     "dev:web": "pnpm --dir apps/web dev --hostname 127.0.0.1 --port 3000",
     "dev:worker": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_worker.py --interval-seconds 1",
+    "deploy:personal:config": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/generate_deployment_config.py --mode personal",
+    "deploy:lan:config": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/generate_deployment_config.py --mode lan",
+    "deploy:personal": "docker compose --env-file .env.personal -f infra/docker-compose.personal.yml up -d --build",
+    "deploy:lan": "docker compose --env-file .env.lan -f infra/docker-compose.lan.yml up -d --build",
     "check:api": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run ruff check app scripts",
     "check:web": "pnpm --dir apps/web exec tsc --noEmit",
     "build:web": "pnpm --dir apps/web build",
@@ -42,6 +46,7 @@
     "verify:four-platforms": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/verify_four_platform_acceptance.py",
     "worker:deepseek-profiles": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_deepseek_profile_worker.py",
     "worker:deepseek-profiles:once": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_deepseek_profile_worker.py --once",
+    "worker:local-agent": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_local_agent.py run",
     "verify:cleanroom-web-boundary": "node scripts/verify_cleanroom_frontend_boundary.mjs",
     "verify": "pnpm run check:api && pnpm run check:web && pnpm run build:web && pnpm run verify:local"
   }

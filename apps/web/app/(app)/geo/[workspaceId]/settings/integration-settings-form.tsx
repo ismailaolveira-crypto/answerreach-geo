@@ -28,7 +28,7 @@ function mcpStatusLabel(configured: boolean) {
 	return configured ? "已配置（密钥不回显）" : "未配置";
 }
 
-export function IntegrationSettingsForm({ workspaceId, initialSettings, initialRuntime }: { workspaceId: number; initialSettings: WorkspaceIntegrationSettings | null; initialRuntime: AgentRuntime | null }) {
+export function IntegrationSettingsForm({ workspaceId, initialSettings, initialRuntime, readOnly = false }: { workspaceId: number; initialSettings: WorkspaceIntegrationSettings | null; initialRuntime: AgentRuntime | null; readOnly?: boolean }) {
 	const [settings, setSettings] = useState<WorkspaceIntegrationSettings | null>(initialSettings);
 	const [runtime, setRuntime] = useState<AgentRuntime | null>(initialRuntime);
 	const mcpConfigured = Boolean(settings?.article_sync_mcp_server_path && settings.article_sync_mcp_token_configured);
@@ -143,7 +143,7 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings, initialR
 				<div className={styles.integrationBlockTitle}><div><b>Local Codex Agent</b><small>{runtime?.ready ? "已复用本机 ChatGPT 登录" : "未就绪"}</small></div><i className={runtime?.ready ? styles.dotReady : styles.dotPending} /></div>
 				<dl className={styles.runtimeFacts}><div><dt>认证</dt><dd>{runtime?.login_status === "chatgpt_authenticated" ? "ChatGPT 已登录" : runtime?.login_status || "无法读取"}</dd></div><div><dt>默认模型</dt><dd>{runtime?.default_model || "—"}</dd></div><div><dt>SDK</dt><dd>{runtime?.sdk_version || "—"}</dd></div></dl>
 				<p className={styles.runtimeNote}>不保存 API Key。Agent 仅在隔离目录写入中间工件，内容生成后停在人工审核。</p>
-				<button type="button" className={styles.testButton} onClick={testCodex} disabled={testing !== null || saving}>{testing === "local_codex" ? "正在执行真实 turn…" : "运行 Codex 自检"}</button>
+				{!readOnly ? <button type="button" className={styles.testButton} onClick={testCodex} disabled={testing !== null || saving}>{testing === "local_codex" ? "正在执行真实 turn…" : "运行 Codex 自检"}</button> : null}
 			</div>
 			<div className={styles.integrationBlock}>
 				<div className={styles.integrationBlockTitle}><div><b>EgoLite 文章同步助手</b><small>{pageSyncSummary}</small></div><i className={deliveryReady ? styles.dotReady : styles.dotPending} /></div>
@@ -155,13 +155,13 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings, initialR
 		</div>
 		<p className={styles.integrationHint}>Codex 直接复用本机登录，无需配置中转站或模型 Key。常规交付也无需填写 MCP 路径：请在 EgoLite 中打开工作台，审核内容后点击“打开文章同步助手”。</p>
 		{feedback.message ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}
-		<details className={styles.integrationAdvanced}>
+		{!readOnly ? <details className={styles.integrationAdvanced}>
 			<summary><span><b>高级：后台 MCP 通道</b><small>不影响网页点击同步；仅用于后台诊断与自动化实验</small></span><em>{mcpStatusLabel(mcpConfigured)}</em></summary>
 			<div className={styles.integrationAdvancedBody}>
 				<label>MCP Server 文件路径<input type="text" value={mcpServerPath} onChange={(event) => setMcpServerPath(event.target.value)} placeholder="/path/to/Wechatsync/packages/mcp-server/dist/index.js" autoComplete="off" spellCheck={false} /></label>
 				<label>MCP Token<input type="password" value={mcpToken} onChange={(event) => setMcpToken(event.target.value)} placeholder={settings?.article_sync_mcp_token_configured ? "已配置；留空保持不变" : "粘贴 MCP Token"} autoComplete="new-password" spellCheck={false} /></label>
 				<div><button type="button" className={styles.testButton} onClick={testMcp} disabled={testing !== null || saving}>{testing === "article_sync_mcp" ? "正在发现后台能力…" : "测试后台 MCP"}</button><button type="button" className={styles.integrationSave} onClick={save} disabled={saving || testing !== null}>{saving ? "正在保存…" : "保存高级配置"}</button></div>
 			</div>
-		</details>
+		</details> : null}
 	</section>;
 }

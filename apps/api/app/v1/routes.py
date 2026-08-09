@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,7 @@ from app.models.cleanroom_v1 import (
     GeoWebsiteAudit,
 )
 from app.models.user import User
+from app.models.workspace_access import WorkspaceMembership
 from app.schemas.search import QueueJobRead
 from app.v1.schemas import (
     ActionCreate,
@@ -218,6 +219,7 @@ from app.services.workspace_secrets import (
     secret_status,
     set_workspace_secret,
 )
+from app.services.workspace_access import add_membership, require_workspace_access
 
 
 router = APIRouter(prefix="/v1", tags=["clean-room-geo-v1"])
@@ -228,10 +230,7 @@ AGENT_ARTIFACT_ROOT = API_ROOT / "private_artifacts" / "agent-runs"
 
 
 def workspace_or_404(db: Session, user: User, workspace_id: int) -> GeoWorkspace:
-    workspace = db.get(GeoWorkspace, workspace_id)
-    if workspace is None:
-        raise HTTPException(status_code=404, detail="Workspace not found")
-    assert_company_access(user, workspace.company_id)
+    workspace, _membership = require_workspace_access(db, user, workspace_id)
     return workspace
 
 
@@ -1198,7 +1197,26 @@ def fail_sampling_sample(
 def list_workspaces(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     query = select(GeoWorkspace)
     if user.role != "super_admin":
-        query = query.where(GeoWorkspace.company_id == user.company_id)
+        active_member = (
+            select(WorkspaceMembership.id)
+            .where(
+                WorkspaceMembership.workspace_id == GeoWorkspace.id,
+                WorkspaceMembership.user_id == user.id,
+                WorkspaceMembership.status == "active",
+            )
+            .exists()
+        )
+        any_membership = (
+            select(WorkspaceMembership.id)
+            .where(WorkspaceMembership.workspace_id == GeoWorkspace.id)
+            .exists()
+        )
+        query = query.where(
+            or_(
+                active_member,
+                and_(~any_membership, GeoWorkspace.company_id == user.company_id),
+            )
+        )
     return list(db.scalars(query.order_by(GeoWorkspace.id.desc())))
 
 
@@ -1206,13 +1224,20 @@ def list_workspaces(db: Session = Depends(get_db), user: User = Depends(get_curr
 def create_workspace(
     payload: WorkspaceCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(*WRITE_ROLES)),
+    user: User = Depends(require_roles("super_admin", "company_admin")),
 ):
     assert_company_access(user, payload.company_id)
     if db.scalar(select(GeoWorkspace).where(GeoWorkspace.slug == payload.slug)):
         raise HTTPException(status_code=409, detail="Workspace slug already exists")
     workspace = GeoWorkspace(**payload.model_dump())
     db.add(workspace)
+    db.flush()
+    add_membership(
+        db,
+        workspace_id=workspace.id,
+        user_id=user.id,
+        role="owner",
+    )
     db.commit()
     db.refresh(workspace)
     return workspace

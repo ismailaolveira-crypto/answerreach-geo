@@ -1,21 +1,26 @@
 from collections.abc import Callable
+import re
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models import Company, Project, User
 from app.services.auth import decode_access_token
+from app.services.workspace_access import membership_for, require_workspace_access
 
 
 WRITE_ROLES = {"super_admin", "company_admin", "content_operator", "reviewer"}
 ADMIN_ROLES = {"super_admin"}
 CONTENT_ROLES = {"super_admin", "company_admin", "content_operator"}
 REVIEW_ROLES = {"super_admin", "company_admin", "reviewer"}
+WORKSPACE_PATH = re.compile(r"^/api/v1/workspaces/(\d+)(?:/|$)")
 
 
 def get_current_user(
-    authorization: str | None = Header(default=None), db: Session = Depends(get_db)
+    request: Request,
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
 ) -> User:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing authorization token")
@@ -26,6 +31,18 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None or user.status != "active":
         raise HTTPException(status_code=401, detail="User not found or inactive")
+    match = WORKSPACE_PATH.match(request.url.path)
+    if match:
+        workspace_id = int(match.group(1))
+        require_workspace_access(db, user, workspace_id)
+        membership = membership_for(db, workspace_id, user.id)
+        if (
+            request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+            and user.role != "super_admin"
+            and membership is not None
+            and membership.role == "viewer"
+        ):
+            raise HTTPException(status_code=403, detail="Workspace role is read-only")
     return user
 
 

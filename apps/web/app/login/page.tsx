@@ -29,10 +29,14 @@ export default async function LoginPage({
             <div className="cq-login-notice" role="status">邮箱或密码不正确，请重试。</div>
           ) : null}
 
+          {params.error === "unavailable" ? (
+            <div className="cq-login-notice" role="status">账号服务暂时无法连接，请确认本地 API 已启动。</div>
+          ) : null}
+
           <form action="/api/session/login" method="post" className="cq-login-form">
             <div>
               <label htmlFor="login-email">邮箱</label>
-              <input id="login-email" name="email" type="email" defaultValue="geo-demo-e2e@example.com" placeholder="name@company.com" autoComplete="email" required />
+              <input id="login-email" name="email" type="email" placeholder="name@company.com" autoComplete="email" required />
             </div>
             <div>
               <label htmlFor="login-password">密码</label>

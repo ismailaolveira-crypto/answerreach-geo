@@ -63,6 +63,12 @@ from app.models.search import (
 )
 from app.models.usage import UsageRecord
 from app.models.user import User
+from app.models.workspace_access import (
+    LocalAgentEnrollment,
+    LocalAgentNode,
+    WorkspaceInvitation,
+    WorkspaceMembership,
+)
 
 __all__ = [
     "AnswerAnalysis",
@@ -131,4 +137,8 @@ __all__ = [
     "TargetQuestion",
     "UsageRecord",
     "User",
+    "LocalAgentEnrollment",
+    "LocalAgentNode",
+    "WorkspaceInvitation",
+    "WorkspaceMembership",
 ]

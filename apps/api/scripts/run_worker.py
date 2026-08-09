@@ -12,7 +12,8 @@ from app.db.session import Base, SessionLocal, engine
 from app.services.job_queue import run_next_job
 
 
-MAX_WORKER_CONCURRENCY = 10
+DEFAULT_WORKER_CONCURRENCY = 125
+MAX_WORKER_CONCURRENCY = 125
 
 
 def normalize_concurrency(value: int) -> int:
@@ -40,8 +41,11 @@ def main() -> None:
     parser.add_argument(
         "--concurrency",
         type=int,
-        default=MAX_WORKER_CONCURRENCY,
-        help=f"Maximum jobs processed concurrently (1-{MAX_WORKER_CONCURRENCY}).",
+        default=DEFAULT_WORKER_CONCURRENCY,
+        help=(
+            "Maximum jobs processed concurrently "
+            f"(default {DEFAULT_WORKER_CONCURRENCY}, allowed 1-{MAX_WORKER_CONCURRENCY})."
+        ),
     )
     args = parser.parse_args()
 

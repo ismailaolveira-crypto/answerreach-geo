@@ -515,10 +515,17 @@ export default async function SpringYuanDecisionMap({
 				) : null}
 
 				<SamplingBatchPanel
+					key={`observation-composer-${activeBatch?.batch_id ?? "new"}`}
 					workspaceId={workspaceId}
 					questions={runnableQuestions}
 					providers={observationProviders}
 					lastEvidence={officialEvidence}
+					initialSelection={activeBatch ? {
+						batchId: activeBatch.batch_id,
+						providerIds: activeBatch.provider_groups.map((group) => group.id),
+						questions: activeBatch.question_groups.map((group) => ({ id: group.id, text: group.label })),
+						repeatCount: activeBatch.repeat_count,
+					} : undefined}
 					runAction={runProviderObservation}
 					updateQuestionAction={updateQuestion}
 				/>

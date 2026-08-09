@@ -5,6 +5,9 @@ export function middleware(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const { pathname } = request.nextUrl;
   const isLogin = pathname === "/login";
+  const isRegister = pathname === "/register";
+  const isInvite = pathname.startsWith("/invite/");
+  const isPublicAuth = isLogin || isRegister || isInvite;
   const isPublicShare = pathname.startsWith("/share/");
   const isPublicAsset =
     pathname.startsWith("/_next") ||
@@ -15,7 +18,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  if (!token && !isLogin) {
+  if (!token && !isPublicAuth) {
     return NextResponse.redirect(new URL("/login", request.url));
   }
 
@@ -26,6 +29,10 @@ export function middleware(request: NextRequest) {
   }
 
   if (token && isLogin) {
+    return NextResponse.redirect(new URL("/", request.url));
+  }
+
+  if (token && isRegister) {
     return NextResponse.redirect(new URL("/", request.url));
   }
 

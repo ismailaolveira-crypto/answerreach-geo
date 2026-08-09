@@ -1,7 +1,9 @@
 import { cookies } from "next/headers";
 
 const API_BASE_URL =
-	process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+	process.env.INTERNAL_API_BASE_URL ??
+	process.env.NEXT_PUBLIC_API_BASE_URL ??
+	"http://localhost:8000";
 const SESSION_COOKIE = "geo_session";
 
 export type CleanroomWorkspace = {
@@ -12,6 +14,64 @@ export type CleanroomWorkspace = {
 	brand_aliases: string[];
 	website_url?: string | null;
 	status: string;
+};
+
+export type WorkspaceMembership = {
+	id: number;
+	workspace_id: number;
+	user_id: number;
+	role: "owner" | "admin" | "operator" | "reviewer" | "viewer";
+	status: string;
+	joined_at: string;
+	user: {
+		id: number;
+		company_id?: number | null;
+		name: string;
+		email: string;
+		role: string;
+		status: string;
+	};
+};
+
+export type WorkspaceInvitation = {
+	id: number;
+	workspace_id: number;
+	email: string;
+	role: WorkspaceMembership["role"];
+	status: string;
+	invited_by_user_id: number;
+	expires_at: string;
+	accepted_at?: string | null;
+	created_at: string;
+};
+
+export type WorkspaceInvitationCreated = WorkspaceInvitation & {
+	invite_token: string;
+	invite_path: string;
+};
+
+export type LocalAgentNode = {
+	id: number;
+	workspace_id: number;
+	owner_user_id: number;
+	name: string;
+	hostname: string;
+	platform: string;
+	agent_version: string;
+	status: string;
+	execution_mode: "status_only";
+	capabilities: Record<string, unknown>;
+	health: Record<string, unknown>;
+	last_seen_at: string;
+	online: boolean;
+	disabled_at?: string | null;
+};
+
+export type LocalAgentEnrollment = {
+	workspace_id: number;
+	enrollment_token: string;
+	expires_at: string;
+	command_hint: string;
 };
 
 export type WorkspaceIntegrationSettings = {
@@ -1143,6 +1203,63 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function getCleanroomWorkspaces() {
 	return apiRequest<CleanroomWorkspace[]>("/workspaces");
+}
+
+export function getWorkspaceMembers(workspaceId: string | number) {
+	return apiRequest<WorkspaceMembership[]>(`/workspaces/${workspaceId}/members`);
+}
+
+export function getWorkspaceInvitations(workspaceId: string | number) {
+	return apiRequest<WorkspaceInvitation[]>(`/workspaces/${workspaceId}/invitations`);
+}
+
+export function createWorkspaceInvitation(
+	workspaceId: string | number,
+	payload: { email: string; role: WorkspaceMembership["role"]; expires_in_hours?: number },
+) {
+	return apiRequest<WorkspaceInvitationCreated>(`/workspaces/${workspaceId}/invitations`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function revokeWorkspaceInvitation(workspaceId: string | number, invitationId: number) {
+	return apiRequest<{ message: string }>(`/workspaces/${workspaceId}/invitations/${invitationId}`, {
+		method: "DELETE",
+	});
+}
+
+export function updateWorkspaceMembership(
+	workspaceId: string | number,
+	membershipId: number,
+	role: WorkspaceMembership["role"],
+) {
+	return apiRequest<WorkspaceMembership>(`/workspaces/${workspaceId}/members/${membershipId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ role }),
+	});
+}
+
+export function revokeWorkspaceMembership(workspaceId: string | number, membershipId: number) {
+	return apiRequest<{ message: string }>(`/workspaces/${workspaceId}/members/${membershipId}`, {
+		method: "DELETE",
+	});
+}
+
+export function getLocalAgentNodes(workspaceId: string | number) {
+	return apiRequest<LocalAgentNode[]>(`/workspaces/${workspaceId}/local-agent-nodes`);
+}
+
+export function createLocalAgentEnrollment(workspaceId: string | number) {
+	return apiRequest<LocalAgentEnrollment>(`/workspaces/${workspaceId}/local-agent-enrollments`, {
+		method: "POST",
+	});
+}
+
+export function disableLocalAgentNode(workspaceId: string | number, nodeId: number) {
+	return apiRequest<{ message: string }>(`/workspaces/${workspaceId}/local-agent-nodes/${nodeId}`, {
+		method: "DELETE",
+	});
 }
 
 export function updateCleanroomWorkspace(
