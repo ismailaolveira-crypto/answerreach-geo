@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     deployment_mode: str = "personal"
     database_url: str = "sqlite:///./geo_platform.db"
     cors_origins: str = "http://localhost:3000"
+    allowed_hosts: str = "localhost,127.0.0.1,testserver"
     openai_api_key: str | None = None
     deepseek_api_key: str | None = None
     kimi_api_key: str | None = None
@@ -37,12 +38,30 @@ class Settings(BaseSettings):
             raise RuntimeError("LAN deployment requires PostgreSQL; SQLite is personal mode only")
         if mode == "lan" and self.auth_secret == "dev-secret-change-me":
             raise RuntimeError("LAN deployment requires a unique AUTH_SECRET")
+        if self.is_production:
+            if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+                raise RuntimeError("Production deployment requires PostgreSQL")
+            if self.auto_create_tables:
+                raise RuntimeError("Production deployment requires AUTO_CREATE_TABLES=false")
+            if self.auth_secret == "dev-secret-change-me" or len(self.auth_secret) < 32:
+                raise RuntimeError("Production deployment requires an AUTH_SECRET of at least 32 characters")
+            if not self.cors_origin_list or any(
+                origin == "*" or not origin.startswith("https://")
+                for origin in self.cors_origin_list
+            ):
+                raise RuntimeError("Production CORS_ORIGINS must contain only HTTPS origins")
+            if not self.allowed_host_list or "*" in self.allowed_host_list:
+                raise RuntimeError("Production ALLOWED_HOSTS must be explicit")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_host_list(self) -> list[str]:
+        return [host.strip() for host in self.allowed_hosts.split(",") if host.strip()]
 
     @property
     def is_production(self) -> bool:

@@ -1,4 +1,5 @@
 from app.models.audit import AuditLog
+from app.models.auth import AuthLoginThrottle
 from app.models.alert import SystemAlert
 from app.models.company import Company
 from app.models.content import (
@@ -47,7 +48,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspaceSecret,
     GeoWebsiteAudit,
 )
-from app.models.job import QueueJob
+from app.models.job import QueueJob, QueueWorkerHeartbeat
 from app.models.project import Project, ProjectStageGoal
 from app.models.report import MaturityReport, MaturityScoreItem, ReportTemplate
 from app.models.search import (
@@ -74,6 +75,7 @@ __all__ = [
     "AnswerAnalysis",
     "ArticleDraft",
     "ArticleReview",
+    "AuthLoginThrottle",
     "AuditLog",
     "BrandClaim",
     "GeoAgentArtifact",
@@ -133,6 +135,7 @@ __all__ = [
     "Project",
     "ProjectStageGoal",
     "QueueJob",
+    "QueueWorkerHeartbeat",
     "ReportTemplate",
     "TargetQuestion",
     "UsageRecord",

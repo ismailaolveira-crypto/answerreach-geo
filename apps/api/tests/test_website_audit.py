@@ -30,6 +30,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1 import routes
 from app.v1.action_opportunities import materialize_website_opportunity
 from app.v1.agent_orchestration import _build_context
@@ -476,6 +477,8 @@ def website_audit_api(monkeypatch: pytest.MonkeyPatch) -> Generator[SimpleNamesp
                 website_url="https://brand.example/",
             )
         )
+        db.flush()
+        add_membership(db, workspace_id=1, user_id=1, role="owner")
         db.commit()
 
     captured = audit_website(

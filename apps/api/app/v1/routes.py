@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import and_, func, or_, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -113,6 +113,7 @@ from app.v1.schemas import (
     QuestionPlanRead,
     QuestionPlanUpdate,
     QuestionReviewRead,
+    QueueWorkerStatusRead,
     OfficialApiObservationBatchCreate,
     OfficialApiObservationBatchListRead,
     OfficialApiObservationBatchRead,
@@ -163,6 +164,7 @@ from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
 from app.v1.action_opportunities import valid_action_evidence
+from app.v1.agent_errors import public_agent_error
 from app.v1.opportunity_agent import (
     AGENT_RULE_VERSION,
     build_opportunity_context,
@@ -220,6 +222,10 @@ from app.services.workspace_secrets import (
     set_workspace_secret,
 )
 from app.services.workspace_access import add_membership, require_workspace_access
+from app.services.worker_heartbeat import (
+    get_workspace_worker_status,
+    workspace_worker_is_online,
+)
 
 
 router = APIRouter(prefix="/v1", tags=["clean-room-geo-v1"])
@@ -1206,18 +1212,21 @@ def list_workspaces(db: Session = Depends(get_db), user: User = Depends(get_curr
             )
             .exists()
         )
-        any_membership = (
-            select(WorkspaceMembership.id)
-            .where(WorkspaceMembership.workspace_id == GeoWorkspace.id)
-            .exists()
-        )
-        query = query.where(
-            or_(
-                active_member,
-                and_(~any_membership, GeoWorkspace.company_id == user.company_id),
-            )
-        )
+        query = query.where(active_member)
     return list(db.scalars(query.order_by(GeoWorkspace.id.desc())))
+
+
+@router.get(
+    "/workspaces/{workspace_id}/queue-worker-status",
+    response_model=QueueWorkerStatusRead,
+)
+def get_queue_worker_status(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace_or_404(db, user, workspace_id)
+    return get_workspace_worker_status(db, workspace_id)
 
 
 @router.post("/workspaces", response_model=WorkspaceRead, status_code=201)
@@ -1784,6 +1793,14 @@ def create_provider_web_search_batch(
     """
 
     workspace = workspace_or_404(db, user, workspace_id)
+    if not workspace_worker_is_online(db, workspace_id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "采集服务当前离线，本次任务尚未创建。"
+                "请启动当前仓库 Queue Worker，看到采集服务在线后再试。"
+            ),
+        )
     providers = list(
         db.scalars(select(LLMProvider).where(LLMProvider.id.in_(payload.provider_ids)))
     )
@@ -1867,7 +1884,7 @@ def create_provider_web_search_batch(
         workspace_id=workspace_id,
         requested_by_user_id=user.id,
         source_type="official_api",
-        status="running",
+        status="pending",
         provider_count=len(payload.provider_ids),
         question_count=len(payload.question_plan_ids),
         repeat_count=payload.repeat_count,
@@ -1879,19 +1896,21 @@ def create_provider_web_search_batch(
             "providers": provider_snapshots,
             "questions": question_snapshots,
         },
-        started_at=now,
+        started_at=None,
     )
     db.add(ledger_batch)
     db.flush()
     batch = QueueJob(
         job_type="geo_observation.batch",
-        status="running",
+        status="queued",
         priority=0,
         attempts=0,
         max_attempts=1,
         scheduled_at=now,
-        started_at=now,
+        started_at=None,
         payload_json={
+            "dispatch_enabled": True,
+            "dispatch_source": "current_page_submission",
             "workspace_id": workspace_id,
             "project_id": workspace_id,
             "company_id": workspace.company_id,
@@ -1928,6 +1947,8 @@ def create_provider_web_search_batch(
             for provider in provider_snapshots:
                 observation_group_id = observation_groups[(provider["id"], question["id"])]
                 child_payload = {
+                    "dispatch_enabled": True,
+                    "dispatch_source": "current_page_submission",
                     "workspace_id": workspace_id,
                     "project_id": workspace_id,
                     "company_id": workspace.company_id,
@@ -2020,12 +2041,19 @@ def _official_api_batch_summary(
             if counts["success"] == 0
             else "partial"
         )
-    elif counts["running"] or settled:
+    elif counts["running"]:
         status = "running"
+    elif counts["pending"]:
+        status = "pending"
     elif batch.status in {"failed", "partial"}:
         status = batch.status
     else:
         status = "pending"
+    receipt = db.get(QueueJob, batch.queue_job_id) if batch.queue_job_id else None
+    dispatch_enabled = bool(
+        receipt is not None
+        and dict(receipt.payload_json or {}).get("dispatch_enabled") is True
+    )
     return {
         "batch_id": batch.id,
         "source_type": batch.source_type,
@@ -2038,6 +2066,7 @@ def _official_api_batch_summary(
         "running": counts["running"],
         "succeeded": counts["success"],
         "failed": counts["failed"],
+        "dispatch_enabled": dispatch_enabled,
         "progress_percent": round((settled / total) * 100) if total else 0,
         "status_percentages": {
             "pending": round((counts["pending"] / total) * 100) if total else 0,
@@ -2301,6 +2330,8 @@ def queue_provider_web_search_observation(
     db.add(ledger_batch)
     db.flush()
     child_payload = {
+        "dispatch_enabled": True,
+        "dispatch_source": "current_page_submission",
         "workspace_id": workspace_id,
         # Keep compatibility with the generic queue's project filtering.
         "project_id": workspace_id,
@@ -2698,16 +2729,25 @@ def observe_provider_web_search(
             answer_hash=answer_hash,
             source_items=answer.source_items,
             sampling_environment={
+                "observation_surface": "official_api",
+                "web_ui_equivalence": "not_claimed",
                 "provider_id": provider.id,
                 "provider_type": provider.provider_type,
                 "model": provider.model_name,
                 "thinking_mode": str(provider.cost_rule.get("thinking_type") or "disabled"),
                 "reasoning_effort": str(provider.cost_rule.get("reasoning_effort") or "low"),
-                "endpoint_family": "responses_api",
+                "endpoint_family": {
+                    "deepseek_web_search": "anthropic_messages",
+                    "kimi_web_search": "openai_chat_completions_plus_formula",
+                    "hunyuan_web_search": "tokenhub_responses",
+                }.get(provider.provider_type, "responses_api"),
                 "search_required": True,
                 "search_verified": answer.search_verified,
                 "search_event_count": answer.search_event_count,
                 "search_gate": answer.search_verification.get("gate"),
+                "search_protocol": answer.search_verification.get("protocol"),
+                "official_search_tool": answer.search_verification.get("official_tool")
+                or answer.search_verification.get("formula_uri"),
                 "search_source_count": len(answer.source_items),
                 "repeat_index": payload.repeat_index,
                 "repeat_count": payload.repeat_count,
@@ -2813,6 +2853,12 @@ def import_yao_dataset(
 ):
     workspace_or_404(db, user, workspace_id)
     db.flush()
+    evidence_model_key = "hunyuan" if payload.platform == "yuanbao" else payload.platform
+    evidence_model_label = (
+        "腾讯混元 · 元宝官方网页端"
+        if payload.platform == "yuanbao" and payload.sample_mode == "browser_assisted"
+        else MODEL_LABELS[payload.platform]
+    )
     if target_run_id is None:
         run = GeoObservationRun(
             workspace_id=workspace_id,
@@ -2822,6 +2868,13 @@ def import_yao_dataset(
                 "schema": "yao-compatible/v1",
                 "sample_mode": payload.sample_mode,
                 "sample_count": len(payload.samples),
+                "observation_surface": (
+                    "official_web_ui"
+                    if payload.sample_mode == "browser_assisted"
+                    else "imported_api_or_manual"
+                ),
+                "api_equivalence": "not_claimed",
+                "observation_group_id": payload.observation_group_id,
             },
             started_at=datetime.now(timezone.utc),
         )
@@ -2864,7 +2917,14 @@ def import_yao_dataset(
             "schema": "unified-observation-ledger/v1",
             "import_schema": "yao-compatible/v1",
             "platform": payload.platform,
+            "model_key": evidence_model_key,
             "sample_mode": payload.sample_mode,
+            "observation_surface": (
+                "official_web_ui"
+                if payload.sample_mode == "browser_assisted"
+                else "imported_api_or_manual"
+            ),
+            "observation_group_id": payload.observation_group_id,
             "target_run_id": target_run_id,
         },
         started_at=datetime.now(timezone.utc),
@@ -2910,15 +2970,19 @@ def import_yao_dataset(
                 workspace_id=workspace_id,
                 run_id=run.id,
                 question_plan_id=plan.id,
-                model_key=payload.platform,
-                model_label=MODEL_LABELS[payload.platform],
+                model_key=evidence_model_key,
+                model_label=evidence_model_label,
                 prompt_version=payload.prompt_version,
                 sample_mode=payload.sample_mode,
                 evidence_level=payload.evidence_level,
-                collection_method="web_ui"
+                collection_method="official_web_ui_observation"
                 if payload.sample_mode == "browser_assisted"
                 else payload.sample_mode,
-                evidence_kind="yao_import",
+                evidence_kind=(
+                    "official_web_ui_answer"
+                    if payload.sample_mode == "browser_assisted"
+                    else "yao_import"
+                ),
                 is_real_provider_evidence=real,
                 brand_status=sample.brand_status,
                 brand_position=sample.brand_position,
@@ -2929,6 +2993,20 @@ def import_yao_dataset(
                 sampling_environment={
                     **sample.sampling_environment,
                     **account_provenance,
+                    "observation_surface": (
+                        "official_web_ui"
+                        if payload.sample_mode == "browser_assisted"
+                        else "imported_api_or_manual"
+                    ),
+                    "api_equivalence": "not_claimed",
+                    "web_product": payload.platform,
+                    "observation_group_id": payload.observation_group_id,
+                    "conversation_url": sample.conversation_url,
+                    "web_ui_context": (
+                        sample.web_ui_context.model_dump()
+                        if sample.web_ui_context is not None
+                        else None
+                    ),
                     "repeat_index": sample.repeat_index,
                     "sample_id": sample.sample_id,
                 },
@@ -2947,9 +3025,9 @@ def import_yao_dataset(
                 run_id=run.id,
                 evidence_id=evidence.id,
                 provider_key=f"yao_{payload.platform}",
-                provider_label=f"{MODEL_LABELS[payload.platform]} · Yao 导入",
-                model_key=payload.platform,
-                model_label=MODEL_LABELS[payload.platform],
+                provider_label=f"{evidence_model_label} · Yao 导入",
+                model_key=evidence_model_key,
+                model_label=evidence_model_label,
                 question_plan_id=plan.id,
                 question_text_snapshot=plan.question_text,
                 sample_key=f"yao-sample:{sample.sample_id}",
@@ -3782,7 +3860,7 @@ def _opportunity_analysis_read(job: QueueJob) -> dict:
         "codex_thread_id": payload.get("codex_thread_id"),
         "codex_turn_id": payload.get("codex_turn_id"),
         "analysis_summary": payload.get("analysis_summary"),
-        "error_message": job.error_message,
+        "error_message": public_agent_error(job.error_message),
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,
@@ -3824,7 +3902,7 @@ def _website_gap_analysis_read(job: QueueJob) -> dict:
         "codex_thread_id": payload.get("codex_thread_id"),
         "codex_turn_id": payload.get("codex_turn_id"),
         "analysis_summary": payload.get("analysis_summary"),
-        "error_message": job.error_message,
+        "error_message": public_agent_error(job.error_message),
         "created_at": job.created_at,
         "started_at": job.started_at,
         "finished_at": job.finished_at,

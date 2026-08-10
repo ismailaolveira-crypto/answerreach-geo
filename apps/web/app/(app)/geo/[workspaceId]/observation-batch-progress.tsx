@@ -52,6 +52,7 @@ function summary(batch: OfficialApiObservationBatch) {
   if (batch.status === "success") return "本批次真实观测已全部完成";
   if (batch.status === "partial") return "本批次已结束，部分观测需要重试";
   if (batch.status === "failed") return "本批次未获得有效结果";
+  if (!batch.dispatch_enabled) return "历史批次已保留，不会再执行";
   if (batch.running) return "正在采集真实联网结果";
   return "任务已排队，等待采集服务";
 }
@@ -113,6 +114,7 @@ function badgeLabel(batch: OfficialApiObservationBatch) {
   if (batch.status === "success") return "全部完成";
   if (batch.status === "partial") return `${batch.failed} 条需重试`;
   if (batch.status === "failed") return "本批次失败";
+  if (!batch.dispatch_enabled) return "历史记录";
   if (batch.running) return `正在观测 ${batch.running} 条`;
   return `等待 ${batch.pending} 条`;
 }
@@ -141,10 +143,10 @@ export default function ObservationBatchProgress({
   const [batch, setBatch] = useState(initialBatch);
   const [pollError, setPollError] = useState("");
   const refreshed = useRef(false);
-  const lastSettled = useRef(initialBatch.succeeded + initialBatch.failed);
   const completed = batch.succeeded + batch.failed;
   const isRunning = batch.running > 0;
-  const isQueued = !isRunning && batch.pending > 0 && !SETTLED.has(batch.status);
+  const isHistorical = !batch.dispatch_enabled && !SETTLED.has(batch.status);
+  const isQueued = !isHistorical && !isRunning && batch.pending > 0 && !SETTLED.has(batch.status);
   const cardMotionClass = isRunning
     ? styles.cardRunning
     : batch.status === "success"
@@ -153,13 +155,11 @@ export default function ObservationBatchProgress({
   const borderGradientId = `batch-spectral-border-${batch.batch_id}`;
 
   useEffect(() => {
-    if (completed > lastSettled.current) {
-      lastSettled.current = completed;
-      // KPI cards are server-calculated from this batch's archived evidence.
-      // Refresh only when a task settles, never on every polling tick.
-      router.refresh();
-    }
-    if (SETTLED.has(batch.status)) {
+    // Progress is already updated locally from the lightweight batch endpoint.
+    // Refreshing the entire server-rendered dashboard after every completed
+    // provider call made the composer stall repeatedly during larger batches.
+    // Recalculate KPI/result sections once, only after the batch settles.
+    if (SETTLED.has(batch.status) || isHistorical) {
       if (!refreshed.current) {
         refreshed.current = true;
         router.refresh();
@@ -182,7 +182,7 @@ export default function ObservationBatchProgress({
       }
     }, pollError ? 3000 : 1200);
     return () => window.clearTimeout(timer);
-  }, [batch, completed, pollError, router, workspaceId]);
+  }, [batch, isHistorical, pollError, router, workspaceId]);
 
   return (
     <section
@@ -345,6 +345,16 @@ export default function ObservationBatchProgress({
         </div>
       ) : null}
 
+      {isHistorical ? (
+        <div className={`${styles.liveNotice} ${styles.queued}`}>
+          <i aria-hidden="true" />
+          <div>
+            <b>历史批次仅保留记录</b>
+            <small>本批次不具备恢复或再执行入口；只有当前页面新选择并点击开始的范围才会执行</small>
+          </div>
+        </div>
+      ) : null}
+
       {pollError ? (
         <p className={styles.pollWarning}>
           {pollError}，系统会自动重试，不影响后台任务。
@@ -356,7 +366,9 @@ export default function ObservationBatchProgress({
           <span>
             {SETTLED.has(batch.status)
               ? "结果已归档 · 可逐条回看来源、搜索事件与原始证据"
-              : "观测正在后台执行 · 页面会自动刷新真实状态"}
+              : isHistorical
+                ? "历史批次只读保留 · 不会被 Worker 领取"
+                : "观测正在后台执行 · 页面会自动刷新真实状态"}
           </span>
           <small>
             成功 {batch.succeeded} · 运行中 {batch.running} · 等待 {batch.pending} · 失败 {batch.failed}

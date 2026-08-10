@@ -16,7 +16,9 @@ import {
 	createOfficialProviderObservationBatch,
 	getOfficialProviderObservationBatch,
 	getLatestOfficialProviderObservationBatch,
+	getQueueWorkerStatus,
 	type CleanroomEvidence,
+	type QueueWorkerStatus,
 } from "@/lib/cleanroom-v1-api";
 import SamplingBatchPanel, {
 	type ObservationProvider,
@@ -170,8 +172,9 @@ export default async function SpringYuanDecisionMap({
 	let providers;
 	let evidenceRows;
 	let readinessRows;
+	let workerStatus: QueueWorkerStatus | null;
 	try {
-		[decisionMap, actions, providers, evidenceRows, readinessRows] =
+		[decisionMap, actions, providers, evidenceRows, readinessRows, workerStatus] =
 			await Promise.all([
 				getCleanroomDecisionMap(workspaceId, {
 					periodDays,
@@ -183,6 +186,7 @@ export default async function SpringYuanDecisionMap({
 				getLLMProviders(),
 				getCleanroomEvidence(workspaceId),
 				getLLMProviderReadiness().catch(() => []),
+				getQueueWorkerStatus(workspaceId).catch(() => null),
 			]);
 	} catch (error) {
 		if (error instanceof Error && error.message.includes("404")) notFound();
@@ -410,7 +414,7 @@ export default async function SpringYuanDecisionMap({
 				);
 			}
 			revalidatePath(`/geo/${workspaceId}`);
-			redirect(`/geo/${workspaceId}?notice=running&batch=${batch.batch_id}`);
+			redirect(`/geo/${workspaceId}?notice=queued&batch=${batch.batch_id}`);
 		} catch (error) {
 			if (error && typeof error === "object" && "digest" in error) throw error;
 			const message =
@@ -503,6 +507,7 @@ export default async function SpringYuanDecisionMap({
 
 				{activeBatch ? (
 					<ObservationBatchProgress
+						key={`observation-progress-${activeBatch.batch_id}`}
 						workspaceId={workspaceId}
 						initialBatch={activeBatch}
 					/>
@@ -516,9 +521,10 @@ export default async function SpringYuanDecisionMap({
 
 				<SamplingBatchPanel
 					key={`observation-composer-${activeBatch?.batch_id ?? "new"}`}
-					workspaceId={workspaceId}
-					questions={runnableQuestions}
-					providers={observationProviders}
+						workspaceId={workspaceId}
+						questions={runnableQuestions}
+						providers={observationProviders}
+						workerStatus={workerStatus}
 					lastEvidence={officialEvidence}
 					initialSelection={activeBatch ? {
 						batchId: activeBatch.batch_id,

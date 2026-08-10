@@ -13,6 +13,8 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoWorkspace,
 )
+from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1.routes import (
     get_decision_map,
     get_latest_provider_web_search_batch,
@@ -30,6 +32,7 @@ def _seed_ledger(db: Session) -> None:
     db.add_all(
         [
             Company(id=1, name="测试公司"),
+            User(id=1, company_id=1, name="测试管理员", email="ledger@example.com", role="company_admin"),
             GeoWorkspace(
                 id=1,
                 company_id=1,
@@ -87,6 +90,7 @@ def _seed_ledger(db: Session) -> None:
         ]
     )
     db.flush()
+    add_membership(db, workspace_id=1, user_id=1, role="owner")
     db.add_all(
         [
             GeoObservationTask(

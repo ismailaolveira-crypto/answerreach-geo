@@ -17,6 +17,8 @@ tools/rtk/
 node_modules/
 .next/
 .next-dev/
+.next-release*/
+.next-*/
 dist/
 build/
 *.db

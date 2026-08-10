@@ -54,9 +54,9 @@ pnpm run dev:worker
 
 默认入口：
 
-- Web：`http://localhost:3000`
+- Web：`http://localhost:39003`
 - API：`http://127.0.0.1:8000`
-- 项目 1：`http://localhost:3000/projects/1`
+- 项目 1：`http://localhost:39003/projects/1`
 
 数据库不会随 GitHub 仓库分发。需要迁移真实状态时，项目负责人应通过受控渠道提供脱敏数据库或执行正式数据库迁移，不能把真实数据库提交到 GitHub。
 

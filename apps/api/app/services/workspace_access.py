@@ -48,12 +48,7 @@ def workspace_has_memberships(db: Session, workspace_id: int) -> bool:
 def can_access_workspace(db: Session, user: User, workspace: GeoWorkspace) -> bool:
     if user.role == "super_admin":
         return True
-    member = membership_for(db, workspace.id, user.id)
-    if member is not None:
-        return True
-    # Compatibility is limited to workspaces that have never been backfilled.
-    # Once the first membership exists, company identity no longer grants access.
-    return not workspace_has_memberships(db, workspace.id) and user.company_id == workspace.company_id
+    return membership_for(db, workspace.id, user.id) is not None
 
 
 def require_workspace_access(

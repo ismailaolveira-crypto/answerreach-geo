@@ -1,10 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requestPublicUrl } from "@/lib/request-url";
+import { isTrustedFormOrigin, SESSION_COOKIE, sessionCookieOptions } from "@/lib/session-security";
 
 const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const SESSION_COOKIE = "geo_session";
-
 export async function POST(request: NextRequest) {
+  if (!isTrustedFormOrigin(request)) {
+    return NextResponse.json({ detail: "Untrusted form origin" }, { status: 403 });
+  }
   const form = await request.formData();
   const payload = Object.fromEntries([
     "name", "email", "company_name", "brand_name", "website_url", "password",
@@ -26,9 +28,6 @@ export async function POST(request: NextRequest) {
   }
   const result = await registration.json() as { access_token: string };
   const response = NextResponse.redirect(requestPublicUrl(request, "/"), 303);
-  response.cookies.set(SESSION_COOKIE, result.access_token, {
-    httpOnly: true, sameSite: "lax", secure: process.env.SESSION_COOKIE_SECURE === "true",
-    path: "/", maxAge: 60 * 60 * 24 * 7,
-  });
+  response.cookies.set(SESSION_COOKIE, result.access_token, sessionCookieOptions());
   return response;
 }

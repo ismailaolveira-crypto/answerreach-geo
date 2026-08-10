@@ -33,8 +33,25 @@ def _timestamps() -> tuple[sa.Column, sa.Column]:
     )
 
 
+def _table_exists(name: str) -> bool:
+    return sa.inspect(op.get_bind()).has_table(name)
+
+
+def _create_table(name: str, *columns_and_constraints: object) -> None:
+    """Support databases where development create_all already made 0024 tables."""
+
+    if not _table_exists(name):
+        op.create_table(name, *columns_and_constraints)
+
+
+def _create_index(name: str, table_name: str, columns: list[str]) -> None:
+    existing = {item["name"] for item in sa.inspect(op.get_bind()).get_indexes(table_name)}
+    if name not in existing:
+        op.create_index(name, table_name, columns)
+
+
 def upgrade() -> None:
-    op.create_table(
+    _create_table(
         "geo_workspace_memberships_v1",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("workspace_id", sa.Integer(), sa.ForeignKey("geo_workspaces_v1.id"), nullable=False),
@@ -48,7 +65,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("workspace_id", "user_id", name="uq_geo_workspace_membership_user_v1"),
     )
     for column in ("workspace_id", "user_id", "role", "status"):
-        op.create_index(
+        _create_index(
             f"ix_geo_workspace_memberships_v1_{column}",
             "geo_workspace_memberships_v1",
             [column],
@@ -77,11 +94,16 @@ def upgrade() -> None:
             FROM geo_workspaces_v1 AS w
             JOIN users AS u ON u.company_id = w.company_id
             WHERE u.status = 'active'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM geo_workspace_memberships_v1 AS existing
+                  WHERE existing.workspace_id = w.id AND existing.user_id = u.id
+              )
             """
         )
     )
 
-    op.create_table(
+    _create_table(
         "geo_workspace_invitations_v1",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("workspace_id", sa.Integer(), sa.ForeignKey("geo_workspaces_v1.id"), nullable=False),
@@ -97,13 +119,13 @@ def upgrade() -> None:
         *_timestamps(),
     )
     for column in ("workspace_id", "email", "token_hash", "status", "invited_by_user_id"):
-        op.create_index(
+        _create_index(
             f"ix_geo_workspace_invitations_v1_{column}",
             "geo_workspace_invitations_v1",
             [column],
         )
 
-    op.create_table(
+    _create_table(
         "geo_local_agent_enrollments_v1",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("workspace_id", sa.Integer(), sa.ForeignKey("geo_workspaces_v1.id"), nullable=False),
@@ -114,13 +136,13 @@ def upgrade() -> None:
         *_timestamps(),
     )
     for column in ("workspace_id", "requested_by_user_id", "token_hash"):
-        op.create_index(
+        _create_index(
             f"ix_geo_local_agent_enrollments_v1_{column}",
             "geo_local_agent_enrollments_v1",
             [column],
         )
 
-    op.create_table(
+    _create_table(
         "geo_local_agent_nodes_v1",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("workspace_id", sa.Integer(), sa.ForeignKey("geo_workspaces_v1.id"), nullable=False),
@@ -139,7 +161,7 @@ def upgrade() -> None:
         *_timestamps(),
     )
     for column in ("workspace_id", "owner_user_id", "device_token_hash", "status"):
-        op.create_index(
+        _create_index(
             f"ix_geo_local_agent_nodes_v1_{column}",
             "geo_local_agent_nodes_v1",
             [column],
@@ -147,7 +169,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("geo_local_agent_nodes_v1")
-    op.drop_table("geo_local_agent_enrollments_v1")
-    op.drop_table("geo_workspace_invitations_v1")
-    op.drop_table("geo_workspace_memberships_v1")
+    for table_name in (
+        "geo_local_agent_nodes_v1",
+        "geo_local_agent_enrollments_v1",
+        "geo_workspace_invitations_v1",
+        "geo_workspace_memberships_v1",
+    ):
+        if _table_exists(table_name):
+            op.drop_table(table_name)

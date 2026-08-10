@@ -178,7 +178,7 @@ def verify_kimi() -> dict:
         raise AssertionError(f"Unexpected Kimi path: {request.method} {path}")
 
     adapter = KimiWebSearchProvider(
-        provider("kimi_web_search", "kimi-k3", "https://api.moonshot.ai/v1"),
+        provider("kimi_web_search", "kimi-k3", "https://api.moonshot.cn/v1"),
         api_key="test-only",
         transport=httpx.MockTransport(handler),
     )

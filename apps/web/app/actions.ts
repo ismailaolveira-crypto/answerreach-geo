@@ -73,6 +73,7 @@ import {
   updateAlert
 } from "@/lib/api";
 import { SESSION_COOKIE } from "@/lib/session";
+import { sessionCookieOptions } from "@/lib/session-security";
 import { PROVIDER_CATALOG, isOfficialProvider, providerMatchesCatalog, type ProviderCatalogKey } from "@/lib/provider-catalog";
 
 function lines(value: FormDataEntryValue | null): string[] {
@@ -650,12 +651,7 @@ export async function loginAction(formData: FormData) {
   const password = String(formData.get("password") ?? "");
   const response = await loginUser({ email, password });
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, response.access_token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7
-  });
+  cookieStore.set(SESSION_COOKIE, response.access_token, sessionCookieOptions());
   redirect("/");
 }
 
@@ -668,12 +664,7 @@ export async function registerDemoUserAction(formData: FormData) {
   });
   const response = await loginUser({ email, password });
   const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, response.access_token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 7
-  });
+  cookieStore.set(SESSION_COOKIE, response.access_token, sessionCookieOptions());
   redirect("/");
 }
 

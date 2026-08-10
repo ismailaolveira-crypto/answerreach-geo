@@ -74,6 +74,22 @@ export type LocalAgentEnrollment = {
 	command_hint: string;
 };
 
+export type QueueWorkerStatus = {
+	workspace_id: number;
+	online: boolean;
+	status: "online" | "offline";
+	worker_count: number;
+	concurrency: number;
+	pending_jobs: number;
+	historical_jobs: number;
+	running_jobs: number;
+	stale_running_jobs: number;
+	last_seen_at?: string | null;
+	heartbeat_interval_seconds: number;
+	offline_after_seconds: number;
+	message: string;
+};
+
 export type WorkspaceIntegrationSettings = {
 	workspace_id: number;
 	deepseek_api_key_configured: boolean;
@@ -574,6 +590,7 @@ export type OfficialApiObservationBatchSummary = {
 	running: number;
 	succeeded: number;
 	failed: number;
+	dispatch_enabled: boolean;
 	progress_percent: number;
 	status_percentages: Record<
 		"pending" | "running" | "succeeded" | "failed",
@@ -1248,6 +1265,10 @@ export function revokeWorkspaceMembership(workspaceId: string | number, membersh
 
 export function getLocalAgentNodes(workspaceId: string | number) {
 	return apiRequest<LocalAgentNode[]>(`/workspaces/${workspaceId}/local-agent-nodes`);
+}
+
+export function getQueueWorkerStatus(workspaceId: string | number) {
+	return apiRequest<QueueWorkerStatus>(`/workspaces/${workspaceId}/queue-worker-status`);
 }
 
 export function createLocalAgentEnrollment(workspaceId: string | number) {

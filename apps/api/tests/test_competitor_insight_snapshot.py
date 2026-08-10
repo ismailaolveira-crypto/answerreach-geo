@@ -21,6 +21,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1 import routes
 
 
@@ -120,6 +121,9 @@ def competitor_report_api(
             )
         )
         db.add(_evidence(1, "推荐春秋元泉用于企业 Token 统一管控。"))
+        db.flush()
+        add_membership(db, workspace_id=1, user_id=1, role="owner")
+        add_membership(db, workspace_id=1, user_id=2, role="admin")
         db.commit()
 
     def fake_generate(_comparison: dict, **_kwargs: object) -> dict:

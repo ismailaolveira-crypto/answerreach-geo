@@ -23,6 +23,7 @@ type CandidatePanelState = {
 	checkedAt?: string;
 	message?: string;
 };
+type FactFilter = "all" | "verified" | "pending" | "inactive";
 
 function isPublicHttpUrl(value: string) {
 	try {
@@ -54,6 +55,9 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts, readOnly = f
 	const [feedback, setFeedback] = useState<Feedback>(null);
 	const [batchProgress, setBatchProgress] = useState<BatchProgress>(null);
 	const [verificationResults, setVerificationResults] = useState<Record<number, VerificationResult>>({});
+	const [activeFilter, setActiveFilter] = useState<FactFilter>("all");
+	const [selectedFactId, setSelectedFactId] = useState<number | null>(initialFacts[0]?.id ?? null);
+	const [showCreateForm, setShowCreateForm] = useState(false);
 	const sourcedActiveFacts = useMemo(
 		() => facts.filter((fact) => fact.status === "active" && fact.source_verification?.status === "source_and_statement_verified"),
 		[facts],
@@ -63,6 +67,13 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts, readOnly = f
 		[facts],
 	);
 	const operationBusy = busyId !== null || candidateBusyId !== null;
+	const filteredFacts = useMemo(() => facts.filter((fact) => {
+		if (activeFilter === "inactive") return fact.status !== "active";
+		if (activeFilter === "verified") return fact.status === "active" && fact.source_verification?.status === "source_and_statement_verified";
+		if (activeFilter === "pending") return fact.status === "active" && fact.source_verification?.status !== "source_and_statement_verified";
+		return true;
+	}), [activeFilter, facts]);
+	const selectedFact = useMemo(() => facts.find((fact) => fact.id === selectedFactId) ?? null, [facts, selectedFactId]);
 
 	useEffect(() => {
 		if (window.location.hash !== "#brand-facts") return;
@@ -96,6 +107,8 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts, readOnly = f
 				source_url: cleanSourceUrl,
 			});
 			setFacts((current) => [fact, ...current]);
+			setSelectedFactId(fact.id);
+			setShowCreateForm(false);
 			setTitle("");
 			setStatement("");
 			setSourceUrl("");
@@ -174,6 +187,7 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts, readOnly = f
 	}
 
 	function beginEdit(fact: CleanroomBrandFact, candidate?: CleanroomBrandFactSourceCandidate) {
+		setSelectedFactId(fact.id);
 		setEditingId(fact.id);
 		setEditTitle(fact.title);
 		setEditStatement(candidate?.statement ?? fact.statement);
@@ -280,43 +294,62 @@ export function BrandFactsSettingsForm({ workspaceId, initialFacts, readOnly = f
 		}
 	}
 
+	const selectedVerified = selectedFact?.source_verification?.status === "source_and_statement_verified";
+	const selectedInactive = selectedFact?.status !== "active";
+	const selectedCandidatePanel = selectedFact ? candidatePanels[selectedFact.id] : null;
+	const selectedAttemptResult = selectedFact ? verificationResults[selectedFact.id] : null;
+	const selectedPersistedFailure = selectedFact && !selectedAttemptResult ? selectedFact.source_verification_failure : null;
 	return <section id="brand-facts" className={styles.brandFactsCard}>
-		<header className={styles.integrationHeader}>
-			<div><span className={styles.integrationEyebrow}>04 · Agent 事实底座</span><h2>品牌事实库</h2><p>只把有公开来源、当前启用的事实交给新一轮 Agent。停用不会改写历史草稿。</p></div>
-			<span className={sourcedActiveFacts.length ? styles.integrationReady : styles.integrationPending}>{sourcedActiveFacts.length ? `${sourcedActiveFacts.length} 条可用` : "等待补齐"}</span>
+		<header className={styles.brandFactsHeader}>
+			<div><h2>品牌事实</h2><p>管理 Agent 可以引用的公开依据；停用不会改写历史草稿。</p></div>
+			<div>{!readOnly && pendingActiveFacts.length ? <button className={styles.verifyAllButton} type="button" onClick={verifyAllPendingFacts} disabled={operationBusy}>{busyId === "bulk" ? `正在核验 ${batchProgress?.completed ?? 0}/${batchProgress?.total ?? pendingActiveFacts.length}` : `核验全部 ${pendingActiveFacts.length} 条`}</button> : sourcedActiveFacts.length ? <Link className={styles.returnToActions} href={`/geo/${workspaceId}/actions`}>返回行动生成新版 →</Link> : null}{!readOnly ? <button className={styles.addFactButton} type="button" onClick={() => setShowCreateForm((current) => !current)}>{showCreateForm ? "收起新增表单" : "新增品牌事实"}</button> : null}</div>
 		</header>
-		<div className={styles.brandFactsLayout}>
-			{!readOnly ? <div className={styles.brandFactForm}>
-				<label>事实名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：产品定位" maxLength={255} /></label>
-				<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="粘贴官网页面实际展示的完整原文。" rows={4} /></label>
-				<label>公开来源 URL<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" autoComplete="off" spellCheck={false} /></label>
-				<p>后端会先核验公网 HTML；如果官网依赖 JavaScript，只继续核验受限的同域公开前端资源。内部口头信息不应在这里伪装成公开证据。</p>
-				<button type="button" onClick={createFact} disabled={operationBusy} aria-busy={busyId === "new"}>{busyId === "new" ? "正在核验来源…" : "核验并保存"}</button>
-			</div> : <div className={styles.brandFactForm}><p>你当前是只读成员。已核验事实可查看，新增、编辑、核验和停用由运营或管理员完成。</p></div>}
+		<div className={styles.factAssurance}><span aria-hidden="true">ⓘ</span><div><b>仅经公网与原文核验的事实可供 Agent 使用</b><small>URL 本身不是证据；必须能够从公开来源定位到完整原文。</small></div></div>
+		{showCreateForm ? <div className={styles.brandFactCreatePanel}>
+			<label>事实名称<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：产品定位" maxLength={255} /></label>
+			<label>可公开陈述<textarea value={statement} onChange={(event) => setStatement(event.target.value)} placeholder="粘贴官网页面实际展示的完整原文。" rows={3} /></label>
+			<label>公开来源 URL<input type="url" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://…" autoComplete="off" spellCheck={false} /></label>
+			<div><p>后端会核验公网 HTML 与完整原文，内部口头信息不能作为公开证据。</p><button type="button" onClick={createFact} disabled={operationBusy} aria-busy={busyId === "new"}>{busyId === "new" ? "正在核验来源…" : "核验并保存"}</button></div>
+		</div> : null}
+		{readOnly ? <p className={styles.readOnlyNote}>你当前是只读成员。已核验事实可查看，新增、编辑、核验和停用由运营或管理员完成。</p> : null}
+		{batchProgress ? <div className={`${styles.batchProgress} ${batchProgress.status === "complete" ? batchProgress.failed ? styles.batchFailed : styles.batchComplete : ""}`} role="status" aria-live="polite"><div><b>{batchProgress.status === "running" ? batchProgress.currentTitle ? `正在核验「${batchProgress.currentTitle}」` : "正在整理核验结果" : batchProgress.failed ? "本轮核验已结束，仍有记录需处理" : "全部品牌事实已通过核验"}</b><small>{batchProgress.verified} 条通过{batchProgress.failed ? ` · ${batchProgress.failed} 条未通过` : ""} · 后端逐条重新读取公开原文</small></div><progress value={batchProgress.completed} max={batchProgress.total} aria-label="品牌事实核验进度" /><span>{batchProgress.completed}/{batchProgress.total}</span></div> : null}
+		<div className={styles.brandFactsWorkbench}>
+			<aside className={styles.brandFactFilters}><b>筛选</b><div role="group" aria-label="品牌事实筛选">{([
+				["all", "全部", facts.length],
+				["verified", "已核验", sourcedActiveFacts.length],
+				["pending", "待核验", pendingActiveFacts.length],
+				["inactive", "已停用", facts.filter((fact) => fact.status !== "active").length],
+			] as Array<[FactFilter, string, number]>).map(([value, label, count]) => <button key={value} type="button" className={activeFilter === value ? styles.factFilterActive : undefined} onClick={() => setActiveFilter(value)}><span><i />{label}</span><strong>{count}</strong></button>)}</div></aside>
 			<div className={styles.brandFactList}>
-				<header><div><b>当前事实</b><small>{facts.length} 条记录 · {sourcedActiveFacts.length} 条参与新生成</small></div>{!readOnly && pendingActiveFacts.length ? <button className={styles.verifyAllButton} type="button" onClick={verifyAllPendingFacts} disabled={operationBusy}>{busyId === "bulk" ? `正在核验 ${batchProgress?.completed ?? 0}/${batchProgress?.total ?? pendingActiveFacts.length}` : `核验全部 ${pendingActiveFacts.length} 条`}</button> : sourcedActiveFacts.length ? <Link className={styles.returnToActions} href={`/geo/${workspaceId}/actions`}>返回行动生成新版 →</Link> : null}</header>
-				{batchProgress ? <div className={`${styles.batchProgress} ${batchProgress.status === "complete" ? batchProgress.failed ? styles.batchFailed : styles.batchComplete : ""}`} role="status" aria-live="polite"><div><b>{batchProgress.status === "running" ? batchProgress.currentTitle ? `正在核验「${batchProgress.currentTitle}」` : "正在整理核验结果" : batchProgress.failed ? "本轮核验已结束，仍有记录需处理" : "全部品牌事实已通过核验"}</b><small>{batchProgress.verified} 条通过{batchProgress.failed ? ` · ${batchProgress.failed} 条未通过` : ""} · 有公开来源的记录均由后端重新读取原文</small></div><progress value={batchProgress.completed} max={batchProgress.total} aria-label="品牌事实核验进度" /><span>{batchProgress.completed}/{batchProgress.total}</span></div> : null}
-				{facts.length ? <div>{facts.map((fact) => {
+				<header><div><b>当前事实</b><small>{filteredFacts.length} 条记录 · 按最近状态展示</small></div></header>
+				{filteredFacts.length ? <div>{filteredFacts.map((fact) => {
 					const verified = fact.source_verification?.status === "source_and_statement_verified";
 					const inactive = fact.status !== "active";
-					const attemptResult = verificationResults[fact.id];
-					const persistedFailure = !attemptResult ? fact.source_verification_failure : null;
-					if (editingId === fact.id) return <article key={fact.id} className={styles.factEditing}>
-						<div className={styles.brandFactEditor}>
-							<label>事实名称<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={255} /></label>
-							<label>可公开陈述<textarea value={editStatement} onChange={(event) => setEditStatement(event.target.value)} rows={4} /></label>
-							<label>公开来源 URL<input type="url" value={editSourceUrl} onChange={(event) => setEditSourceUrl(event.target.value)} autoComplete="off" spellCheck={false} /></label>
-							<small>保存时会重新读取公网来源；只有完整原文存在才会更新并启用。</small>
-						</div>
-						<div className={styles.brandFactActions}><button type="button" onClick={() => saveEdit(fact)} disabled={operationBusy}>{busyId === fact.id ? "正在核验…" : "核验并保存"}</button><button type="button" onClick={cancelEdit} disabled={operationBusy}>取消</button></div>
-					</article>;
-					const candidatePanel = candidatePanels[fact.id];
-					return <article key={fact.id} className={inactive ? styles.isInactive : ""}>
-						<div><span className={inactive ? styles.factStatusInactive : verified ? styles.factStatusVerified : styles.factStatusPending}>{inactive ? "已停用" : verified ? "已核验" : "待核验"}</span><b>{fact.title}</b><p>{fact.statement}</p>{fact.source_url ? <a href={fact.source_url} target="_blank" rel="noreferrer">查看公开来源 ↗</a> : <em>缺少公开来源，不满足官网成稿门禁</em>}{verified && fact.source_verification?.verification_mode === "same_origin_public_javascript" ? <em className={styles.factVerificationNote}>原文来自官网同域公开前端资源；可作为 Agent 事实输入，但不代表搜索引擎能直接抓取首页正文。</em> : null}{!inactive && !verified ? <em>历史记录尚未完成公网与原文核验，当前不会交给 Agent。</em> : null}{attemptResult ? <em className={attemptResult.kind === "error" ? styles.factAttemptError : styles.factAttemptSuccess}>{attemptResult.kind === "error" ? "本次未通过：" : "本次已通过："}{attemptResult.message}</em> : persistedFailure ? <em className={styles.factAttemptError}>{formatAttemptTime(persistedFailure.attempted_at)} 核验未通过：{persistedFailure.detail}</em> : null}{!verified && candidatePanel ? <div className={`${styles.factCandidates} ${candidatePanel.status === "error" ? styles.factCandidatesError : ""}`} aria-live="polite" aria-busy={candidatePanel.status === "loading"}>{candidatePanel.status === "loading" ? <div className={styles.factCandidatesLoading}><i aria-hidden="true" /><span><b>正在读取官网公开文本</b><small>只检查当前来源页与受限的同域公开前端资源。</small></span></div> : <><header><div><b>{candidatePanel.candidates.length ? `找到 ${candidatePanel.candidates.length} 段官网原文` : "没有找到可用原文"}</b><small>{candidatePanel.message}</small></div><button type="button" onClick={() => setCandidatePanels((current) => { const next = { ...current }; delete next[fact.id]; return next; })}>收起</button></header>{candidatePanel.candidates.length ? <ol>{candidatePanel.candidates.map((candidate, index) => <li key={`${candidate.source_sha256}-${candidate.statement}`}><div><span>{candidate.verification_mode === "server_rendered_html" ? "官网可见正文" : "同域公开前端资源"}</span><small>候选 {index + 1}</small></div><p>{candidate.statement}</p><footer><a href={candidate.evidence_url} target="_blank" rel="noreferrer">查看证据资源 ↗</a><button type="button" onClick={() => beginEdit(fact, candidate)}>使用这段原文</button></footer></li>)}</ol> : null}</>}</div> : null}</div>
-						{!readOnly ? <div className={styles.brandFactActions}>{!inactive && !verified ? <button type="button" onClick={() => verifyFact(fact)} disabled={operationBusy}>{busyId === fact.id || batchProgress?.currentId === fact.id ? "正在核验…" : "核验来源"}</button> : null}{!inactive && !verified && fact.source_url ? <button type="button" onClick={() => findSourceCandidates(fact)} disabled={operationBusy}>{candidateBusyId === fact.id ? "正在查找…" : candidatePanel?.status === "ready" ? "重新查找原文" : "查找官网原文"}</button> : null}<button type="button" onClick={() => beginEdit(fact)} disabled={operationBusy || editingId !== null}>编辑</button><button type="button" onClick={() => toggleFact(fact)} disabled={operationBusy || editingId !== null}>{busyId === fact.id ? "处理中…" : inactive ? "恢复并核验" : "停用"}</button></div> : null}
-					</article>;
-				})}</div> : <div className={styles.brandFactEmpty}><b>还没有可用品牌事实</b><p>官网当前无法回读产品正文。先补充至少一条通过公网与原文核验的事实，再启动官网成稿。</p></div>}
+					return <button type="button" key={fact.id} className={`${styles.factListItem} ${selectedFactId === fact.id ? styles.factListItemSelected : ""}`} onClick={() => { setSelectedFactId(fact.id); if (editingId !== fact.id) cancelEdit(); }}>
+						<span className={inactive ? styles.factStatusInactive : verified ? styles.factStatusVerified : styles.factStatusPending}>{inactive ? "已停用" : verified ? "已核验" : "待核验"}</span><b>{fact.title}</b><p>{fact.statement}</p><small>{fact.source_url ? "公开来源已记录" : "等待补齐公开来源"}</small><strong aria-hidden="true">›</strong>
+					</button>;
+				})}</div> : <div className={styles.brandFactEmpty}><b>当前筛选下没有事实</b><p>切换筛选条件，或新增一条带公开来源的品牌事实。</p></div>}
 			</div>
+			<aside className={styles.brandFactInspector}>
+				{selectedFact ? <>
+					<header><div><span className={selectedInactive ? styles.factStatusInactive : selectedVerified ? styles.factStatusVerified : styles.factStatusPending}>{selectedInactive ? "已停用" : selectedVerified ? "已核验" : "待核验"}</span><h3>{selectedFact.title}</h3><small>{selectedVerified ? `最近核验 ${formatAttemptTime(selectedFact.source_verification!.verified_at)}` : "尚未通过完整原文核验"}</small></div></header>
+					{editingId === selectedFact.id ? <div className={styles.brandFactEditor}>
+						<label>事实名称<input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} maxLength={255} /></label>
+						<label>可公开陈述<textarea value={editStatement} onChange={(event) => setEditStatement(event.target.value)} rows={4} /></label>
+						<label>公开来源 URL<input type="url" value={editSourceUrl} onChange={(event) => setEditSourceUrl(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+						<small>保存时会重新读取公网来源；只有完整原文存在才会更新并启用。</small>
+						<div className={styles.inspectorActions}><button type="button" onClick={() => saveEdit(selectedFact)} disabled={operationBusy}>{busyId === selectedFact.id ? "正在核验…" : "核验并保存"}</button><button type="button" onClick={cancelEdit} disabled={operationBusy}>取消</button></div>
+					</div> : <>
+						<section><b>可公开陈述</b><p>{selectedFact.statement}</p></section>
+						<section><b>公开来源 URL</b>{selectedFact.source_url ? <a href={selectedFact.source_url} target="_blank" rel="noreferrer">{selectedFact.source_url} ↗</a> : <em>缺少公开来源</em>}</section>
+						<section><b>核验方式</b><p>{selectedVerified ? selectedFact.source_verification?.verification_mode === "same_origin_public_javascript" ? "官网同域公开前端资源" : "官网服务端可见正文" : "等待核验"}</p></section>
+						<section><b>证据状态</b><p>{selectedVerified ? "公网可访问与完整原文均已通过。" : "当前不会交给 Agent。"}</p>{selectedAttemptResult ? <em className={selectedAttemptResult.kind === "error" ? styles.factAttemptError : styles.factAttemptSuccess}>{selectedAttemptResult.message}</em> : selectedPersistedFailure ? <em className={styles.factAttemptError}>{formatAttemptTime(selectedPersistedFailure.attempted_at)} 核验未通过：{selectedPersistedFailure.detail}</em> : null}</section>
+						{!readOnly ? <div className={styles.inspectorActions}>{!selectedInactive && !selectedVerified ? <button type="button" className={styles.primaryInspectorAction} onClick={() => verifyFact(selectedFact)} disabled={operationBusy}>{busyId === selectedFact.id || batchProgress?.currentId === selectedFact.id ? "正在核验…" : "核验来源"}</button> : null}{!selectedInactive && !selectedVerified && selectedFact.source_url ? <button type="button" onClick={() => findSourceCandidates(selectedFact)} disabled={operationBusy}>{candidateBusyId === selectedFact.id ? "正在查找…" : selectedCandidatePanel?.status === "ready" ? "重新查找原文" : "查找官网原文"}</button> : null}<button type="button" onClick={() => beginEdit(selectedFact)} disabled={operationBusy || editingId !== null}>编辑</button><button type="button" onClick={() => toggleFact(selectedFact)} disabled={operationBusy || editingId !== null}>{busyId === selectedFact.id ? "处理中…" : selectedInactive ? "恢复并核验" : "停用"}</button></div> : null}
+					</>}
+					{!selectedVerified && selectedCandidatePanel ? <div className={`${styles.factCandidates} ${selectedCandidatePanel.status === "error" ? styles.factCandidatesError : ""}`} aria-live="polite" aria-busy={selectedCandidatePanel.status === "loading"}>{selectedCandidatePanel.status === "loading" ? <div className={styles.factCandidatesLoading}><i aria-hidden="true" /><span><b>正在读取官网公开文本</b><small>只检查当前来源页与受限的同域公开资源。</small></span></div> : <><header><div><b>{selectedCandidatePanel.candidates.length ? `找到 ${selectedCandidatePanel.candidates.length} 段官网原文` : "没有找到可用原文"}</b><small>{selectedCandidatePanel.message}</small></div><button type="button" onClick={() => setCandidatePanels((current) => { const next = { ...current }; delete next[selectedFact.id]; return next; })}>收起</button></header>{selectedCandidatePanel.candidates.length ? <ol>{selectedCandidatePanel.candidates.map((candidate, index) => <li key={`${candidate.source_sha256}-${candidate.statement}`}><div><span>{candidate.verification_mode === "server_rendered_html" ? "官网可见正文" : "同域公开前端资源"}</span><small>候选 {index + 1}</small></div><p>{candidate.statement}</p><footer><a href={candidate.evidence_url} target="_blank" rel="noreferrer">查看证据资源 ↗</a><button type="button" onClick={() => beginEdit(selectedFact, candidate)}>使用这段原文</button></footer></li>)}</ol> : null}</>}</div> : null}
+					<footer>URL 本身不是证据；只有原文核验通过后才会交给 Agent。停用不会改写历史草稿。</footer>
+				</> : <div className={styles.factInspectorEmpty}><span aria-hidden="true">⌑</span><b>选择一条事实查看完整核验信息</b><p>请从左侧列表中选择一条事实。</p></div>}
+			</aside>
 		</div>
 		{feedback ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}
 	</section>;

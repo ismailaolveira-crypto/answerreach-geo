@@ -1,12 +1,12 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { SubmitButton } from "@/app/(app)/submit-button";
 import { BrandLogo } from "@/components/brand-logo";
-import type { CleanroomEvidence, CleanroomQuestion } from "@/lib/cleanroom-v1-api";
+import type { CleanroomEvidence, CleanroomQuestion, QueueWorkerStatus } from "@/lib/cleanroom-v1-api";
 import styles from "./sampling-batch-panel.module.css";
 
 export type ObservationProvider = {
@@ -27,11 +27,12 @@ export type ObservationSelectionSnapshot = {
 };
 
 export default function SamplingBatchPanel({
-  workspaceId, questions, providers, lastEvidence, initialSelection, runAction, updateQuestionAction,
+  workspaceId, questions, providers, workerStatus, lastEvidence, initialSelection, runAction, updateQuestionAction,
 }: {
   workspaceId: string;
   questions: CleanroomQuestion[];
   providers: ObservationProvider[];
+  workerStatus: QueueWorkerStatus | null;
   lastEvidence?: CleanroomEvidence | null;
   initialSelection?: ObservationSelectionSnapshot;
   runAction: (formData: FormData) => Promise<void>;
@@ -83,6 +84,12 @@ export default function SamplingBatchPanel({
   const totalTasks = selectedProviderIds.length * questionCount * repeatCount;
   const sourceCount = lastEvidence?.source_items.length ?? 0;
   const selectedProviders = providers.filter((item) => item.providerId && selectedProviderIds.includes(item.providerId));
+
+  useEffect(() => {
+    if (workerStatus?.online) return;
+    const timer = window.setInterval(() => router.refresh(), 15_000);
+    return () => window.clearInterval(timer);
+  }, [router, workerStatus?.online]);
 
   function toggleProvider(provider: ObservationProvider) {
     if (!provider.providerId) return;
@@ -227,10 +234,15 @@ export default function SamplingBatchPanel({
           </div>
           <p className={styles.equation}>{selectedProviderIds.length} 个模型 <i>×</i> {questionCount} 个问题 <i>×</i> {repeatCount} 次</p>
           <div className={styles.spectralRail} aria-hidden="true"><span /><span /><span /><span /><span /></div>
-          <SubmitButton className={styles.submit} pendingText="正在创建真实任务…" disabled={!selectedProviderIds.length || !questionCount}>
-            {totalTasks ? `开始 ${totalTasks} 条真实观测` : "请先选择模型和问题"}
+          <div className={`${styles.workerGate} ${workerStatus?.online ? styles.workerOnline : styles.workerOffline}`} data-worker-online={workerStatus?.online ? "true" : "false"}>
+            <i aria-hidden="true" />
+            <span><b>{workerStatus?.online ? "采集服务在线" : "采集服务离线"}</b><small>{workerStatus?.online ? `${workerStatus.worker_count} 个进程 · 可并发 ${workerStatus.concurrency} 条` : "当前不会创建任务，恢复后页面会自动更新"}</small></span>
+            {!workerStatus?.online ? <button type="button" onClick={() => router.refresh()}>立即检查</button> : null}
+          </div>
+          <SubmitButton className={styles.submit} pendingText="正在提交真实任务…" disabled={!selectedProviderIds.length || !questionCount || !workerStatus?.online}>
+            {!workerStatus?.online ? "等待采集服务上线" : totalTasks ? `提交 ${totalTasks} 条真实观测` : "请先选择模型和问题"}
           </SubmitButton>
-          <p className={styles.backgroundNote}>任务提交后可离开页面，后台会继续执行</p>
+          <p className={styles.backgroundNote}>{workerStatus?.online ? "提交后先进入队列；采集服务领取后才显示运行中" : "任务不会丢失或假装运行；请先恢复当前仓库采集服务"}</p>
           <div className={styles.lastEvidence} data-has-evidence={Boolean(lastEvidence)}><span aria-hidden="true">{lastEvidence ? "✓" : "·"}</span><p>{lastEvidence ? `上次观测成功 · ${lastEvidence.model_label} · ${sourceCount} 个来源` : "等待第一条通过联网门禁的真实证据"}</p></div>
         </aside>
       </div>

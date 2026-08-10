@@ -137,26 +137,26 @@ export function IntegrationSettingsForm({ workspaceId, initialSettings, initialR
 	}
 
 	return <section className={styles.integrationCard}>
-		<header className={styles.integrationHeader}><div><span className={styles.integrationEyebrow}>05 · Agent 与草稿交付</span><h2>本机 Codex 与文章同步</h2><p>Codex 负责调研、写作和平台适配；人工审核后，再由 EgoLite 里的文章同步助手写入草稿箱。</p></div><span className={runtime?.ready && deliveryReady ? styles.integrationReady : styles.integrationPending}>{runtime?.ready && deliveryReady ? "执行与交付均就绪" : runtime?.ready ? "Agent 已就绪 · 检测交付" : "检查本机状态"}</span></header>
+		<header className={styles.integrationHeader}><div><h2>Agent 与交付</h2><p>配置 Agent 与内容交付通路，确保仅写入平台草稿，不代替发布。</p></div></header>
 		<div className={styles.integrationGrid}>
 			<div className={styles.integrationBlock}>
-				<div className={styles.integrationBlockTitle}><div><b>Local Codex Agent</b><small>{runtime?.ready ? "已复用本机 ChatGPT 登录" : "未就绪"}</small></div><i className={runtime?.ready ? styles.dotReady : styles.dotPending} /></div>
-				<dl className={styles.runtimeFacts}><div><dt>认证</dt><dd>{runtime?.login_status === "chatgpt_authenticated" ? "ChatGPT 已登录" : runtime?.login_status || "无法读取"}</dd></div><div><dt>默认模型</dt><dd>{runtime?.default_model || "—"}</dd></div><div><dt>SDK</dt><dd>{runtime?.sdk_version || "—"}</dd></div></dl>
+				<div className={styles.integrationBlockTitle}><div><b>Local Codex Agent</b><small>本机运行时状态</small></div><span className={runtime?.ready ? styles.laneReady : styles.lanePending}><i className={runtime?.ready ? styles.dotReady : styles.dotPending} />{runtime?.ready ? "已就绪" : "等待自检"}</span></div>
+				<dl className={styles.runtimeFacts}><div><dt>ChatGPT 账号</dt><dd>{runtime?.login_status === "chatgpt_authenticated" ? "ChatGPT 已登录" : runtime?.login_status || "检测后显示"}</dd></div><div><dt>默认模型</dt><dd>{runtime?.default_model || "检测后显示"}</dd></div><div><dt>SDK 版本</dt><dd>{runtime?.sdk_version || "检测后显示"}</dd></div><div><dt>隐私与凭证</dt><dd>不保存 API Key</dd></div></dl>
 				<p className={styles.runtimeNote}>不保存 API Key。Agent 仅在隔离目录写入中间工件，内容生成后停在人工审核。</p>
 				{!readOnly ? <button type="button" className={styles.testButton} onClick={testCodex} disabled={testing !== null || saving}>{testing === "local_codex" ? "正在执行真实 turn…" : "运行 Codex 自检"}</button> : null}
 			</div>
 			<div className={styles.integrationBlock}>
-				<div className={styles.integrationBlockTitle}><div><b>EgoLite 文章同步助手</b><small>{pageSyncSummary}</small></div><i className={deliveryReady ? styles.dotReady : styles.dotPending} /></div>
-				<dl className={styles.runtimeFacts}><div><dt>触发方式</dt><dd>审核后网页确认</dd></div><div><dt>写入范围</dt><dd>仅平台草稿</dd></div><div><dt>最终发布</dt><dd>始终由人工完成</dd></div></dl>
+				<div className={styles.integrationBlockTitle}><div><b>EgoLite 文章同步助手</b><small>{pageSyncSummary}</small></div><span className={deliveryReady ? styles.laneReady : styles.lanePending}><i className={deliveryReady ? styles.dotReady : styles.dotPending} />{deliveryReady ? "页面已检测" : "尚未检测"}</span></div>
+				<div className={styles.currentPageStatus}><span>当前页面检测状态</span><b>{pageSyncState === "unchecked" ? "尚未检测当前页面" : pageSyncSummary}</b></div>
 				<div className={styles.syncPlatformList} aria-label="文章同步助手支持平台">{pageSyncPlatformOrder.map((platform) => { const available = pageSyncPlatforms.includes(platform); return <span key={platform} className={available ? styles.syncPlatformAvailable : ""}><img src={pageSyncPlatformMeta[platform].logo} alt={`${pageSyncPlatformMeta[platform].label} 官方标志`} /><b>{pageSyncPlatformMeta[platform].label}</b><small>{available ? "账号可用" : "支持检测"}</small></span>; })}</div>
-				<p className={styles.runtimeNote}>检测的是当前浏览器页面里的真实扩展和登录账号；保存 MCP 路径并不能代表 EgoLite 已连接。</p>
 				<button type="button" className={styles.testButton} onClick={testPageSync} disabled={testing !== null || saving}>{testing === "article_sync_page" ? "正在读取登录账号…" : pageSyncState === "ready" ? "重新检测同步助手" : "检测当前页面"}</button>
 			</div>
 		</div>
-		<p className={styles.integrationHint}>Codex 直接复用本机登录，无需配置中转站或模型 Key。常规交付也无需填写 MCP 路径：请在 EgoLite 中打开工作台，审核内容后点击“打开文章同步助手”。</p>
+		<section className={styles.deliveryPath}><header><h3>交付路径</h3><span>仅写入草稿，最终发布始终由用户完成</span></header><ol><li><i>1</i><div><b>Agent 生成草稿</b><small>基于事实证据与品牌口径</small></div></li><li><i>2</i><div><b>人工审核</b><small>逐稿检查并确认内容</small></div></li><li><i>3</i><div><b>EgoLite 写入平台草稿箱</b><small>同步请求不等于草稿已保存</small></div></li><li><i>4</i><div><b>用户在目标平台确认发布</b><small>最终发布始终由用户完成</small></div></li></ol></section>
+		<p className={styles.integrationHint}>Codex 自检只证明本机运行时可用；同步检测只证明当前页面可发现扩展与账号。二者都不代表任务已执行、草稿已保存或内容已发布。</p>
 		{feedback.message ? <p className={`${styles.feedback} ${feedback.kind === "error" ? styles.error : styles.success}`} role="status">{feedback.message}</p> : null}
 		{!readOnly ? <details className={styles.integrationAdvanced}>
-			<summary><span><b>高级：后台 MCP 通道</b><small>不影响网页点击同步；仅用于后台诊断与自动化实验</small></span><em>{mcpStatusLabel(mcpConfigured)}</em></summary>
+			<summary><span><b>高级：后台 MCP 通道</b><small>仅用于后台诊断与自动化实验，不影响网页点击同步</small></span><em>{mcpStatusLabel(mcpConfigured)}</em></summary>
 			<div className={styles.integrationAdvancedBody}>
 				<label>MCP Server 文件路径<input type="text" value={mcpServerPath} onChange={(event) => setMcpServerPath(event.target.value)} placeholder="/path/to/Wechatsync/packages/mcp-server/dist/index.js" autoComplete="off" spellCheck={false} /></label>
 				<label>MCP Token<input type="password" value={mcpToken} onChange={(event) => setMcpToken(event.target.value)} placeholder={settings?.article_sync_mcp_token_configured ? "已配置；留空保持不变" : "粘贴 MCP Token"} autoComplete="new-password" spellCheck={false} /></label>

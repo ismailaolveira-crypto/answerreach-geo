@@ -1,5 +1,14 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE } from "@/lib/session";
+import { SESSION_COOKIE } from "@/lib/session-security";
+
+function secure(response: NextResponse): NextResponse {
+  response.headers.set("X-Content-Type-Options", "nosniff");
+  response.headers.set("X-Frame-Options", "DENY");
+  response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+  response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  response.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  return response;
+}
 
 export function middleware(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
@@ -15,28 +24,28 @@ export function middleware(request: NextRequest) {
     pathname.includes(".");
 
   if (isPublicAsset || isPublicShare) {
-    return NextResponse.next();
+    return secure(NextResponse.next());
   }
 
   if (!token && !isPublicAuth) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    return secure(NextResponse.redirect(new URL("/login", request.url)));
   }
 
   if (token && isLogin && request.nextUrl.searchParams.get("expired") === "1") {
     const response = NextResponse.next();
     response.cookies.delete(SESSION_COOKIE);
-    return response;
+    return secure(response);
   }
 
   if (token && isLogin) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return secure(NextResponse.redirect(new URL("/", request.url)));
   }
 
   if (token && isRegister) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return secure(NextResponse.redirect(new URL("/", request.url)));
   }
 
-  return NextResponse.next();
+  return secure(NextResponse.next());
 }
 
 export const config = {

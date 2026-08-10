@@ -67,6 +67,8 @@ export function GeoFloatingSidebar({ workspaces = [] }: { workspaces?: Array<{ i
 	const workspaceId = pathWorkspaceId ?? (/^\d+$/.test(queryWorkspaceId) ? queryWorkspaceId : "");
 	const workspaceHome = workspaceId ? `/geo/${workspaceId}` : "/";
 	const current = activeKey(pathname);
+	const workspaceNameCounts = new Map<string, number>();
+	for (const workspace of workspaces) workspaceNameCounts.set(workspace.name, (workspaceNameCounts.get(workspace.name) ?? 0) + 1);
 	const questionAnalysisActive = /^\/geo\/[^/]+\/questions\/(analysis|\d+)/.test(pathname);
 	const setSidebarExpanded = (next: boolean) => {
 		setExpanded(next);
@@ -86,7 +88,7 @@ export function GeoFloatingSidebar({ workspaces = [] }: { workspaces?: Array<{ i
 				<span className="geo-floating-mark">◇</span><span className="geo-floating-collapsed-chevron"><NavIcon name="chevron" /></span>
 			</button>}
 		</div>
-		{expanded && workspaces.length ? <label className="geo-floating-workspace-switcher"><span>当前工作区</span><select value={workspaceId || String(workspaces[0].id)} onChange={(event) => router.push(`/geo/${event.target.value}` as Route)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label> : null}
+		{expanded && workspaces.length ? <label className="geo-floating-workspace-switcher"><span>当前工作区</span><select value={workspaceId || String(workspaces[0].id)} onChange={(event) => router.push(`/geo/${event.target.value}` as Route)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}{(workspaceNameCounts.get(workspace.name) ?? 0) > 1 ? ` · #${workspace.id}` : ""}</option>)}</select></label> : null}
 		<nav className="geo-floating-nav">
 			{ITEMS.map((item) => {
 				const itemActive = current === item.key && !(item.key === "questions" && questionAnalysisActive);

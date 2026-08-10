@@ -124,6 +124,16 @@ def list_provider_readiness(
         )
         if collection_ready:
             blocker = None
+        elif "api_key_format" in diagnostic["missing"]:
+            format_warning = next(
+                (
+                    warning
+                    for warning in diagnostic["warnings"]
+                    if str(warning).startswith("API Key ")
+                ),
+                "API Key 格式错误",
+            )
+            blocker = f"{format_warning}。请重新粘贴控制台生成的 Key 原文"
         elif not diagnostic["auth_ready"]:
             blocker = "API Key 尚未配置"
         elif latest_test is None:

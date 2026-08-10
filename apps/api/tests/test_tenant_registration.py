@@ -98,3 +98,75 @@ def test_legacy_user_provisioning_is_not_public(tenant_client: TestClient) -> No
         json={"name": "越权用户", "email": "blocked@example.com", "password": "a-safe-password-2026"},
     )
     assert response.status_code == 401
+
+
+def test_email_identity_is_case_insensitive_and_persisted_canonically(
+    tenant_client: TestClient,
+) -> None:
+    created = register(
+        tenant_client,
+        email="Mixed.Case@Example.COM",
+        company="大小写账号公司",
+        brand="大小写品牌",
+    )
+    assert created["user"]["email"] == "mixed.case@example.com"
+
+    login = tenant_client.post(
+        "/api/auth/login",
+        json={
+            "email": "MIXED.CASE@EXAMPLE.COM",
+            "password": "a-safe-password-2026",
+        },
+    )
+    assert login.status_code == 200, login.text
+
+    duplicate = tenant_client.post(
+        "/api/auth/register-tenant",
+        json={
+            "name": "重复账号",
+            "email": "mixed.case@example.com",
+            "password": "another-safe-password-2026",
+            "company_name": "不应创建的公司",
+            "brand_name": "不应创建的品牌",
+        },
+    )
+    assert duplicate.status_code == 409
+
+
+def test_login_attempts_are_throttled_and_success_clears_failures(
+    tenant_client: TestClient,
+) -> None:
+    register(
+        tenant_client,
+        email="throttle@example.com",
+        company="登录节流公司",
+        brand="登录节流品牌",
+    )
+    for _ in range(2):
+        failed = tenant_client.post(
+            "/api/auth/login",
+            json={"email": "throttle@example.com", "password": "wrong-password"},
+        )
+        assert failed.status_code == 401
+    success = tenant_client.post(
+        "/api/auth/login",
+        json={"email": "throttle@example.com", "password": "a-safe-password-2026"},
+    )
+    assert success.status_code == 200
+    assert tenant_client.post(
+        "/api/auth/login",
+        json={"email": "throttle@example.com", "password": "wrong-password"},
+    ).status_code == 401
+
+    for _ in range(5):
+        failed = tenant_client.post(
+            "/api/auth/login",
+            json={"email": "missing@example.com", "password": "wrong-password"},
+        )
+        assert failed.status_code == 401
+    blocked = tenant_client.post(
+        "/api/auth/login",
+        json={"email": "missing@example.com", "password": "wrong-password"},
+    )
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0

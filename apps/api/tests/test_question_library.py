@@ -15,6 +15,8 @@ from app.main import create_app
 from app.models.company import Company
 from app.models.cleanroom_v1 import GeoQuestionPlan, GeoQuestionReview
 from app.models.cleanroom_v1 import GeoWorkspace
+from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1.routes import _question_sampling_eligible
 
 
@@ -29,6 +31,7 @@ def question_library_client() -> Generator[TestClient, None, None]:
     session_factory = sessionmaker(bind=engine, expire_on_commit=False)
     with session_factory() as db:
         db.add(Company(id=1, name="测试公司"))
+        db.add(User(id=1, company_id=1, name="测试管理员", email="questions@example.com", role="company_admin"))
         db.add(
             GeoWorkspace(
                 id=1,
@@ -72,6 +75,8 @@ def question_library_client() -> Generator[TestClient, None, None]:
                 ),
             ]
         )
+        db.flush()
+        add_membership(db, workspace_id=1, user_id=1, role="owner")
         db.commit()
 
     app = create_app()

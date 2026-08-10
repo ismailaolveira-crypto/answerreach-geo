@@ -36,9 +36,35 @@ http://127.0.0.1:3000
 特点：
 
 - 网关只绑定 `127.0.0.1`，局域网其他电脑无法访问。
-- SQLite worker 并发固定为 8，避免 125 个并发写入造成锁库。
+- API 启动前会先执行 Alembic 前向迁移；迁移失败时服务不会带着半更新结构继续启动。
+- SQLite worker 并发上限为 125，与本机原生模式一致。实际吞吐仍受供应商 QPS、429、本机资源和 SQLite 串行写入能力限制；高并发不代表 125 条都能同时完成。
+- 运营状态页按工作区显示 Queue Worker 心跳、真实可执行等待任务和运行任务；Worker 在线只表示队列可被消费，不代表观测已经完成。
 - 数据位于 `geo_personal_data` Docker 卷；停止容器不会删除数据。
 - 不要运行 `docker compose down -v`，`-v` 会删除个人数据卷。
+
+### macOS 原生常驻本地栈
+
+如果不使用 Docker，不要依赖一个手动打开的终端窗口维持采集。macOS 可将当前唯一仓库的 Web、API 和 Worker 安装为一个用户级 LaunchAgent：
+
+```bash
+pnpm run service:install
+pnpm run service:status
+```
+
+LaunchAgent 在安装时先构建 Web，用户登录后以 Next.js 生产模式自动启动 Web、API 和 Worker。生产模式避免常驻使用时的按页即时编译，并启用正常的路由预取。代码变更后需要重新执行 `pnpm run build:web` 再重启服务；需要热更新调试时仍可单独使用 `pnpm run dev:web`。
+
+LaunchAgent 绑定安装时的当前仓库绝对路径；其中任一必需进程退出时，`launchd` 会重启整个本地栈。状态检查同时验证 Web/API/Worker cwd、HTTP 就绪和数据库心跳，其他副本的同名进程不会被当成在线。
+如果端口 39003/8000 已由当前仓库的手动进程使用，安装器会先核对 cwd，再将它们平滑交接给 `launchd`；端口属于其他项目时直接拒绝，不会结束其他项目进程。
+
+Worker 只领取用户在当前页面新提交的观测任务；历史批次只读保留，启动或重启服务都不会重新执行。
+
+停止并移除常驻服务（不删除队列、数据库或日志）：
+
+```bash
+pnpm run service:uninstall
+```
+
+`launchd` 能保证运行条件正常时的进程自动恢复，但不能把断电、未登录 macOS、数据库不可用、断网或供应商账号异常伪装成“绝对在线”。
 
 ## 局域网团队模式
 

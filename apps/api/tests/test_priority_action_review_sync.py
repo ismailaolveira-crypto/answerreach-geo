@@ -39,6 +39,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.job import QueueJob
 from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.services.codex_agent_runtime import CodexRunTimedOut
 from app.v1 import agent_orchestration, routes
 
@@ -209,6 +210,8 @@ def review_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None
                 result_snapshot={"asset_id": 1, "brief_id": 1},
             )
         )
+        db.flush()
+        add_membership(db, workspace_id=1, user_id=1, role="owner")
         db.commit()
 
     app = create_app()

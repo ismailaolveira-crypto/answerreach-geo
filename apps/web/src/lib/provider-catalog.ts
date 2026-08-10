@@ -9,6 +9,8 @@ export type ProviderCatalogItem = {
   defaultModel: string;
   defaultBaseUrl: string;
   modelOptions: Array<{ value: string; label: string }>;
+  apiEvidenceLabel?: string;
+  officialWeb?: { label: string; url: string; observationPlatform: string };
 };
 
 export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
@@ -20,6 +22,8 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     defaultProviderType: "deepseek_web_search",
     defaultModel: "deepseek-v4-flash",
     defaultBaseUrl: "https://api.deepseek.com/anthropic",
+    apiEvidenceLabel: "DeepSeek 官方 API 联网观测",
+    officialWeb: { label: "DeepSeek 网页端", url: "https://chat.deepseek.com/", observationPlatform: "deepseek" },
     modelOptions: [
       { value: "deepseek-v4-flash", label: "DeepSeek V4 Flash" },
       { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro" },
@@ -69,26 +73,30 @@ export const PROVIDER_CATALOG: ProviderCatalogItem[] = [
     key: "kimi",
     label: "Kimi",
     brand: "kimi",
-    description: "Moonshot 官方工具 + 联网搜索",
+    description: "Moonshot Formula 官方 API + 联网搜索",
     defaultProviderType: "kimi_web_search",
-    defaultModel: "kimi-k2.5",
-    defaultBaseUrl: "https://api.moonshot.ai/v1",
+    defaultModel: "kimi-k3",
+    defaultBaseUrl: "https://api.moonshot.cn/v1",
+    apiEvidenceLabel: "Kimi 官方 API 联网观测",
+    officialWeb: { label: "Kimi 网页端", url: "https://www.kimi.com/", observationPlatform: "kimi" },
     modelOptions: [
+      { value: "kimi-k3", label: "Kimi K3" },
+      { value: "kimi-k2.6", label: "Kimi K2.6" },
       { value: "kimi-k2.5", label: "Kimi K2.5" },
-      { value: "kimi-k2-0711-preview", label: "Kimi K2" },
     ],
   },
   {
     key: "hunyuan",
     label: "腾讯混元",
     brand: "hunyuan",
-    description: "腾讯混元官方 API + 强制搜索增强",
+    description: "腾讯 TokenHub 官方 API + Web Search",
     defaultProviderType: "hunyuan_web_search",
-    defaultModel: "hunyuan-turbos-latest",
-    defaultBaseUrl: "https://api.hunyuan.cloud.tencent.com/v1",
+    defaultModel: "hy3-preview",
+    defaultBaseUrl: "https://tokenhub.tencentmaas.com/v1",
+    apiEvidenceLabel: "混元 TokenHub 官方 API 联网观测",
+    officialWeb: { label: "腾讯元宝网页端", url: "https://yuanbao.tencent.com/", observationPlatform: "yuanbao" },
     modelOptions: [
-      { value: "hunyuan-turbos-latest", label: "混元 TurboS" },
-      { value: "hunyuan-large", label: "混元 Large" },
+      { value: "hy3-preview", label: "Hy3 Preview" },
     ],
   },
 ];

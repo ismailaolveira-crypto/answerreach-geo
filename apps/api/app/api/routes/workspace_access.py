@@ -32,7 +32,12 @@ from app.schemas.workspace_access import (
     WorkspaceMembershipUpdate,
 )
 from app.services.audit import record_audit_log
-from app.services.auth import create_access_token, hash_password, verify_password
+from app.services.auth import (
+    canonicalize_email,
+    create_access_token,
+    hash_password,
+    verify_password,
+)
 from app.services.workspace_access import (
     WORKSPACE_MANAGERS,
     add_membership,
@@ -134,10 +139,15 @@ def update_workspace_member(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> WorkspaceMembershipRead:
-    workspace, _ = require_workspace_manager(db, user, workspace_id)
+    workspace, actor_membership = require_workspace_manager(db, user, workspace_id)
     membership = db.get(WorkspaceMembership, membership_id)
     if membership is None or membership.workspace_id != workspace_id or membership.status != "active":
         raise HTTPException(status_code=404, detail="Workspace member not found")
+    if user.role != "super_admin" and (
+        membership.role == "owner" or payload.role == "owner"
+    ):
+        if actor_membership is None or actor_membership.role != "owner":
+            raise HTTPException(status_code=403, detail="Only a workspace owner can change ownership")
     if membership.role == "owner" and payload.role != "owner":
         owner_count = int(
             db.scalar(
@@ -175,10 +185,13 @@ def revoke_workspace_member(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    workspace, _ = require_workspace_manager(db, user, workspace_id)
+    workspace, actor_membership = require_workspace_manager(db, user, workspace_id)
     membership = db.get(WorkspaceMembership, membership_id)
     if membership is None or membership.workspace_id != workspace_id or membership.status != "active":
         raise HTTPException(status_code=404, detail="Workspace member not found")
+    if user.role != "super_admin" and membership.role == "owner":
+        if actor_membership is None or actor_membership.role != "owner":
+            raise HTTPException(status_code=403, detail="Only a workspace owner can revoke an owner")
     if membership.role == "owner":
         owner_count = int(
             db.scalar(
@@ -241,7 +254,7 @@ def create_workspace_invitation(
     workspace, _ = require_workspace_manager(db, user, workspace_id)
     if payload.role == "owner":
         raise HTTPException(status_code=422, detail="Ownership must be transferred after joining")
-    email = str(payload.email).lower()
+    email = canonicalize_email(str(payload.email))
     token = secrets.token_urlsafe(36)
     now = utcnow()
     for pending in db.scalars(
@@ -353,7 +366,9 @@ def accept_workspace_invitation(
     workspace = db.get(GeoWorkspace, invitation.workspace_id)
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
-    user = db.scalar(select(User).where(User.email == invitation.email))
+    user = db.scalar(
+        select(User).where(func.lower(User.email) == canonicalize_email(invitation.email))
+    )
     if user is None:
         user = User(
             company_id=workspace.company_id,

@@ -106,6 +106,7 @@ ENVIRONMENT=production
 AUTO_CREATE_TABLES=false
 DATABASE_URL=postgresql+psycopg://USER:PASSWORD@HOST:5432/geo_platform
 CORS_ORIGINS=https://your-vercel-domain.vercel.app,https://your-custom-domain.com
+ALLOWED_HOSTS=api.your-domain.com
 AUTH_SECRET=<strong-random-secret>
 ARK_API_KEY=<ark-api-key>
 OPENAI_API_KEY=
@@ -224,9 +225,11 @@ DATABASE_URL=postgresql+psycopg://...
 
 ```bash
 ENVIRONMENT=production
-AUTO_CREATE_TABLES=true
+DEPLOYMENT_MODE=lan
+AUTO_CREATE_TABLES=false
 DATABASE_URL=postgresql+psycopg://...
 CORS_ORIGINS=https://your-vercel-domain.vercel.app
+ALLOWED_HOSTS=your-render-api.onrender.com
 AUTH_SECRET=<Render 自动生成或手动填写强随机字符串>
 ARK_API_KEY=<火山方舟 API Key>
 OPENAI_API_KEY=
@@ -261,17 +264,7 @@ UV_CACHE_DIR=.uv-cache uv --directory apps/api run alembic upgrade head
 UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/init_production.py --admin-email your@email.com --admin-password 'your-strong-password'
 ```
 
-如果暂时不想跑 Alembic，也可以先保留：
-
-```bash
-AUTO_CREATE_TABLES=true
-```
-
-让 FastAPI 启动时自动建表。正式生产再切回：
-
-```bash
-AUTO_CREATE_TABLES=false
-```
+生产环境必须先运行 Alembic，且保持 `AUTO_CREATE_TABLES=false`。服务会拒绝以自动建表模式启动，避免真实数据库处于“部分建表、迁移版本未推进”的不一致状态。
 
 ### 4. 部署 Vercel 前端
 
@@ -286,6 +279,8 @@ Vercel 项目配置：
 
 ```bash
 NEXT_PUBLIC_API_BASE_URL=https://your-render-api.onrender.com
+INTERNAL_API_BASE_URL=https://your-render-api.onrender.com
+SESSION_COOKIE_SECURE=true
 ```
 
 部署后打开：

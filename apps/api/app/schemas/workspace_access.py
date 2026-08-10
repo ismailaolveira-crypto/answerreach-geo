@@ -59,7 +59,7 @@ class WorkspaceInvitationPreview(BaseModel):
 class WorkspaceInvitationAccept(BaseModel):
     token: str = Field(min_length=32, max_length=300)
     name: str = Field(min_length=1, max_length=255)
-    password: str = Field(min_length=8, max_length=255)
+    password: str = Field(min_length=12, max_length=255)
 
 
 class WorkspaceInvitationAcceptResponse(BaseModel):

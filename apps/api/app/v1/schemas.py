@@ -19,6 +19,22 @@ class WorkspaceRead(WorkspaceCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class QueueWorkerStatusRead(BaseModel):
+    workspace_id: int
+    online: bool
+    status: Literal["online", "offline"]
+    worker_count: int = Field(ge=0)
+    concurrency: int = Field(ge=0)
+    pending_jobs: int = Field(ge=0)
+    historical_jobs: int = Field(ge=0)
+    running_jobs: int = Field(ge=0)
+    stale_running_jobs: int = Field(ge=0)
+    last_seen_at: datetime | None = None
+    heartbeat_interval_seconds: int = Field(ge=1)
+    offline_after_seconds: int = Field(ge=1)
+    message: str
+
+
 class WorkspaceUpdate(BaseModel):
     """The small, product-facing subset of workspace identity settings.
 
@@ -154,6 +170,19 @@ class YaoSourceItem(BaseModel):
     summary: str | None = None
 
 
+class WebUiObservationContext(BaseModel):
+    """Non-secret state needed to reproduce an official Web UI observation."""
+
+    account_alias: str = Field(min_length=1, max_length=120)
+    account_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    model_display_name: str = Field(min_length=1, max_length=160)
+    search_setting: Literal["explicit_on", "automatic"]
+    new_conversation: Literal[True] = True
+    locale: str = Field(min_length=2, max_length=40)
+    timezone: str = Field(min_length=3, max_length=80)
+    settings_snapshot_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class YaoSampleImport(BaseModel):
     sample_id: str
     question: str
@@ -163,6 +192,8 @@ class YaoSampleImport(BaseModel):
     finished_at: datetime | None = None
     raw_artifact_uri: str | None = None
     screenshot_uri: str | None = None
+    conversation_url: str | None = Field(default=None, min_length=10, max_length=1500)
+    web_ui_context: WebUiObservationContext | None = None
     sampling_environment: dict = Field(default_factory=dict)
     answer_text: str = ""
     references: list[YaoSourceItem] = Field(default_factory=list)
@@ -178,9 +209,64 @@ class YaoDatasetImport(BaseModel):
     sample_mode: Literal["browser_assisted", "authorized_api", "manual_import"]
     evidence_level: Literal["auditable", "partial"]
     prompt_version: str = "v1"
+    observation_group_id: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9_-]{8,80}$"
+    )
     browser_account_id: int | None = Field(default=None, ge=1)
     lease_token: str | None = Field(default=None, min_length=20, max_length=300)
     samples: list[YaoSampleImport] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_auditable_web_ui_contract(self):
+        if self.sample_mode != "browser_assisted" or self.evidence_level != "auditable":
+            return self
+        if not self.observation_group_id:
+            raise ValueError(
+                "auditable browser observations require observation_group_id"
+            )
+        official_hosts = {
+            "deepseek": "chat.deepseek.com",
+            "kimi": "www.kimi.com",
+            "yuanbao": "yuanbao.tencent.com",
+        }
+        expected_host = official_hosts.get(self.platform)
+        if expected_host is None:
+            # This contract upgrades the three provider paths in scope without
+            # silently breaking the separate legacy Doubao/Qianwen importers.
+            return self
+        for sample in self.samples:
+            if not sample.ok:
+                continue
+            if sample.started_at is None or sample.finished_at is None:
+                raise ValueError(
+                    f"sample {sample.sample_id} requires started_at and finished_at"
+                )
+            if not sample.raw_artifact_uri or not sample.screenshot_uri:
+                raise ValueError(
+                    f"sample {sample.sample_id} requires raw answer and screenshot artifacts"
+                )
+            if not sample.conversation_url:
+                raise ValueError(
+                    f"sample {sample.sample_id} requires the official conversation URL"
+                )
+            parsed = urlparse(sample.conversation_url)
+            if parsed.scheme != "https" or parsed.hostname != expected_host:
+                raise ValueError(
+                    f"sample {sample.sample_id} conversation URL must use {expected_host}"
+                )
+            if sample.web_ui_context is None:
+                raise ValueError(
+                    f"sample {sample.sample_id} requires fixed account/model/search context"
+                )
+            if not any(
+                isinstance(item.url, str)
+                and item.url.startswith(("https://", "http://"))
+                for item in sample.references
+            ):
+                raise ValueError(
+                    f"sample {sample.sample_id} requires at least one archived source card URL"
+                )
+        return self
 
 
 class YaoDeepSeekDatasetImport(BaseModel):
@@ -640,6 +726,7 @@ class OfficialApiObservationBatchSummary(BaseModel):
     running: int
     succeeded: int
     failed: int
+    dispatch_enabled: bool
     progress_percent: int
     status_percentages: dict[str, int] = Field(default_factory=dict)
     created_at: datetime

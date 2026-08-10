@@ -2,12 +2,14 @@ import Link from "next/link";
 import type { Route } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
+import { logoutAction } from "@/app/actions";
 import { getCleanroomWorkspaces } from "@/lib/cleanroom-v1-api";
 import { getCurrentUser } from "@/lib/session";
 import { WorkspaceSettingsForm } from "./workspace-settings-form";
 import { IntegrationSettingsForm } from "./integration-settings-form";
 import { BrandFactsSettingsForm } from "./brand-facts-settings-form";
 import { CollaborationSettings } from "./collaboration-settings";
+import { SettingsSectionSwitcher } from "./settings-section-switcher";
 import {
 	readAgentRuntime,
 	readBrandFacts,
@@ -51,15 +53,28 @@ export default async function GeoSettingsPage({ params }: { params: Promise<{ wo
 	const currentMembership = members.find((item) => item.user_id === currentUser?.id);
 	const canManage = currentUser?.role === "super_admin" || currentMembership?.role === "owner" || currentMembership?.role === "admin";
 	const canWrite = currentUser?.role === "super_admin" || Boolean(currentMembership && currentMembership.role !== "viewer");
+	const roleLabel = currentMembership?.role === "owner" ? "工作区所有者" : currentMembership?.role === "admin" || currentUser?.role === "super_admin" ? "工作区管理员" : currentMembership?.role === "reviewer" ? "审核人员" : currentMembership?.role === "viewer" ? "只读成员" : "运营成员";
+	const userInitial = (currentUser?.name || currentUser?.email || "U").trim().slice(0, 1).toUpperCase();
 	return <main className={styles.page}>
-		<header className={styles.header}><div><p>工作区设置</p><h1>让每一次观测有一致的识别口径</h1><span>品牌名称、别名和官网只影响之后归档的识别，不会改写历史回答。</span></div><Link href={`/geo/${workspaceId}`}>返回决策地图</Link></header>
-		<div className={styles.grid}>
-			<section className={styles.card}><header><span>01</span><div><h2>品牌识别</h2><p>这是指标、竞品对比和问题分析共用的品牌口径。</p></div></header><WorkspaceSettingsForm workspace={workspace} readOnly={!canWrite} /></section>
-			<section className={styles.card}><header><span>02</span><div><h2>模型与渠道</h2><p>API 连接和联网验证在独立页面完成。</p></div></header><Link className={styles.cardLink} href={`/admin/providers?workspace=${workspaceId}` as Route}>管理模型与渠道 <b>→</b></Link></section>
-			<section className={styles.card}><header><span>03</span><div><h2>真实运行</h2><p>查看采集任务、失败原因与证据归档。</p></div></header><div className={styles.linkStack}><Link href={`/geo/${workspaceId}/operations`}>运营状态 <b>→</b></Link><Link href={`/geo/${workspaceId}/questions`}>问题库 <b>→</b></Link></div></section>
-		</div>
-		<CollaborationSettings workspaceId={workspace.id} initialMembers={members} initialInvitations={invitations} initialNodes={localAgentNodes} canManage={canManage} canEnrollAgent={canWrite} currentUserId={currentUser?.id ?? null} />
-		<BrandFactsSettingsForm workspaceId={workspace.id} initialFacts={brandFacts} readOnly={!canWrite} />
-		<Suspense fallback={<IntegrationSettingsLoading />}><IntegrationSettingsSection workspaceId={workspace.id} readOnly={!canWrite} /></Suspense>
+		<header className={styles.header}>
+			<div><h1>工作区设置</h1><span>管理当前工作区的品牌口径、成员权限、设备与交付设置。</span></div>
+			<div className={styles.accountCard}>
+				<span aria-hidden="true">{userInitial}</span>
+				<div><strong>{currentUser?.name || currentUser?.email || "当前用户"}</strong><small>{roleLabel}</small></div>
+				<form action={logoutAction}><button type="submit">退出登录</button></form>
+			</div>
+		</header>
+		<SettingsSectionSwitcher
+			basics={<div className={styles.basicsLayout}>
+				<section className={`${styles.card} ${styles.brandIdentityCard}`}><header><div><h2>品牌识别</h2><p>指标、竞品对比和问题分析共用的品牌口径。</p></div></header><WorkspaceSettingsForm workspace={workspace} readOnly={!canWrite} /></section>
+				<aside className={styles.basicsRail}>
+					<section className={styles.routeGroup}><header><h2>模型与渠道</h2><p>平台管理员统一维护 API 与联网证据门禁。</p></header>{currentUser?.role === "super_admin" ? <Link className={styles.routeRow} href={`/admin/providers?workspace=${workspaceId}` as Route}><span aria-hidden="true">◇</span><div><b>管理模型与渠道</b><small>配置 API 连接和联网验证</small></div><strong>›</strong></Link> : <p className={styles.cardNote}>当前工作区仅使用已通过联网证据门禁的渠道。如需新增或更换 API，请联系平台管理员。</p>}</section>
+					<section className={styles.routeGroup}><header><h2>真实运行</h2><p>查看采集任务、失败原因与证据归档。</p></header><div className={styles.routeStack}><Link className={styles.routeRow} href={`/geo/${workspaceId}/operations`}><span aria-hidden="true">⌁</span><div><b>运营状态</b><small>采集服务、队列与失败原因</small></div><strong>›</strong></Link><Link className={styles.routeRow} href={`/geo/${workspaceId}/questions`}><span aria-hidden="true">?</span><div><b>问题库</b><small>管理观测问题与跟踪范围</small></div><strong>›</strong></Link></div></section>
+				</aside>
+			</div>}
+			collaboration={<CollaborationSettings workspaceId={workspace.id} initialMembers={members} initialInvitations={invitations} initialNodes={localAgentNodes} canManage={canManage} canEnrollAgent={canWrite} currentUserId={currentUser?.id ?? null} />}
+			facts={<BrandFactsSettingsForm workspaceId={workspace.id} initialFacts={brandFacts} readOnly={!canWrite} />}
+			agent={<Suspense fallback={<IntegrationSettingsLoading />}><IntegrationSettingsSection workspaceId={workspace.id} readOnly={!canWrite} /></Suspense>}
+		/>
 	</main>;
 }

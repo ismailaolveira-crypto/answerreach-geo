@@ -27,6 +27,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1 import routes
 
 
@@ -236,6 +237,8 @@ def retest_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None
                     )
                 )
                 evidence_id += 1
+        db.flush()
+        add_membership(db, workspace_id=1, user_id=1, role="owner")
         db.commit()
 
     captured_payload = {}

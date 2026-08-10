@@ -3,10 +3,11 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
+    command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     environment:
       DEPLOYMENT_MODE: personal
       ENVIRONMENT: personal
-      AUTO_CREATE_TABLES: "true"
+      AUTO_CREATE_TABLES: "false"
       DATABASE_URL: sqlite:////data/geo_platform.db
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
       CORS_ORIGINS: http://localhost:${GEO_HTTP_PORT:-3000}
@@ -24,11 +25,11 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "8"]
+    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "125"]
     environment:
       DEPLOYMENT_MODE: personal
       ENVIRONMENT: personal
-      AUTO_CREATE_TABLES: "true"
+      AUTO_CREATE_TABLES: "false"
       DATABASE_URL: sqlite:////data/geo_platform.db
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
     volumes:

@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { getLLMProviderReadiness, getLLMProviders, type LLMProvider, type LLMProviderReadiness } from "@/lib/geo-provider-api";
 import { BrandLogo } from "@/components/brand-logo";
-import { getCleanroomActions, getCleanroomActionWorkbenchState, getCleanroomEvidence, getOfficialProviderObservationBatches } from "@/lib/cleanroom-v1-api";
+import { getCleanroomActions, getCleanroomActionWorkbenchState, getCleanroomEvidence, getOfficialProviderObservationBatches, getQueueWorkerStatus } from "@/lib/cleanroom-v1-api";
 
 type Props = { params: Promise<{ workspaceId: string }> };
 type PlatformDefinition = {
@@ -30,8 +30,21 @@ const BATCH_STATUS_LABELS = {
   failed: "已失败",
 };
 
+function batchStatusLabel(batch: { status: keyof typeof BATCH_STATUS_LABELS; dispatch_enabled: boolean }) {
+  if (!batch.dispatch_enabled && batch.status === "pending") return "历史保留";
+  return BATCH_STATUS_LABELS[batch.status];
+}
+
 function formatOperationTime(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+function formatWorkerHeartbeat(value: string | null | undefined) {
+  if (!value) return "尚未收到当前仓库 Worker 心跳";
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 1000));
+  if (elapsedSeconds < 60) return "刚刚收到心跳";
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} 分钟前收到心跳`;
+  return `最后心跳 ${formatOperationTime(value)}`;
 }
 
 function batchSourceLabel(sourceType: string) {
@@ -67,6 +80,7 @@ function connectionState(provider: LLMProvider | undefined, readiness?: LLMProvi
   if (!provider) return { tone: "waiting", label: "待接入", hint: "尚未创建 API 连接" };
   const diagnostic = readiness?.diagnostic ?? null;
   const latestTest = readiness?.latest_test ?? null;
+  if (diagnostic?.missing.includes("api_key_format")) return { tone: "unverified", label: "Key 格式错误", hint: diagnostic.warnings[0] || latestTest?.error_message || "请重新粘贴控制台生成的 API Key 原文" };
   if (!diagnostic?.auth_ready) return { tone: "needs-key", label: "需要 API Key", hint: "连接已创建，密钥尚未配置" };
   if (readiness?.collection_ready) return { tone: "verified", label: "联网门禁可用", hint: "当前配置已通过真实联网测试" };
   if (readiness && !readiness.test_fresh && latestTest) return { tone: "unverified", label: "需要重新测试", hint: readiness.collection_blocker || "配置已变更，旧测试不再证明当前渠道可用" };
@@ -78,13 +92,14 @@ function connectionState(provider: LLMProvider | undefined, readiness?: LLMProvi
 
 export default async function OperationsPage({ params }: Props) {
   const { workspaceId } = await params;
-  const [evidence, providers, readinessRows, recentBatches, actions, actionState] = await Promise.all([
+  const [evidence, providers, readinessRows, recentBatches, actions, actionState, workerStatus] = await Promise.all([
     getCleanroomEvidence(workspaceId),
     getLLMProviders(),
     getLLMProviderReadiness(),
     getOfficialProviderObservationBatches(workspaceId, { page: 1, pageSize: 5 }),
     getCleanroomActions(workspaceId),
     getCleanroomActionWorkbenchState(workspaceId),
+    getQueueWorkerStatus(workspaceId).catch(() => null),
   ]);
   const readinessByProvider = new Map(readinessRows.map((item) => [item.provider_id, item]));
   const rows = PLATFORMS.map((definition) => {
@@ -140,16 +155,33 @@ export default async function OperationsPage({ params }: Props) {
         <div className="is-config"><span>需要处理</span><strong>{needsAttentionCount}</strong><small>家尚未形成完整证据</small></div>
       </section>
 
+      <section className={`sy-worker-status ${workerStatus ? `is-${workerStatus.status}` : "is-unavailable"}`} aria-labelledby="worker-status-heading">
+        <header>
+          <div><span>采集服务</span><h2 id="worker-status-heading">Queue Worker</h2><p>{formatWorkerHeartbeat(workerStatus?.last_seen_at)}</p></div>
+          <strong><i aria-hidden="true" />{workerStatus ? workerStatus.online ? "Worker 在线" : "Worker 离线" : "状态不可用"}</strong>
+        </header>
+        <div className="sy-worker-facts" aria-label="采集服务运行数据">
+          <article><small>当前并发</small><b>{workerStatus?.concurrency ?? "—"}</b><span>{workerStatus ? `${workerStatus.worker_count} 个在线进程` : "等待状态接口恢复"}</span></article>
+          <article><small>等待任务</small><b>{workerStatus?.pending_jobs ?? "—"}</b><span>只统计可执行队列</span></article>
+          <article><small>执行中</small><b>{workerStatus?.running_jobs ?? "—"}</b><span>{workerStatus?.stale_running_jobs ? `${workerStatus.stale_running_jobs} 条可能已中断` : "未发现过期执行"}</span></article>
+          <article><small>历史保留</small><b>{workerStatus?.historical_jobs ?? "—"}</b><span>只读展示，永不自动执行</span></article>
+        </div>
+        <footer className={workerStatus?.stale_running_jobs ? "is-warning" : undefined}>
+          <i aria-hidden="true">{workerStatus?.online ? "✓" : "!"}</i>
+          <p><b>{workerStatus?.online ? "采集可继续" : workerStatus ? "任务会安全保留" : "暂时无法判断采集状态"}</b><span>{workerStatus?.message || "运营页其他数据仍可查看；请稍后刷新状态。"}</span></p>
+        </footer>
+      </section>
+
       <section className="sy-provider-section">
         <div className="sy-section-heading"><div><h2>API 连接</h2><p>日常只需要维护 Key。模型、地址和搜索能力可在高级配置中调整。</p></div><Link href={`/admin/providers?workspace=${workspaceId}` as Route}>管理全部连接</Link></div>
         <div className="sy-provider-grid">
           {rows.map(({ definition, provider, diagnostic, providerEvidence, state }) => {
             const href = provider
-              ? `/admin/providers/${provider.id}/test?return_to=/geo/${workspaceId}/operations`
+              ? `/admin/providers/${provider.id}/test?return_to=/geo/${workspaceId}/operations&workspace=${workspaceId}`
               : `/admin/providers?model=${definition.key}&workspace=${workspaceId}`;
             return <article className={`sy-provider-card is-${state.tone}`} data-provider-key={definition.key} key={definition.key}>
               <header><BrandLogo brand={definition.key} label={definition.label} className="sy-provider-mark" /><div><h3>{definition.label}</h3><p>{definition.note}</p></div><i>{state.label}</i></header>
-              <div className="sy-provider-facts"><span><small>当前模型</small><b>{provider?.model_name || "尚未配置"}</b></span><span><small>API Key</small><b>{diagnostic?.auth_ready ? "已安全配置" : "未配置"}</b></span><span><small>闭环证据</small><b>{providerEvidence ? `#${providerEvidence.id} 已归档` : "尚未生成"}</b></span></div>
+              <div className="sy-provider-facts"><span><small>当前模型</small><b>{provider?.model_name || "尚未配置"}</b></span><span><small>API Key</small><b>{diagnostic?.missing.includes("api_key_format") ? "格式错误" : diagnostic?.auth_ready ? "已安全配置" : "未配置"}</b></span><span><small>闭环证据</small><b>{providerEvidence ? `#${providerEvidence.id} 已归档` : "尚未生成"}</b></span></div>
               <p className="sy-provider-hint">{state.hint}</p>
               <Link className="sy-provider-action" href={href as Route}>{provider ? "配置并测试" : "配置 API"}<span>→</span></Link>
             </article>;
@@ -193,7 +225,7 @@ export default async function OperationsPage({ params }: Props) {
 
       <section className="sy-runtime-section" aria-labelledby="recent-runtime-heading">
         <div className="sy-section-heading">
-          <div><h2 id="recent-runtime-heading">最近真实运行</h2><p>来自统一观测台账；API、采样与导入结果使用同一批次口径，刷新后仍可恢复。</p></div>
+          <div><h2 id="recent-runtime-heading">最近真实运行</h2><p>来自统一观测台账；API、采样与导入结果使用同一批次口径，历史批次只读可查。</p></div>
           <Link href={`/geo/${workspaceId}/batches`}>查看全部 {recentBatches.pagination.total} 个批次</Link>
         </div>
         {recentBatches.items.length ? <div className="sy-batch-list sy-runtime-list" aria-label="最近真实观测批次">
@@ -207,7 +239,7 @@ export default async function OperationsPage({ params }: Props) {
             <div><b>批次 #{batch.batch_id}</b><small>{formatOperationTime(batch.created_at)} · {batchSourceLabel(batch.source_type)}</small></div>
             <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条真实任务</small></div>
             <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
-            <div><em className={`is-${batch.status}`}>{BATCH_STATUS_LABELS[batch.status]}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}% · 查看任务详情</small></div>
+            <div><em className={`is-${batch.status}`}>{batchStatusLabel(batch)}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}% · 查看任务详情</small></div>
           </Link>)}
         </div> : <div className="sy-runtime-empty"><b>还没有真实观测批次</b><span>从决策地图发起第一轮联网观测后，后台任务会显示在这里。</span><Link href={`/geo/${workspaceId}`}>返回决策地图开始观测 →</Link></div>}
       </section>

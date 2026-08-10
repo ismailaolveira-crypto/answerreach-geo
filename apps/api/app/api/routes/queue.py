@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import assert_company_access, get_project_or_404, require_roles
@@ -21,8 +21,21 @@ from app.services.job_queue import run_next_job
 router = APIRouter(prefix="/queue", tags=["queue"])
 
 
+def _exclude_non_dispatchable_history(stmt):
+    """Keep legacy observations out of every executable queue surface."""
+
+    return stmt.where(
+        or_(
+            QueueJob.job_type != "geo_observation.collect",
+            QueueJob.status != "pending",
+            QueueJob.payload_json["dispatch_enabled"].as_boolean().is_(True),
+        )
+    )
+
+
 def _queue_summary(db: Session) -> QueueJobSummary:
-    rows = db.execute(select(QueueJob.status, func.count()).group_by(QueueJob.status)).all()
+    stmt = select(QueueJob.status, func.count()).group_by(QueueJob.status)
+    rows = db.execute(_exclude_non_dispatchable_history(stmt)).all()
     counts = {status: count for status, count in rows}
     return QueueJobSummary(
         total=sum(counts.values()),
@@ -53,6 +66,7 @@ def _queue_summary_for_user(db: Session, user: User) -> QueueJobSummary:
     project_ids = _accessible_project_ids(db, user)
     stmt = select(QueueJob.status, func.count()).group_by(QueueJob.status)
     stmt = _queue_project_filter(stmt, project_ids)
+    stmt = _exclude_non_dispatchable_history(stmt)
     rows = db.execute(stmt).all()
     counts = {status: count for status, count in rows}
     return QueueJobSummary(
@@ -74,6 +88,7 @@ def list_queue_jobs(
     stmt = select(QueueJob).order_by(QueueJob.created_at.desc(), QueueJob.id.desc()).limit(limit)
     project_ids = _accessible_project_ids(db, user)
     stmt = _queue_project_filter(stmt, project_ids)
+    stmt = _exclude_non_dispatchable_history(stmt)
     if status:
         stmt = stmt.where(QueueJob.status == status)
     return QueueJobListResponse(summary=_queue_summary_for_user(db, user), jobs=list(db.scalars(stmt)))
@@ -134,6 +149,7 @@ def run_ready_queue_jobs(
         .where(QueueJob.status == "pending")
         .where(QueueJob.scheduled_at <= pending_checked_at)
     )
+    pending_stmt = _exclude_non_dispatchable_history(pending_stmt)
     if project_id is not None:
         pending_stmt = pending_stmt.where(QueueJob.payload_json["project_id"].as_integer() == project_id)
     else:

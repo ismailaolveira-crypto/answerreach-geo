@@ -14,8 +14,8 @@ DEFAULT_BASE_URLS = {
     "openai": "https://api.openai.com/v1",
     "openai_compatible": "https://api.openai.com/v1",
     "deepseek_web_search": "https://api.deepseek.com/anthropic",
-    "kimi_web_search": "https://api.moonshot.ai/v1",
-    "hunyuan_web_search": "https://api.hunyuan.cloud.tencent.com/v1",
+    "kimi_web_search": "https://api.moonshot.cn/v1",
+    "hunyuan_web_search": "https://tokenhub.tencentmaas.com/v1",
     "volcengine_ark": "https://ark.cn-beijing.volces.com/api/v3",
     "qwen_compatible": "https://dashscope.aliyuncs.com/api/v1",
     "bailian_qwen_responses": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -24,6 +24,22 @@ DEFAULT_BASE_URLS = {
 }
 
 DEFAULT_CHAT_COMPLETION_TIMEOUT_SECONDS = 180.0
+
+
+def provider_api_key_format_error(api_key: str | None) -> str | None:
+    """Return a secret-safe reason when a key cannot be used in an HTTP header."""
+
+    if not api_key:
+        return None
+    if api_key == "***configured***":
+        return "API Key 是页面脱敏占位符，不是可用密钥"
+    try:
+        api_key.encode("ascii")
+    except UnicodeEncodeError:
+        return "API Key 包含中文或全角字符"
+    if any(character.isspace() or ord(character) < 33 or ord(character) > 126 for character in api_key):
+        return "API Key 包含空格、换行或不可见字符"
+    return None
 
 
 def _provider_http_timeout(timeout_seconds: float) -> httpx.Timeout:
@@ -131,6 +147,7 @@ PROVIDER_ONBOARDING = [
     },
     {
         "provider_type": "kimi_web_search",
+        "platform_key": "kimi",
         "label": "Kimi Web Search",
         "default_base_url": DEFAULT_BASE_URLS["kimi_web_search"],
         "template_name": "Kimi 联网搜索 GEO 采集",
@@ -141,34 +158,37 @@ PROVIDER_ONBOARDING = [
         "access_method": "builtin_web_search_api",
         "search_mode": "live_web_search",
         "supports_web_search": True,
-        "collection_fit": "适合采集带来源线索的联网搜索回答，是第一版真实 GEO 监测优先渠道。",
+        "collection_fit": "通过 Kimi 开放平台 Formula API 执行官方 Web Search；这是可审计的 API 联网观测，不是 Kimi 网页端原样回答。",
         "setup_steps": [
             "配置 KIMI_API_KEY 或 Provider 级 API Key。",
             "Base URL 可留空使用 Kimi API 官方工具通道。",
             "系统会实际执行 moonshot/web-search:latest；没有来源 URL 时验证失败。",
         ],
-        "caveats": ["需要确认账号和模型支持 builtin_function.$web_search。"],
+        "caveats": [
+            "Kimi K3 使用 moonshot/web-search:latest Formula 官方工具通道。",
+            "API 回答不包含 Kimi 网页端的账号记忆、界面路由或实验分组。",
+        ],
     },
     {
         "provider_type": "hunyuan_web_search",
         "platform_key": "hunyuan",
-        "label": "腾讯混元官方 API + 搜索增强",
+        "label": "腾讯混元 TokenHub 官方 API + Web Search",
         "default_base_url": DEFAULT_BASE_URLS["hunyuan_web_search"],
         "template_name": "腾讯混元官方联网 GEO 采集",
         "template_base_url": DEFAULT_BASE_URLS["hunyuan_web_search"],
-        "template_model_name": "hunyuan-turbos-latest",
-        "model_examples": ["hunyuan-turbos-latest", "hunyuan-large"],
+        "template_model_name": "hy3-preview",
+        "model_examples": ["hy3-preview"],
         "auth_env": ENV_KEY_BY_PROVIDER_TYPE["hunyuan_web_search"],
         "access_method": "official_api_with_web_search",
-        "search_mode": "hunyuan_forced_search_enhancement",
+        "search_mode": "tokenhub_responses_web_search",
         "supports_web_search": True,
-        "collection_fit": "通过腾讯混元 OpenAI 兼容接口强制开启搜索增强，保存 search_info、引用链接与完整回答。",
+        "collection_fit": "通过腾讯 TokenHub Responses API 声明 web_search，保存搜索事件、annotations 引用与完整回答。",
         "setup_steps": [
             "配置 HUNYUAN_API_KEY 或 Provider 级 API Key。",
-            "使用支持搜索增强的模型，系统固定开启 enable_enhancement、force_search_enhancement、search_info 和 citation。",
-            "没有 search_info 来源 URL 或最终回答时拒绝进入决策地图。",
+            "在 TokenHub 开通服务并创建 API Key，使用 hy3-preview 的 /v1/responses 接口。",
+            "系统固定声明 tools: [{type: web_search}]；缺少搜索事件、annotations 来源 URL 或最终回答时拒绝入库。",
         ],
-        "caveats": ["hunyuan-lite 不支持搜索增强；官方 API 结果不等同于消费级网页端个性化排序。"],
+        "caveats": ["混元 API 观测与腾讯元宝网页端观测必须分开归档，不能相互代替。"],
     },
     {
         "provider_type": "volcengine_ark",
@@ -521,6 +541,10 @@ class DeepSeekWebSearchProvider(BaseLLMSearchProvider):
                     "max_uses": int(self.provider.cost_rule.get("web_search_max_uses") or 4),
                 }
             ],
+            # DeepSeek's Anthropic-compatible surface supports `any`; with only
+            # the server Web Search tool declared this makes the search step
+            # explicit instead of relying on prompt wording alone.
+            "tool_choice": {"type": "any"},
         }
         with httpx.Client(
             timeout=_provider_http_timeout(self.timeout_seconds),
@@ -569,6 +593,10 @@ class DeepSeekWebSearchProvider(BaseLLMSearchProvider):
             search_event_count=len(search_calls) + len(search_results),
             search_verification={
                 "gate": "server_tool_use:web_search + web_search_tool_result + sources",
+                "observation_surface": "official_api",
+                "web_ui_equivalence": "not_claimed",
+                "protocol": "anthropic_messages",
+                "official_tool": "web_search_20250305",
                 "web_search_call_count": len(search_calls),
                 "web_search_result_block_count": len(search_results),
                 "source_count": len(sources),
@@ -650,7 +678,7 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
                 f"{self.base_url}/formulas/{self.FORMULA_URI}/tools",
                 headers=headers,
             )
-            tool_response.raise_for_status()
+            _raise_provider_http_error(tool_response, provider_label="Kimi")
             tool_payload = tool_response.json()
             tools = tool_payload.get("tools") if isinstance(tool_payload, dict) else None
             if not isinstance(tools, list) or not tools:
@@ -667,7 +695,7 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
                         "reasoning_effort": str(self.provider.cost_rule.get("reasoning_effort") or "low"),
                     },
                 )
-                response.raise_for_status()
+                _raise_provider_http_error(response, provider_label="Kimi")
                 data = response.json()
                 raw_rounds.append(data)
                 choices = data.get("choices") if isinstance(data, dict) else None
@@ -681,13 +709,17 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
                 messages.append({key: value for key, value in message.items() if key in {"role", "content", "tool_calls"}})
                 for tool_call in tool_calls:
                     function = tool_call.get("function") or {}
+                    if function.get("name") != "web_search":
+                        raise ValueError("Kimi Formula API returned a non-search tool call")
                     fiber_response = client.post(
                         f"{self.base_url}/formulas/{self.FORMULA_URI}/fibers",
                         headers=headers,
                         json={"name": function.get("name"), "arguments": function.get("arguments")},
                     )
-                    fiber_response.raise_for_status()
+                    _raise_provider_http_error(fiber_response, provider_label="Kimi")
                     fiber = fiber_response.json()
+                    if not isinstance(fiber, dict) or fiber.get("status") != "succeeded":
+                        raise ValueError("Kimi official web-search Fiber did not succeed")
                     raw_fibers.append(fiber)
                     search_call_count += 1
                     context = fiber.get("context") if isinstance(fiber, dict) else {}
@@ -699,7 +731,10 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
                         "content": result if isinstance(result, str) else json.dumps(result, ensure_ascii=False),
                     })
 
-        sources = _source_items_from_nested_payload(raw_fibers)
+        # Protected Formula output is normally encrypted.  Structured citations,
+        # when returned, belong to the completion/fiber envelopes; never mine
+        # arbitrary answer prose for URLs and call that search proof.
+        sources = _source_items_from_nested_payload({"rounds": raw_rounds, "fibers": raw_fibers})
         if search_call_count < 1:
             raise ValueError("Kimi did not execute the official web-search tool")
         if not sources:
@@ -718,6 +753,9 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
             search_event_count=search_call_count + 1,
             search_verification={
                 "gate": "formula tool call + fiber output + source URLs + final answer",
+                "observation_surface": "official_api",
+                "web_ui_equivalence": "not_claimed",
+                "protocol": "openai_chat_completions_plus_formula",
                 "formula_uri": self.FORMULA_URI,
                 "web_search_call_count": search_call_count,
                 "source_count": len(sources),
@@ -725,25 +763,38 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
         )
 
 
-def _nested_values_for_key(payload: Any, key: str) -> list[Any]:
-    values: list[Any] = []
+def _responses_answer_text(payload: dict[str, Any]) -> str:
+    blocks: list[str] = []
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                text = str(part.get("text") or "").strip()
+                if text:
+                    blocks.append(text)
+    return "\n\n".join(blocks)
 
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            for item_key, nested in value.items():
-                if item_key == key:
-                    values.append(nested)
-                visit(nested)
-        elif isinstance(value, list):
-            for nested in value:
-                visit(nested)
 
-    visit(payload)
-    return values
+def _responses_search_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return []
+    return [
+        item
+        for item in output
+        if isinstance(item, dict) and "web_search" in str(item.get("type") or "").lower()
+    ]
 
 
 class HunyuanWebSearchProvider(BaseLLMSearchProvider):
-    """Tencent Hunyuan OpenAI-compatible API with forced search evidence."""
+    """Tencent TokenHub Responses API with Hunyuan Web Search evidence."""
 
     def __init__(
         self,
@@ -764,14 +815,22 @@ class HunyuanWebSearchProvider(BaseLLMSearchProvider):
     ) -> ProviderAnswer:
         if not self.api_key:
             raise ValueError(f"Missing API key for provider {self.provider.name}")
-        payload = {
-            "model": self.provider.model_name or "hunyuan-turbos-latest",
-            "messages": [{"role": "user", "content": prompt_text}],
+        payload: dict[str, Any] = {
+            "model": self.provider.model_name or "hy3-preview",
+            "input": prompt_text,
+            "tools": [
+                {
+                    "type": "web_search",
+                    "search_source": str(self.provider.cost_rule.get("search_source") or "lite"),
+                    "search_context_size": str(
+                        self.provider.cost_rule.get("search_context_size") or "medium"
+                    ),
+                }
+            ],
+            "reasoning": {
+                "effort": str(self.provider.cost_rule.get("reasoning_effort") or "medium")
+            },
             "stream": False,
-            "enable_enhancement": True,
-            "force_search_enhancement": True,
-            "search_info": True,
-            "citation": True,
         }
         with httpx.Client(
             timeout=_provider_http_timeout(self.timeout_seconds),
@@ -779,23 +838,21 @@ class HunyuanWebSearchProvider(BaseLLMSearchProvider):
             trust_env=False,
         ) as client:
             response = client.post(
-                f"{self.base_url}/chat/completions",
+                f"{self.base_url}/responses",
                 headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                 json=payload,
             )
             _raise_provider_http_error(response, provider_label="腾讯混元")
             data = response.json()
-        choices = data.get("choices") if isinstance(data, dict) else None
-        if not choices or not isinstance(choices[0], dict):
-            raise ValueError("腾讯混元响应缺少 choices[0]")
-        message = choices[0].get("message") or {}
-        answer_text = str(message.get("content") or "").strip()
-        search_info_values = _nested_values_for_key(data, "search_info")
-        sources = _source_items_from_nested_payload(search_info_values)
-        if not search_info_values:
-            raise ValueError("腾讯混元未返回 search_info，无法证明搜索增强已经执行")
+        if not isinstance(data, dict):
+            raise ValueError("腾讯 TokenHub Responses API 返回了无效负载")
+        answer_text = _responses_answer_text(data)
+        search_events = _responses_search_events(data)
+        sources = _source_items_from_nested_payload(data)
+        if not search_events:
+            raise ValueError("腾讯混元未返回 web_search 事件，无法证明联网搜索已执行")
         if not sources:
-            raise ValueError("腾讯混元搜索增强未返回可审计来源 URL")
+            raise ValueError("腾讯混元 Web Search 未返回可审计 annotations 来源 URL")
         if not answer_text:
             raise ValueError("腾讯混元搜索增强未返回最终回答")
         return ProviderAnswer(
@@ -806,11 +863,14 @@ class HunyuanWebSearchProvider(BaseLLMSearchProvider):
             raw_provider_payload=data,
             collection_method="official_api_web_search",
             search_verified=True,
-            search_event_count=1,
+            search_event_count=len(search_events),
             search_verification={
-                "gate": "forced search enhancement + search_info URLs + final answer",
-                "force_search_enhancement": True,
-                "search_info_block_count": len(search_info_values),
+                "gate": "Responses web_search event + annotations URLs + final answer",
+                "observation_surface": "official_api",
+                "web_ui_equivalence": "not_claimed",
+                "protocol": "tokenhub_responses",
+                "official_tool": "web_search",
+                "web_search_call_count": len(search_events),
                 "source_count": len(sources),
             },
         )
@@ -838,34 +898,11 @@ class VolcengineWebSearchProvider(BaseLLMSearchProvider):
 
     @staticmethod
     def _answer_text(payload: dict[str, Any]) -> str:
-        blocks: list[str] = []
-        output = payload.get("output")
-        if not isinstance(output, list):
-            return ""
-        for item in output:
-            if not isinstance(item, dict) or item.get("type") != "message":
-                continue
-            content = item.get("content")
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                if part.get("type") in {"output_text", "text"}:
-                    text = str(part.get("text") or "").strip()
-                    if text:
-                        blocks.append(text)
-        return "\n\n".join(blocks)
+        return _responses_answer_text(payload)
 
     @staticmethod
     def _search_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
-        output = payload.get("output")
-        if not isinstance(output, list):
-            return []
-        return [
-            item for item in output
-            if isinstance(item, dict) and "web_search" in str(item.get("type") or "").lower()
-        ]
+        return _responses_search_events(payload)
 
     def answer(
         self, prompt_text: str, company: Company, project: Project, competitors: list[Competitor]
@@ -1124,6 +1161,7 @@ def get_provider_onboarding() -> list[dict[str, Any]]:
 
 def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
     api_key, auth_source = get_provider_api_key(provider)
+    api_key_error = provider_api_key_format_error(api_key)
     base_url = (provider.api_base_url or get_provider_default_base_url(provider.provider_type) or "").rstrip("/")
     last_blocker = provider.cost_rule.get("last_blocker")
     last_probe_error = provider.cost_rule.get("last_probe_error")
@@ -1148,6 +1186,11 @@ def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
         missing.append(auth_source)
         recommendations.append(f"配置 {auth_source}，或在 Provider auth_config 中写入 api_key。")
         setup_steps.append("先配置 Provider 级 API Key，或配置对应环境变量。")
+    elif provider.provider_type not in {"mock", "browser_observation"} and api_key_error:
+        missing.append("api_key_format")
+        warnings.append(api_key_error)
+        recommendations.append("请只粘贴厂商控制台生成的 API Key 原文，不要包含标签、冒号或换行。")
+        setup_steps.append("重新保存纯 API Key 后再执行渠道测试。")
     if provider.provider_type == "browser_observation":
         access_method = "browser_automation"
         search_mode = "web_ui_observation"
@@ -1180,13 +1223,27 @@ def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
         search_mode = "formula_web_search"
         search_access_status = "ready_for_collection"
         recommendations.append("Kimi 联网搜索使用 moonshot/web-search:latest 官方工具；必须执行 fiber 并返回来源 URL。")
+        recommendations.append("该结果只能标记为“Kimi 官方 API 观测”，不能标记为 Kimi.com 网页端回答。")
         setup_steps.append("后台测试应同时返回工具执行、来源 URL 和最终回答，再用于项目采集。")
+        if urlsplit(base_url).hostname not in {"api.moonshot.cn"}:
+            missing.append("official_kimi_base_url")
+            warnings.append("Kimi 官方 API 当前应使用 https://api.moonshot.cn/v1。")
+            setup_steps.append("将旧 Moonshot 域名或聚合端点更新为 Kimi 官方 .cn 端点。")
     if provider.provider_type == "hunyuan_web_search":
         access_method = "official_api_with_web_search"
-        search_mode = "hunyuan_forced_search_enhancement"
+        search_mode = "tokenhub_responses_web_search"
         search_access_status = "ready_for_collection"
-        recommendations.append("系统强制开启混元搜索增强、search_info 与引用；缺少来源 URL 时拒绝入库。")
-        setup_steps.append("使用非品牌采购问题验证 search_info、来源 URL 和最终回答同时返回。")
+        recommendations.append("系统使用腾讯 TokenHub /v1/responses 和 hy3-preview，并声明 web_search 工具。")
+        recommendations.append("该结果只能标记为“混元 TokenHub API 观测”，不能标记为腾讯元宝网页端回答。")
+        setup_steps.append("使用非品牌采购问题验证 web_search 事件、annotations 来源 URL 和最终回答同时返回。")
+        if urlsplit(base_url).hostname != "tokenhub.tencentmaas.com":
+            missing.append("tokenhub_base_url")
+            warnings.append("旧混元 API 已不是新观测的标准通道，需迁移到腾讯 TokenHub。")
+            setup_steps.append("将 API Base URL 更新为 https://tokenhub.tencentmaas.com/v1。")
+        if provider.model_name != "hy3-preview":
+            missing.append("model_name=hy3-preview")
+            warnings.append("腾讯 TokenHub Responses Web Search 的当前混元观测模型是 hy3-preview。")
+            setup_steps.append("将模型 ID 更新为 hy3-preview 后重新执行主动测试。")
     if provider.provider_type == "qwen_compatible":
         access_method = "official_api_with_web_search"
         search_mode = "dashscope_forced_web_search"
@@ -1228,13 +1285,13 @@ def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
         "provider_id": provider.id,
         "provider_type": provider.provider_type,
         "ready": len(missing) == 0,
-        "auth_ready": provider.provider_type == "mock" or bool(api_key),
+        "auth_ready": provider.provider_type == "mock" or bool(api_key and not api_key_error),
         "auth_source": auth_source if provider.provider_type != "mock" else "not_required",
         "base_url": base_url or None,
         "endpoint_path": (
             "/v1/messages" if provider.provider_type == "deepseek_web_search"
             else "/formulas/moonshot/web-search:latest" if provider.provider_type == "kimi_web_search"
-            else "/chat/completions" if provider.provider_type == "hunyuan_web_search"
+            else "/responses" if provider.provider_type == "hunyuan_web_search"
             else "/services/aigc/text-generation/generation" if provider.provider_type == "qwen_compatible"
             else "/responses" if provider.provider_type == "bailian_qwen_responses"
             else "/responses" if provider.provider_type == "volcengine_ark"
@@ -1257,6 +1314,9 @@ def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
 
 def get_search_provider(provider: LLMProvider) -> BaseLLMSearchProvider:
     api_key, _auth_source = get_provider_api_key(provider)
+    api_key_error = provider_api_key_format_error(api_key)
+    if api_key_error:
+        raise ValueError(f"{api_key_error}。请只粘贴控制台生成的 Key 原文后重试。")
     if provider.provider_type in {"openai", "openai_compatible"}:
         return OpenAICompatibleSearchProvider(
             provider,

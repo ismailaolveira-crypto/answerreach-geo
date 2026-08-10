@@ -53,7 +53,7 @@ class TenantRegistrationRequest(BaseModel):
 
     name: str = Field(min_length=1, max_length=255)
     email: EmailStr
-    password: str = Field(min_length=8, max_length=255)
+    password: str = Field(min_length=12, max_length=255)
     company_name: str = Field(min_length=1, max_length=255)
     brand_name: str = Field(min_length=1, max_length=255)
     website_url: str | None = Field(default=None, max_length=500)

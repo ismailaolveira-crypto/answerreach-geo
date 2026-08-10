@@ -5,7 +5,7 @@
 - Backend: FastAPI + SQLAlchemy, default local database `apps/api/geo_platform.db`.
 - Frontend: Next.js app in `apps/web`.
 - Local API: `http://127.0.0.1:8000`.
-- Local Web: `http://127.0.0.1:3000`.
+- Local Web: `http://127.0.0.1:39003`.
 
 PostgreSQL/Redis compose files remain in `infra/`, but the current MVP acceptance flow uses the local SQLite database.
 
@@ -26,7 +26,7 @@ pnpm run dev:web
 Open:
 
 ```text
-http://127.0.0.1:3000
+http://127.0.0.1:39003
 ```
 
 If the Codex desktop approval reviewer is misconfigured, privileged port-start commands may be blocked. In that case, use the no-port verification suite below until the approval configuration is fixed.

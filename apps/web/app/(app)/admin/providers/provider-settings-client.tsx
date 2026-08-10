@@ -24,6 +24,7 @@ function readableTime(value?: string | null) {
 
 function channelState(readiness?: LLMProviderReadiness) {
   if (readiness?.collection_ready) return { label: "健康", className: "is-ready" };
+  if (readiness?.diagnostic.missing.includes("api_key_format")) return { label: "Key 格式错误", className: "is-failed" };
   if (readiness?.latest_test && !readiness.test_fresh) return { label: "需重测", className: "is-pending" };
   if (readiness?.latest_test?.ok === false) return { label: "测试失败", className: "is-failed" };
   if (readiness?.diagnostic.auth_ready) return { label: "待测试", className: "is-pending" };
@@ -44,7 +45,9 @@ function officialProviderForModel(
 }
 
 function officialModelState(provider: LLMProvider | undefined, readiness?: LLMProviderReadiness) {
-  if (!provider || !readiness?.diagnostic.auth_ready) return { label: "未配置", className: "is-muted" };
+  if (!provider) return { label: "未配置", className: "is-muted" };
+  if (readiness?.diagnostic.missing.includes("api_key_format")) return { label: "Key 格式错误", className: "is-failed" };
+  if (!readiness?.diagnostic.auth_ready) return { label: "未配置", className: "is-muted" };
   if (readiness.collection_ready) return { label: "已连接", className: "is-ready" };
   if (readiness.latest_test && !readiness.test_fresh) return { label: "需重测", className: "is-pending" };
   if (readiness.latest_test?.ok === false) return { label: "测试失败", className: "is-failed" };
@@ -65,7 +68,9 @@ function hubHref(key: ProviderCatalogKey, workspaceId?: string) {
 }
 
 function testHref(providerId: number, key: ProviderCatalogKey, workspaceId?: string) {
-  return `/admin/providers/${providerId}/test?return_to=${encodeURIComponent(hubHref(key, workspaceId))}`;
+  const params = new URLSearchParams({ return_to: hubHref(key, workspaceId) });
+  if (workspaceId) params.set("workspace", workspaceId);
+  return `/admin/providers/${providerId}/test?${params.toString()}`;
 }
 
 export default function ProviderSettingsClient({ providers, readinessRows, initialKey, workspaceId, loadError }: Props) {
@@ -133,6 +138,13 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
       <section className="provider-config-panel">
         <header><div><h2>渠道配置 <span>·</span> {selectedModel.label}</h2><p>主路径只保留官方渠道；保存 Key 不会自动测试。</p></div><span className={`provider-status-pill ${primaryState.className}`}><i />{primaryState.label}</span></header>
 
+        {selectedModel.officialWeb ? <aside className="provider-surface-separation" aria-label="API 与网页端观测边界">
+          <div><b>{selectedModel.apiEvidenceLabel}</b><span>使用官方 API 与搜索工具，归档搜索事件、来源 URL 和回答。</span></div>
+          <div><b>{selectedModel.officialWeb.label}</b><span>必须在独立浏览器会话中固定账号、模型和搜索开关，另存回答、来源卡、截图和会话 URL。</span></div>
+          <a href={selectedModel.officialWeb.url} target="_blank" rel="noreferrer">打开官方网页端 <span>↗</span></a>
+          <small>API 证据不会标记为网页端原样回答；网页端观测也不会冒充 API 运行结果。</small>
+        </aside> : null}
+
         {visibleProviders.length ? <div className="provider-config-channels">
           {visibleProviders.map((provider) => {
             const readiness = readinessByProvider.get(provider.id);
@@ -187,7 +199,7 @@ export default function ProviderSettingsClient({ providers, readinessRows, initi
           <div><dt>最近延迟</dt><dd>{primaryReadiness?.latest_test?.latency_ms ? `${primaryReadiness.latest_test.latency_ms} ms` : "—"}<em className={selectedLatency.className}>{selectedLatency.label}</em></dd></div>
           <div><dt>联网搜索能力</dt><dd>{primaryReadiness?.diagnostic.supports_web_search ? "已声明支持" : "尚未验证"}<em className={primaryReadiness?.diagnostic.supports_web_search ? "is-good" : ""}>{primaryReadiness?.diagnostic.supports_web_search ? "✓" : "—"}</em></dd></div>
           <div><dt>来源归档门禁</dt><dd>{primaryReadiness?.collection_ready ? "可进入决策地图" : "测试后确认"}<em className={primaryReadiness?.collection_ready ? "is-good" : ""}>{primaryReadiness?.collection_ready ? "✓" : "—"}</em></dd></div>
-          <div><dt>当前阻塞</dt><dd>{primaryProvider ? primaryReadiness?.diagnostic.auth_ready ? primaryReadiness?.collection_blocker || "无" : "API Key 尚未配置" : "尚未创建官方渠道"}<em className={primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "is-good" : ""}>{primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "正常" : "待处理"}</em></dd></div>
+          <div><dt>当前阻塞</dt><dd>{primaryProvider ? primaryReadiness?.collection_blocker || "无" : "尚未创建官方渠道"}<em className={primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "is-good" : ""}>{primaryProvider && primaryReadiness?.diagnostic.auth_ready && !primaryReadiness?.collection_blocker ? "正常" : "待处理"}</em></dd></div>
         </dl>
         {primaryProvider ? <Link className="provider-test-explicit" href={testHref(primaryProvider.id, selectedKey, workspaceId) as Route}>打开渠道设置与测试 <span>→</span></Link> : <span className="provider-test-explicit is-disabled">保存渠道后即可测试</span>}
         <small>只有你在下一页主动点击“测试渠道”时，系统才会产生真实 API 请求。</small>

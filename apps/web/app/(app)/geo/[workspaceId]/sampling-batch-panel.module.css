@@ -727,6 +727,80 @@
   width: 100%;
 }
 
+.workerGate {
+  align-items: center;
+  border: 1px solid;
+  border-radius: 12px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto 1fr auto;
+  margin-bottom: 11px;
+  min-height: 58px;
+  padding: 9px 11px;
+}
+
+.workerGate > i {
+  border-radius: 50%;
+  height: 8px;
+  width: 8px;
+}
+
+.workerGate > span {
+  display: grid;
+  gap: 2px;
+}
+
+.workerGate b {
+  font-size: 11px;
+}
+
+.workerGate small {
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.workerGate > button {
+  background: #fff;
+  border: 1px solid currentColor;
+  border-radius: 9px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 760;
+  min-height: 34px;
+  padding: 0 10px;
+}
+
+.workerOnline {
+  background: #eef9f4;
+  border-color: #cfeadf;
+  color: #167554;
+}
+
+.workerOnline > i {
+  background: #1a9c6b;
+  box-shadow: 0 0 0 4px rgb(26 156 107 / 10%);
+}
+
+.workerOnline small {
+  color: #5f8b7a;
+}
+
+.workerOffline {
+  background: #fff7ed;
+  border-color: #efd9bb;
+  color: #9a5d1c;
+}
+
+.workerOffline > i {
+  background: #c67b27;
+}
+
+.workerOffline small {
+  color: #9a7957;
+}
+
 .submit:hover:not(:disabled) {
   background: #195be3;
   border-color: #195be3;
@@ -799,6 +873,11 @@
 .customQuestion button:focus-visible,
 .stepper button:focus-visible,
 .submit:focus-visible {
+  outline: 2px solid var(--composer-blue);
+  outline-offset: 2px;
+}
+
+.workerGate > button:focus-visible {
   outline: 2px solid var(--composer-blue);
   outline-offset: 2px;
 }

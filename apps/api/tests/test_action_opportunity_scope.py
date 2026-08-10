@@ -16,6 +16,8 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoWorkspace,
 )
+from app.models.user import User
+from app.services.workspace_access import add_membership
 from app.v1.action_opportunities import _fingerprint, discover_opportunities, valid_action_evidence
 from app.v1.routes import get_action_opportunity_scope
 
@@ -110,8 +112,18 @@ def _seed(db: Session) -> tuple[GeoWorkspace, GeoEvidence, GeoEvidence]:
         search_verified=False,
         search_event_count=0,
     )
-    db.add_all([Company(id=1, name="测试公司"), workspace, question, batch, run, valid, missing_search])
+    db.add_all([
+        Company(id=1, name="测试公司"),
+        User(id=1, company_id=1, name="测试管理员", email="scope@example.com", role="company_admin"),
+        workspace,
+        question,
+        batch,
+        run,
+        valid,
+        missing_search,
+    ])
     db.flush()
+    add_membership(db, workspace_id=1, user_id=1, role="owner")
     db.add_all(
         [
             GeoObservationTask(

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_, select, update
+from sqlalchemy.orm import Session, aliased
 
 from app.models import (
     CrawlTask,
@@ -9,9 +9,16 @@ from app.models import (
     GeoObservationBatch,
     GeoObservationTask,
     QueueJob,
+    QueueWorkerHeartbeat,
 )
 from app.schemas.search import CrawlTaskCreate
 from app.services.crawl_runner import run_crawl_task
+from app.services.worker_heartbeat import (
+    LEGACY_RUNNING_JOB_STALE_AFTER_SECONDS,
+    WORKER_OFFLINE_AFTER_SECONDS,
+    as_utc,
+    worker_is_online,
+)
 
 
 TRANSIENT_ERROR_MARKERS = (
@@ -101,15 +108,31 @@ def sync_observation_task_from_job(db: Session, job: QueueJob) -> None:
         )
         batch.completed_tasks = completed
         batch.failed_tasks = failed
+        receipt = db.get(QueueJob, batch.queue_job_id) if batch.queue_job_id else None
         if completed + failed >= batch.total_tasks and batch.total_tasks > 0:
             batch.status = "completed" if failed == 0 else "partial"
             batch.completed_at = job.finished_at or datetime.now(UTC)
-        elif completed or failed or running:
+            if receipt is not None:
+                receipt.status = (
+                    "success" if failed == 0 else "failed" if completed == 0 else "partial"
+                )
+                receipt.finished_at = batch.completed_at
+        elif running:
             batch.status = "running"
             batch.started_at = batch.started_at or job.started_at or datetime.now(UTC)
             batch.completed_at = None
+            if receipt is not None:
+                receipt.status = "running"
+                receipt.started_at = receipt.started_at or batch.started_at
+                receipt.finished_at = None
         else:
             batch.status = "pending"
+            batch.completed_at = None
+            if receipt is not None:
+                receipt.status = "queued"
+                receipt.finished_at = None
+        if receipt is not None:
+            db.add(receipt)
         db.add(batch)
 
 
@@ -151,29 +174,148 @@ def enqueue_crawl_task_job(
     return job
 
 
+def recover_orphaned_jobs(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    workspace_id: int | None = None,
+) -> dict[str, int]:
+    """Requeue only executable jobs whose owning Worker is no longer alive.
+
+    Parent ``geo_observation.batch`` rows are orchestration receipts and remain
+    derived from child task state; they are never executable or recovered here.
+    """
+
+    checked_at = now or datetime.now(UTC)
+    stmt = select(QueueJob).where(
+        QueueJob.status == "running",
+        QueueJob.job_type != "geo_observation.batch",
+    )
+    if workspace_id is not None:
+        stmt = stmt.where(
+            QueueJob.payload_json["workspace_id"].as_integer() == workspace_id
+        )
+    workers = {
+        worker.worker_id: worker
+        for worker in db.scalars(select(QueueWorkerHeartbeat))
+    }
+    recovered = 0
+    failed = 0
+    for job in list(db.scalars(stmt.order_by(QueueJob.started_at.asc()))):
+        started_at = as_utc(job.started_at)
+        if started_at is None:
+            continue
+        payload = dict(job.payload_json or {})
+        worker_id = str(payload.get("worker_id") or "").strip()
+        worker = workers.get(worker_id)
+        if worker_id:
+            orphaned = not worker or not worker_is_online(worker, now=checked_at)
+            stale_enough = started_at <= checked_at - timedelta(
+                seconds=WORKER_OFFLINE_AFTER_SECONDS
+            )
+        else:
+            orphaned = True
+            stale_enough = started_at <= checked_at - timedelta(
+                seconds=LEGACY_RUNNING_JOB_STALE_AFTER_SECONDS
+            )
+        if not orphaned or not stale_enough:
+            continue
+        claimed = db.execute(
+            update(QueueJob)
+            .where(QueueJob.id == job.id, QueueJob.status == "running")
+            .values(status="recovering")
+        )
+        db.commit()
+        if claimed.rowcount != 1:
+            continue
+        db.refresh(job)
+        job.payload_json = {
+            **payload,
+            "worker_id": None,
+            "recovery_count": int(payload.get("recovery_count") or 0) + 1,
+        }
+        if job.attempts < job.max_attempts:
+            job.status = "pending"
+            job.scheduled_at = checked_at
+            job.started_at = None
+            job.finished_at = None
+            job.error_message = "上次 Worker 中断，任务已自动重新排队"
+            recovered += 1
+        else:
+            job.status = "failed"
+            job.finished_at = checked_at
+            job.error_message = "Worker 中断且自动重试次数已用尽"
+            failed += 1
+        db.add(job)
+        sync_observation_task_from_job(db, job)
+        db.commit()
+    return {"recovered": recovered, "failed": failed}
+
+
 def claim_next_job(
     db: Session,
     now: datetime | None = None,
     project_id: int | None = None,
     project_ids: list[int] | None = None,
+    workspace_id: int | None = None,
+    observation_batch_id: int | None = None,
+    worker_id: str | None = None,
 ) -> QueueJob | None:
     checked_at = now or datetime.now(UTC)
     stmt = (
         select(QueueJob)
         .where(QueueJob.status == "pending")
         .where(QueueJob.scheduled_at <= checked_at)
+        .where(
+            or_(
+                QueueJob.job_type != "geo_observation.collect",
+                QueueJob.payload_json["dispatch_enabled"].as_boolean().is_(True),
+            )
+        )
     )
-    if project_id is not None:
+    if workspace_id is not None:
+        stmt = stmt.where(QueueJob.payload_json["workspace_id"].as_integer() == workspace_id)
+    elif project_id is not None:
         stmt = stmt.where(QueueJob.payload_json["project_id"].as_integer() == project_id)
     elif project_ids is not None:
         if not project_ids:
             return None
         stmt = stmt.where(QueueJob.payload_json["project_id"].as_integer().in_(project_ids))
+    if observation_batch_id is not None:
+        stmt = stmt.where(
+            QueueJob.payload_json["observation_ledger_batch_id"].as_integer()
+            == observation_batch_id
+        )
+    # Prefer workspaces with fewer active jobs before job age. Without this
+    # load-aware ordering, one older large workspace could occupy every slot in
+    # personal mode and make another account look frozen even though the global
+    # worker was healthy. Priority remains the first ordering key.
+    running_job = aliased(QueueJob)
+    candidate_workspace = QueueJob.payload_json["workspace_id"].as_integer()
+    running_workspace = running_job.payload_json["workspace_id"].as_integer()
+    active_workspace_jobs = (
+        select(func.count(running_job.id))
+        .where(
+            running_job.status == "running",
+            running_job.job_type != "geo_observation.batch",
+            running_workspace == candidate_workspace,
+        )
+        .correlate(QueueJob)
+        .scalar_subquery()
+    )
     # Compare-and-swap prevents concurrent workers from claiming the same job.
     # This lets observation batches run with bounded concurrency without
     # duplicating paid model calls.
     for _ in range(5):
-        job_id = db.scalar(stmt.with_only_columns(QueueJob.id).order_by(QueueJob.priority.desc(), QueueJob.created_at.asc()).limit(1))
+        job_id = db.scalar(
+            stmt.with_only_columns(QueueJob.id)
+            .order_by(
+                QueueJob.priority.desc(),
+                active_workspace_jobs.asc(),
+                QueueJob.created_at.asc(),
+            )
+            .limit(1)
+        )
         if job_id is None:
             return None
         claimed = db.execute(
@@ -185,11 +327,56 @@ def claim_next_job(
         if claimed.rowcount == 1:
             job = db.get(QueueJob, job_id)
             if job is not None:
+                if worker_id:
+                    job.payload_json = {
+                        **dict(job.payload_json or {}),
+                        "worker_id": worker_id,
+                    }
+                    db.add(job)
                 sync_observation_task_from_job(db, job)
                 db.commit()
                 db.refresh(job)
             return job
     return None
+
+
+def count_ready_jobs(
+    db: Session,
+    now: datetime | None = None,
+    workspace_id: int | None = None,
+    observation_batch_id: int | None = None,
+) -> int:
+    """Count jobs that the continuous Worker may claim right now.
+
+    The Worker uses this lightweight coordinator query to grow its executor to
+    actual demand.  In particular, an idle Worker must not start every allowed
+    concurrency slot just to discover that the queue is empty; on SQLite that
+    creates avoidable connection-pool pressure for normal API page reads.
+    """
+
+    checked_at = now or datetime.now(UTC)
+    stmt = (
+        select(func.count())
+        .select_from(QueueJob)
+        .where(QueueJob.status == "pending")
+        .where(QueueJob.scheduled_at <= checked_at)
+        .where(
+            or_(
+                QueueJob.job_type != "geo_observation.collect",
+                QueueJob.payload_json["dispatch_enabled"].as_boolean().is_(True),
+            )
+        )
+    )
+    if workspace_id is not None:
+        stmt = stmt.where(
+            QueueJob.payload_json["workspace_id"].as_integer() == workspace_id
+        )
+    if observation_batch_id is not None:
+        stmt = stmt.where(
+            QueueJob.payload_json["observation_ledger_batch_id"].as_integer()
+            == observation_batch_id
+        )
+    return int(db.scalar(stmt) or 0)
 
 
 def run_job(db: Session, job: QueueJob) -> QueueJob:
@@ -384,8 +571,19 @@ def run_next_job(
     now: datetime | None = None,
     project_id: int | None = None,
     project_ids: list[int] | None = None,
+    workspace_id: int | None = None,
+    observation_batch_id: int | None = None,
+    worker_id: str | None = None,
 ) -> QueueJob | None:
-    job = claim_next_job(db, now=now, project_id=project_id, project_ids=project_ids)
+    job = claim_next_job(
+        db,
+        now=now,
+        project_id=project_id,
+        project_ids=project_ids,
+        workspace_id=workspace_id,
+        observation_batch_id=observation_batch_id,
+        worker_id=worker_id,
+    )
     if job is None:
         return None
     return run_job(db, job)

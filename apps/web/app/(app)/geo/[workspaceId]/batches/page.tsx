@@ -14,6 +14,11 @@ const STATUS_LABELS = {
   failed: "已失败",
 };
 
+function batchStatusLabel(batch: { status: keyof typeof STATUS_LABELS; dispatch_enabled: boolean }) {
+  if (!batch.dispatch_enabled && batch.status === "pending") return "历史保留";
+  return STATUS_LABELS[batch.status];
+}
+
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
@@ -48,7 +53,7 @@ export default async function ObservationBatchesPage({ params, searchParams }: P
           <div><b>批次 #{batch.batch_id}</b><small>{formatDate(batch.created_at)} · {batchSourceLabel(batch.source_type)}</small></div>
           <div><b>{batch.provider_count} 模型 × {batch.question_count} 问题</b><small>{batch.repeat_count} 次，共 {batch.total} 条任务</small></div>
           <div><b>{batch.succeeded} 成功 · {batch.failed} 失败</b><small>已完成 {batch.succeeded + batch.failed}/{batch.total}</small></div>
-          <div><em className={`is-${batch.status}`}>{STATUS_LABELS[batch.status]}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}%</small></div>
+          <div><em className={`is-${batch.status}`}>{batchStatusLabel(batch)}</em><span className="sy-runtime-progress" role="progressbar" aria-label={`批次 ${batch.batch_id} 完成进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={batch.progress_percent}><i style={{ width: `${batch.progress_percent}%` }} /></span><small>{batch.progress_percent}%</small></div>
         </Link>)}
       </section> : <section className="sy-batch-empty"><span>◇</span><h2>还没有采样批次</h2><p>从决策地图开始第一轮真实模型观测后，批次会自动出现在这里。</p><Link className="sy-primary" href={`/geo/${workspaceId}`}>返回决策地图</Link></section>}
       {pagination.total_pages > 1 ? <nav className="sy-batch-pagination" aria-label="批次列表分页">

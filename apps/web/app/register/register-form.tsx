@@ -23,7 +23,7 @@ export function RegisterForm({ initialError }: Readonly<{ initialError?: string 
   const [brandName, setBrandName] = useState("");
 
   const passwordScore = useMemo(() => {
-    return [password.length >= 8, /[a-zA-Z]/.test(password), /\d/.test(password), /[^a-zA-Z\d]/.test(password)].filter(Boolean).length;
+    return [password.length >= 12, /[a-zA-Z]/.test(password), /\d/.test(password), /[^a-zA-Z\d]/.test(password)].filter(Boolean).length;
   }, [password]);
 
   const passwordLabel = passwordScore >= 4 ? "强" : passwordScore >= 3 ? "良好" : passwordScore >= 2 ? "可用" : "待完善";
@@ -109,7 +109,7 @@ export function RegisterForm({ initialError }: Readonly<{ initialError?: string 
           <div className="cq-register-field">
             <div className="cq-register-label-row"><label htmlFor="register-password">设置密码</label><span className={`is-score-${passwordScore}`}>{passwordLabel}</span></div>
             <div className="cq-register-password-control">
-              <input id="register-password" name="password" type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} maxLength={255} placeholder="至少 8 位字符" value={password} onChange={(event) => { setPassword(event.target.value); setInlineError(""); }} required />
+              <input id="register-password" name="password" type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={12} maxLength={255} placeholder="至少 12 位字符" value={password} onChange={(event) => { setPassword(event.target.value); setInlineError(""); }} required />
               <button type="button" aria-label={showPassword ? "隐藏密码" : "显示密码"} aria-pressed={showPassword} onClick={() => setShowPassword((current) => !current)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.4-5 9.2-5 9.2 5 9.2 5-3.4 5-9.2 5-9.2-5-9.2-5Z" /><circle cx="12" cy="12" r="2.4" /></svg></button>
             </div>
             <div className="cq-register-strength" aria-hidden="true">{[1, 2, 3, 4].map((score) => <i className={passwordScore >= score ? "is-filled" : ""} key={score} />)}</div>
@@ -117,7 +117,7 @@ export function RegisterForm({ initialError }: Readonly<{ initialError?: string 
           <div className="cq-register-field">
             <label htmlFor="register-confirm-password">确认密码</label>
             <div className="cq-register-password-control">
-              <input id="register-confirm-password" name="confirm_password" type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={8} maxLength={255} placeholder="再输入一次密码" value={confirmPassword} onChange={(event) => { setConfirmPassword(event.target.value); setInlineError(""); }} required />
+              <input id="register-confirm-password" name="confirm_password" type={showPassword ? "text" : "password"} autoComplete="new-password" minLength={12} maxLength={255} placeholder="再输入一次密码" value={confirmPassword} onChange={(event) => { setConfirmPassword(event.target.value); setInlineError(""); }} required />
               <button type="button" aria-label={showPassword ? "隐藏确认密码" : "显示确认密码"} aria-pressed={showPassword} onClick={() => setShowPassword((current) => !current)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.8 12s3.4-5 9.2-5 9.2 5 9.2 5-3.4 5-9.2 5-9.2-5-9.2-5Z" /><circle cx="12" cy="12" r="2.4" /></svg></button>
             </div>
           </div>
