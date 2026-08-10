@@ -7,12 +7,22 @@ function secure(response: NextResponse): NextResponse {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   response.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.GEO_LOCAL_HTTP?.trim().toLowerCase() !== "true"
+  ) {
+    response.headers.set(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains"
+    );
+  }
   return response;
 }
 
 export function middleware(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   const { pathname } = request.nextUrl;
+  const isApi = pathname.startsWith("/api/");
   const isLogin = pathname === "/login";
   const isRegister = pathname === "/register";
   const isInvite = pathname.startsWith("/invite/");
@@ -22,6 +32,10 @@ export function middleware(request: NextRequest) {
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.includes(".");
+
+  if (isApi) {
+    return secure(NextResponse.next());
+  }
 
   if (isPublicAsset || isPublicShare) {
     return secure(NextResponse.next());
@@ -49,5 +63,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api).*)"]
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"]
 };

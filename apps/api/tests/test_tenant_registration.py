@@ -170,3 +170,27 @@ def test_login_attempts_are_throttled_and_success_clears_failures(
     )
     assert blocked.status_code == 429
     assert int(blocked.headers["Retry-After"]) > 0
+
+    register(
+        tenant_client,
+        email="locked-owner@example.com",
+        company="防锁死公司",
+        brand="防锁死品牌",
+    )
+    for _ in range(5):
+        failed = tenant_client.post(
+            "/api/auth/login",
+            json={"email": "locked-owner@example.com", "password": "wrong-password"},
+        )
+        assert failed.status_code == 401
+    successful_owner_login = tenant_client.post(
+        "/api/auth/login",
+        json={"email": "locked-owner@example.com", "password": "a-safe-password-2026"},
+    )
+    assert successful_owner_login.status_code == 200
+
+
+def test_readiness_reports_database_reachability(tenant_client: TestClient) -> None:
+    response = tenant_client.get("/api/health/ready")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": "reachable"}

@@ -1,3 +1,5 @@
+name: ${GEO_COMPOSE_PROJECT_NAME:-chunqiu-yuanquan-geo-personal}
+
 services:
   api:
     build:
@@ -11,11 +13,12 @@ services:
       DATABASE_URL: sqlite:////data/geo_platform.db
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
       CORS_ORIGINS: http://localhost:${GEO_HTTP_PORT:-3000}
+      ALLOWED_HOSTS: api,localhost,127.0.0.1
     volumes:
       - geo_personal_data:/data
       - geo_personal_artifacts:/app/private_artifacts
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -25,7 +28,7 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "125"]
+    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "${GEO_WORKER_CONCURRENCY:-8}", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID:?Run the personal launcher first}"]
     environment:
       DEPLOYMENT_MODE: personal
       ENVIRONMENT: personal
@@ -38,6 +41,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "uv", "run", "python", "scripts/check_worker_heartbeat.py", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID}", "--quiet"]
+      interval: 15s
+      timeout: 8s
+      retries: 12
+    stop_grace_period: 20s
     restart: unless-stopped
 
   web:
@@ -48,7 +57,7 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ""
     environment:
       INTERNAL_API_BASE_URL: http://api:8000
-      SESSION_COOKIE_SECURE: "false"
+      GEO_LOCAL_HTTP: "true"
     depends_on:
       api:
         condition: service_healthy
@@ -67,4 +76,6 @@ services:
 
 volumes:
   geo_personal_data:
+    name: ${GEO_DATA_VOLUME_NAME:-chunqiu_yuanquan_geo_personal_data}
   geo_personal_artifacts:
+    name: ${GEO_ARTIFACT_VOLUME_NAME:-chunqiu_yuanquan_geo_personal_artifacts}

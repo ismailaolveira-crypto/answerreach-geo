@@ -21,11 +21,12 @@ services:
     command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     environment:
       DEPLOYMENT_MODE: lan
-      ENVIRONMENT: production
+      ENVIRONMENT: lan
       AUTO_CREATE_TABLES: "false"
       DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
       CORS_ORIGINS: http://${GEO_LAN_HOST}:${GEO_HTTP_PORT:-3000}
+      ALLOWED_HOSTS: api,localhost,127.0.0.1,${GEO_LAN_HOST}
     volumes:
       - geo_lan_artifacts:/app/private_artifacts
     depends_on:
@@ -42,10 +43,10 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "125"]
+    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "${GEO_WORKER_CONCURRENCY:-125}"]
     environment:
       DEPLOYMENT_MODE: lan
-      ENVIRONMENT: production
+      ENVIRONMENT: lan
       AUTO_CREATE_TABLES: "false"
       DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
@@ -64,7 +65,7 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ""
     environment:
       INTERNAL_API_BASE_URL: http://api:8000
-      SESSION_COOKIE_SECURE: "false"
+      GEO_LOCAL_HTTP: "true"
     depends_on:
       api:
         condition: service_healthy

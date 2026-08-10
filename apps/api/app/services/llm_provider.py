@@ -26,6 +26,35 @@ DEFAULT_BASE_URLS = {
 DEFAULT_CHAT_COMPLETION_TIMEOUT_SECONDS = 180.0
 
 
+def _require_official_api_base_url(
+    base_url: str,
+    *,
+    expected_host: str,
+    provider_label: str,
+) -> None:
+    """Reject credential-bearing requests to anything but the official HTTPS host."""
+
+    try:
+        parsed = urlsplit(base_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(
+            f"{provider_label} API Base URL 必须使用 https://{expected_host} 官方主机"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != expected_host
+        or port not in {None, 443}
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            f"{provider_label} API Base URL 必须使用 https://{expected_host} 官方主机"
+        )
+
+
 def provider_api_key_format_error(api_key: str | None) -> str | None:
     """Return a secret-safe reason when a key cannot be used in an HTTP header."""
 
@@ -660,6 +689,11 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
     def answer(
         self, prompt_text: str, company: Company, project: Project, competitors: list[Competitor]
     ) -> ProviderAnswer:
+        _require_official_api_base_url(
+            self.base_url,
+            expected_host="api.moonshot.cn",
+            provider_label="Kimi",
+        )
         if not self.api_key:
             raise ValueError(f"Missing API key for provider {self.provider.name}")
 
@@ -673,6 +707,7 @@ class KimiWebSearchProvider(BaseLLMSearchProvider):
         with httpx.Client(
             timeout=_provider_http_timeout(self.timeout_seconds),
             transport=self.transport,
+            trust_env=False,
         ) as client:
             tool_response = client.get(
                 f"{self.base_url}/formulas/{self.FORMULA_URI}/tools",
@@ -793,6 +828,60 @@ def _responses_search_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _responses_completed_search_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in _responses_search_events(payload)
+        if item.get("type") == "web_search_call" and item.get("status") == "completed"
+    ]
+
+
+def _responses_annotation_sources(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract only assistant URL citations, not arbitrary URLs elsewhere in the payload."""
+
+    sources: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return sources
+    for item in output:
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "message"
+            or item.get("role") != "assistant"
+        ):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") not in {"output_text", "text"}:
+                continue
+            annotations = part.get("annotations")
+            if not isinstance(annotations, list):
+                continue
+            for annotation in annotations:
+                if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+                    continue
+                url = annotation.get("url")
+                if (
+                    not isinstance(url, str)
+                    or not url.startswith(("http://", "https://"))
+                    or url in seen
+                ):
+                    continue
+                seen.add(url)
+                sources.append(
+                    {
+                        "number": len(sources) + 1,
+                        "title": str(annotation.get("title") or url),
+                        "url": url,
+                        "domain": urlsplit(url).hostname,
+                    }
+                )
+    return sources
+
+
 class HunyuanWebSearchProvider(BaseLLMSearchProvider):
     """Tencent TokenHub Responses API with Hunyuan Web Search evidence."""
 
@@ -813,6 +902,11 @@ class HunyuanWebSearchProvider(BaseLLMSearchProvider):
     def answer(
         self, prompt_text: str, company: Company, project: Project, competitors: list[Competitor]
     ) -> ProviderAnswer:
+        _require_official_api_base_url(
+            self.base_url,
+            expected_host="tokenhub.tencentmaas.com",
+            provider_label="腾讯混元",
+        )
         if not self.api_key:
             raise ValueError(f"Missing API key for provider {self.provider.name}")
         payload: dict[str, Any] = {
@@ -847,8 +941,8 @@ class HunyuanWebSearchProvider(BaseLLMSearchProvider):
         if not isinstance(data, dict):
             raise ValueError("腾讯 TokenHub Responses API 返回了无效负载")
         answer_text = _responses_answer_text(data)
-        search_events = _responses_search_events(data)
-        sources = _source_items_from_nested_payload(data)
+        search_events = _responses_completed_search_events(data)
+        sources = _responses_annotation_sources(data)
         if not search_events:
             raise ValueError("腾讯混元未返回 web_search 事件，无法证明联网搜索已执行")
         if not sources:

@@ -10,6 +10,14 @@ node_modules
 **/node_modules
 .next
 **/.next
+.next-*
+**/.next-*
+.next*/
+**/.next*/
+.open-next
+**/.open-next
+.sites-build
+**/.sites-build
 .venv
 **/.venv
 .uv-cache
@@ -20,8 +28,13 @@ node_modules
 __pycache__
 **/__pycache__
 *.db
+*.db-*
+*.db.*
 *.sqlite
+*.sqlite-*
 *.sqlite3
+*.sqlite3-*
+*.bak
 outputs
 **/outputs
 private_artifacts
@@ -31,4 +44,7 @@ demo_outputs
 coverage
 dist
 build
+backups
+**/backups
+.ai-change
 *.log

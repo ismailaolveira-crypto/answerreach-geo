@@ -71,8 +71,9 @@ def upgrade() -> None:
             [column],
         )
 
-    # Preserve today's company-wide visibility once, then make future access
-    # explicit. New users are not automatically added to existing workspaces.
+    # Preserve legacy company-wide visibility only for workspaces that have no
+    # membership rows at all. Any existing row, including a revoked one, means
+    # the workspace already uses explicit membership and must remain untouched.
     op.execute(
         sa.text(
             """
@@ -97,7 +98,7 @@ def upgrade() -> None:
               AND NOT EXISTS (
                   SELECT 1
                   FROM geo_workspace_memberships_v1 AS existing
-                  WHERE existing.workspace_id = w.id AND existing.user_id = u.id
+                  WHERE existing.workspace_id = w.id
               )
             """
         )

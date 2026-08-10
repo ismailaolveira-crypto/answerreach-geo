@@ -19,8 +19,11 @@ node_modules/
 .next-dev/
 .next-release*/
 .next-*/
+.open-next/
+.sites-build/
 dist/
 build/
+backups/
 *.db
 *.db-*
 *.db.*

@@ -139,19 +139,19 @@ def login(
 ) -> LoginResponse:
     email = canonicalize_email(str(payload.email))
     throttle_key = login_throttle_key(email, request.client.host if request.client else "unknown")
-    retry_after = login_retry_after(db, throttle_key)
-    if retry_after:
-        raise HTTPException(
-            status_code=429,
-            detail="Too many login attempts. Try again later.",
-            headers={"Retry-After": str(retry_after)},
-        )
     user = db.scalar(select(User).where(func.lower(User.email) == email))
     password_valid = verify_password(
         payload.password,
         user.password_hash if user is not None else DUMMY_PASSWORD_HASH,
     )
     if user is None or not password_valid:
+        retry_after = login_retry_after(db, throttle_key)
+        if retry_after:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
         record_login_failure(db, throttle_key)
         db.commit()
         raise HTTPException(status_code=401, detail="Invalid email or password")

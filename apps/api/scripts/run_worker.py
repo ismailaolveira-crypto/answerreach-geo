@@ -3,6 +3,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import json
 import os
 import secrets
+import signal
 import socket
 import sys
 from threading import Event, Thread
@@ -210,10 +211,14 @@ def main() -> None:
             f"(allowed 1-{MAX_WORKER_CONCURRENCY})."
         ),
     )
+    parser.add_argument(
+        "--worker-id",
+        help="Stable Worker identity used by container-specific health checks.",
+    )
     args = parser.parse_args()
 
     concurrency = resolve_concurrency(args.concurrency, once=args.once)
-    worker_id = (
+    worker_id = args.worker_id or (
         f"queue:{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
     )
     with SessionLocal() as db:
@@ -242,6 +247,12 @@ def main() -> None:
         daemon=True,
     )
     heartbeat_thread.start()
+    previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+
+    def request_graceful_stop(_signum, _frame) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, request_graceful_stop)
     try:
         run_worker_loop(args, concurrency, worker_id)
     except KeyboardInterrupt:
@@ -250,6 +261,7 @@ def main() -> None:
             flush=True,
         )
     finally:
+        signal.signal(signal.SIGTERM, previous_sigterm_handler)
         heartbeat_stop.set()
         heartbeat_thread.join(timeout=2)
         try:

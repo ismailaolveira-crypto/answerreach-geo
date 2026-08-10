@@ -20,12 +20,13 @@
 
 ## 个人模式
 
-前置条件：Docker Desktop。
+同事安装的唯一前置条件：Docker Desktop。不需要本机 Node.js、Python、pnpm 或 uv。
 
-```bash
-pnpm run deploy:personal:config
-pnpm run deploy:personal
-```
+- Windows：双击仓库根目录的 `Start-GEO-Windows.cmd`。
+- macOS：首次右键打开仓库根目录的 `Start-GEO.command`。
+- Linux/终端：运行 `./scripts/geo-personal.sh start`。
+
+启动器会自动生成仅本机可用的 `.env.personal`，已存在时绝不覆盖；并等待 Web、API、SQLite 和 Worker 都就绪后再打开注册页。配置保存在稳定用户目录，而不是解压目录：macOS/Linux 为 `~/.config/chunqiu-yuanquan-geo/.env.personal`，Windows 为 `%LOCALAPPDATA%\ChunqiuYuanquanGEO\.env.personal`。
 
 打开：
 
@@ -37,10 +38,11 @@ http://127.0.0.1:3000
 
 - 网关只绑定 `127.0.0.1`，局域网其他电脑无法访问。
 - API 启动前会先执行 Alembic 前向迁移；迁移失败时服务不会带着半更新结构继续启动。
-- SQLite worker 并发上限为 125，与本机原生模式一致。实际吞吐仍受供应商 QPS、429、本机资源和 SQLite 串行写入能力限制；高并发不代表 125 条都能同时完成。
+- SQLite worker 默认并发为 8，程序上限为 125。实际吞吐仍受供应商 QPS、429、本机资源和 SQLite 串行写入能力限制。
 - 运营状态页按工作区显示 Queue Worker 心跳、真实可执行等待任务和运行任务；Worker 在线只表示队列可被消费，不代表观测已经完成。
-- 数据位于 `geo_personal_data` Docker 卷；停止容器不会删除数据。
+- 数据位于固定的 `chunqiu_yuanquan_geo_personal_data` Docker 卷，证据位于 `chunqiu_yuanquan_geo_personal_artifacts`；停止容器或换目录解压新版本都不会删除数据。
 - 不要运行 `docker compose down -v`，`-v` 会删除个人数据卷。
+- 备份时使用 `Backup-GEO-Windows.cmd` / `Backup-GEO.command` / `./scripts/geo-personal.sh backup`；备份会暂停全部写入服务并校验归档，同时保留 `.env.personal`，因为丢失该密钥后无法解密已保存的 Provider 凭据。macOS/Linux 备份位于 `~/.local/share/chunqiu-yuanquan-geo/backups`，Windows 备份位于 `%LOCALAPPDATA%\ChunqiuYuanquanGEO\backups`。
 
 ### macOS 原生常驻本地栈
 

@@ -170,6 +170,34 @@ def test_kimi_k3_executes_official_formula_and_requires_structured_sources() -> 
     assert answer.search_verification["web_ui_equivalence"] == "not_claimed"
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api.moonshot.cn.attacker.example/v1",
+        "http://api.moonshot.cn/v1",
+    ],
+)
+def test_kimi_rejects_non_official_destination_before_sending_credentials(
+    base_url: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    adapter = KimiWebSearchProvider(
+        _provider("kimi_web_search", "kimi-k3", base_url),
+        api_key="must-not-leave-process",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="api.moonshot.cn"):
+        adapter.answer("请联网搜索", COMPANY, PROJECT, [])
+
+    assert requests == []
+
+
 def test_hunyuan_uses_tokenhub_responses_web_search() -> None:
     captured: dict = {}
 
@@ -217,6 +245,99 @@ def test_hunyuan_uses_tokenhub_responses_web_search() -> None:
     assert answer.source_items[0]["url"] == "https://example.com/hunyuan-source"
     assert answer.search_verification["protocol"] == "tokenhub_responses"
     assert answer.search_verification["web_ui_equivalence"] == "not_claimed"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://tokenhub.tencentmaas.com.attacker.example/v1",
+        "http://tokenhub.tencentmaas.com/v1",
+    ],
+)
+def test_hunyuan_rejects_non_official_destination_before_sending_credentials(
+    base_url: str,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={})
+
+    adapter = HunyuanWebSearchProvider(
+        _provider("hunyuan_web_search", "hy3-preview", base_url),
+        api_key="must-not-leave-process",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="tokenhub.tencentmaas.com"):
+        adapter.answer("请联网搜索", COMPANY, PROJECT, [])
+
+    assert requests == []
+
+
+def test_hunyuan_rejects_incomplete_search_event_even_with_citation() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "output": [
+                    {"type": "web_search_call", "id": "ws_1", "status": "failed"},
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "output_text",
+                                "text": "Unverified answer",
+                                "annotations": [
+                                    {
+                                        "type": "url_citation",
+                                        "title": "Source",
+                                        "url": "https://example.com/source",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ]
+            },
+        )
+
+    adapter = HunyuanWebSearchProvider(
+        _provider("hunyuan_web_search", "hy3-preview", "https://tokenhub.tencentmaas.com/v1"),
+        api_key="test-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="web_search 事件"):
+        adapter.answer("请联网搜索", COMPANY, PROJECT, [])
+
+
+def test_hunyuan_rejects_url_outside_assistant_citation_annotations() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "debug": {"url": "https://example.com/not-search-evidence"},
+                "output": [
+                    {"type": "web_search_call", "id": "ws_1", "status": "completed"},
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Answer without citations"}],
+                    },
+                ],
+            },
+        )
+
+    adapter = HunyuanWebSearchProvider(
+        _provider("hunyuan_web_search", "hy3-preview", "https://tokenhub.tencentmaas.com/v1"),
+        api_key="test-key",
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ValueError, match="annotations 来源 URL"):
+        adapter.answer("请联网搜索", COMPANY, PROJECT, [])
 
 
 def test_legacy_hunyuan_configuration_is_not_reported_ready() -> None:

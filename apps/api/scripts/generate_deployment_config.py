@@ -13,18 +13,24 @@ def main() -> None:
     parser.add_argument("--mode", choices=("personal", "lan"), required=True)
     parser.add_argument("--host", help="LAN IP or internal host name; required for LAN mode")
     parser.add_argument("--port", type=int, default=3000)
+    parser.add_argument("--concurrency", type=int)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.mode == "lan" and not args.host:
         raise SystemExit("--host is required for LAN mode, for example --host 192.168.1.20")
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
+    concurrency = args.concurrency or (8 if args.mode == "personal" else 125)
+    if not 1 <= concurrency <= 125:
+        raise SystemExit("--concurrency must be between 1 and 125")
     output = args.output or Path(f".env.{args.mode}")
     if output.exists():
         raise SystemExit(f"Refusing to overwrite existing configuration: {output}")
     lines = [
         f"GEO_AUTH_SECRET={secrets.token_urlsafe(64)}",
         f"GEO_HTTP_PORT={args.port}",
+        f"GEO_WORKER_CONCURRENCY={concurrency}",
+        f"GEO_WORKER_INSTANCE_ID={secrets.token_hex(16)}",
     ]
     if args.mode == "lan":
         lines.extend(

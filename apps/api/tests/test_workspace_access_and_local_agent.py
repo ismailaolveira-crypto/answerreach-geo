@@ -266,7 +266,7 @@ def test_global_worker_accepts_truthful_pending_batches_for_two_accounts_and_wor
             provider_type="bailian_qwen_responses",
             api_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
             model_name="qwen-plus",
-            auth_config={"api_key": "sk-test-only-not-a-real-key"},
+            auth_config={"api_key": "fixture-not-a-real-key"},
             cost_rule={"platform_key": "qianwen"},
             status="active",
         )
@@ -592,6 +592,28 @@ def test_production_mode_requires_postgres_https_and_explicit_hosts() -> None:
         cors_origins="https://geo.example.com",
         allowed_hosts="api.example.com",
     ).validate_deployment()
+    with pytest.raises(RuntimeError, match="PostgreSQL"):
+        Settings(
+            _env_file=None,
+            environment=" production ",
+            deployment_mode="personal",
+            database_url="sqlite:///local.db",
+            auto_create_tables=False,
+            auth_secret="x" * 32,
+            cors_origins="https://geo.example.com",
+            allowed_hosts="api.example.com",
+        ).validate_deployment()
+
+
+def test_railway_postgres_url_uses_installed_psycopg_driver() -> None:
+    assert Settings(
+        _env_file=None,
+        database_url="postgresql://user:pass@postgres.internal:5432/railway",
+    ).database_url == "postgresql+psycopg://user:pass@postgres.internal:5432/railway"
+    assert Settings(
+        _env_file=None,
+        database_url="postgres://user:pass@postgres.internal:5432/railway",
+    ).database_url == "postgresql+psycopg://user:pass@postgres.internal:5432/railway"
 
 
 def test_provider_output_path_is_resolvable_without_fixed_parent_depth() -> None:

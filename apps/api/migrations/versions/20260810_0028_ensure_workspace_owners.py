@@ -1,4 +1,4 @@
-"""ensure every existing workspace has an explicit owner
+"""safely backfill eligible workspace owners without changing memberships
 
 Revision ID: 20260810_0028
 Revises: 20260810_0027
@@ -40,65 +40,42 @@ def upgrade() -> None:
                 """
                 SELECT u.id
                 FROM users AS u
-                LEFT JOIN geo_workspace_memberships_v1 AS m
-                  ON m.user_id = u.id AND m.workspace_id = :workspace_id
-                WHERE u.status = 'active'
-                  AND (
-                    (m.status = 'active')
-                    OR u.company_id = :company_id
-                    OR u.role = 'super_admin'
+                WHERE u.company_id = :company_id
+                  AND u.status = 'active'
+                  AND u.role = 'company_admin'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM geo_workspace_memberships_v1 AS existing
+                    WHERE existing.workspace_id = :workspace_id
+                      AND existing.user_id = u.id
                   )
-                ORDER BY
-                  CASE WHEN m.status = 'active' THEN 0 ELSE 1 END,
-                  CASE u.role WHEN 'company_admin' THEN 0 WHEN 'super_admin' THEN 1 ELSE 2 END,
-                  u.id
+                ORDER BY u.id
                 LIMIT 1
                 """
             ),
             workspace,
         ).scalar_one_or_none()
         if candidate is None:
-            raise RuntimeError(
-                f"Workspace {workspace['workspace_id']} has no active user who can become owner"
-            )
-        existing = bind.execute(
-            sa.text(
-                """
-                SELECT id FROM geo_workspace_memberships_v1
-                WHERE workspace_id = :workspace_id AND user_id = :user_id
-                """
-            ),
-            {"workspace_id": workspace["workspace_id"], "user_id": candidate},
-        ).scalar_one_or_none()
+            # Existing viewer/reviewer/admin/revoked rows are explicit access
+            # decisions, not owner candidates. Leave the workspace unchanged
+            # when no unassociated company administrator is available.
+            continue
         values = {
             "workspace_id": workspace["workspace_id"],
             "user_id": candidate,
         }
-        if existing is None:
-            bind.execute(
-                sa.text(
-                    """
-                    INSERT INTO geo_workspace_memberships_v1
-                        (workspace_id, user_id, role, status, joined_at, created_at, updated_at)
-                    VALUES
-                        (:workspace_id, :user_id, 'owner', 'active', CURRENT_TIMESTAMP,
-                         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """
-                ),
-                values,
-            )
-        else:
-            bind.execute(
-                sa.text(
-                    """
-                    UPDATE geo_workspace_memberships_v1
-                    SET role = 'owner', status = 'active', revoked_at = NULL,
-                        joined_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :membership_id
-                    """
-                ),
-                {"membership_id": existing},
-            )
+        bind.execute(
+            sa.text(
+                """
+                INSERT INTO geo_workspace_memberships_v1
+                    (workspace_id, user_id, role, status, joined_at, created_at, updated_at)
+                VALUES
+                    (:workspace_id, :user_id, 'owner', 'active', CURRENT_TIMESTAMP,
+                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """
+            ),
+            values,
+        )
 
 
 def downgrade() -> None:
