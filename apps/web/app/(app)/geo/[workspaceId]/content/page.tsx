@@ -2,6 +2,7 @@ import { getCleanroomContentLibrary } from "@/lib/cleanroom-v1-api";
 import { ContentLibrary } from "./content-library";
 import { getContentLibrarySummary } from "./content-library-state";
 import styles from "./content-library.module.css";
+import { GeoGlobalScopeBar } from "@/components/geo-global-scope-bar";
 
 export default async function ContentLibraryPage({ params }: { params: Promise<{ workspaceId: string }> }) {
 	const { workspaceId } = await params;
@@ -19,6 +20,7 @@ export default async function ContentLibraryPage({ params }: { params: Promise<{
 				<div><small>公网已核验</small><strong>{summary.verifiedPublicationCount}</strong></div>
 			</div>
 		</header>
+		<GeoGlobalScopeBar workspaceId={workspaceId} support="context" />
 		<ContentLibrary workspaceId={workspaceId} items={items} />
 	</main>;
 }

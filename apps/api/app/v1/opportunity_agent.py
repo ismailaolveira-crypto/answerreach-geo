@@ -439,10 +439,11 @@ def materialize_agent_opportunities(
         )
         fingerprint = _fingerprint(
             workspace.id,
-            context["input_fingerprint"],
             item["question_plan_id"],
             item["opportunity_type"],
             target_url or item["source_strategy"],
+            item["recommended_asset_type"],
+            tuple(sorted(item["recommended_platforms"])),
             AGENT_RULE_VERSION,
         )
         opportunity = db.scalar(

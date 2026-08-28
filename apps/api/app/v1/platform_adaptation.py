@@ -7,6 +7,26 @@ from hashlib import sha256
 from app.models.cleanroom_v1 import GeoContentAsset, GeoPlatformVariant
 from app.v1.content_generation import PLATFORM_CONTRACTS
 
+PLATFORM_SECTION_HEADINGS = {
+    "zhihu": "先说结论",
+    "juejin": "工程问题与实现取舍",
+    "csdn": "问题、前置条件与执行步骤",
+    "51cto": "企业 IT 治理清单",
+    "bilibili": "先用大白话讲清楚",
+    "baijiahao": "核心事实与影响",
+    "weibo": "先看结论",
+    "yuque": "文档摘要与操作步骤",
+    "douban": "从真实场景说起",
+    "sohu": "核心信息",
+    "xueqiu": "判断、数据与风险",
+    "cnblogs": "环境、实现与验证",
+    "oschina": "技术方案与关键取舍",
+    "segmentfault": "问题与直接答案",
+    "imooc": "学习目标与实践步骤",
+    "woshipm": "用户问题、方案与复盘",
+    "eastmoney": "核心判断、数据与风险",
+}
+
 
 def adapt_asset(asset: GeoContentAsset, *, workspace_id: int, platform_key: str) -> GeoPlatformVariant:
     contract = PLATFORM_CONTRACTS.get(platform_key)
@@ -14,14 +34,8 @@ def adapt_asset(asset: GeoContentAsset, *, workspace_id: int, platform_key: str)
         raise ValueError(f"Unsupported platform contract: {platform_key}")
     label = str(contract["label"])
     source_body = asset.body_markdown.strip()
-    if platform_key == "zhihu":
-        body = f"## 先说结论\n\n{source_body}"
-    elif platform_key == "juejin":
-        body = f"## 工程问题与实现取舍\n\n{source_body}"
-    elif platform_key == "csdn":
-        body = f"## 问题、前置条件与执行步骤\n\n{source_body}"
-    elif platform_key == "51cto":
-        body = f"## 企业 IT 治理清单\n\n{source_body}"
+    if platform_key in PLATFORM_SECTION_HEADINGS:
+        body = f"## {PLATFORM_SECTION_HEADINGS[platform_key]}\n\n{source_body}"
     elif platform_key == "wechat":
         body = f"{source_body}\n\n> 本文依据已归档的真实观测与公开来源整理。"
     elif platform_key == "xiaohongshu":

@@ -18,11 +18,13 @@ from sqlalchemy.orm import Session
 from app.api.deps import WRITE_ROLES, assert_company_access, get_current_user, require_roles
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.models import Company, LLMProvider, LLMProviderTestRun, Project, QueueJob
+from app.models import AuditLog, Company, LLMProvider, LLMProviderTestRun, Project, QueueJob
 from app.models.cleanroom_v1 import (
+    GeoActionCompletionEvidence,
     GeoActionEvent,
     GeoActionOpportunity,
     GeoActionOpportunityEvidence,
+    GeoActionTarget,
     GeoAgentArtifact,
     GeoAgentEvent,
     GeoAgentRun,
@@ -45,6 +47,7 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoQuestionReview,
     GeoReobservation,
+    GeoReobservationTarget,
     GeoSamplingBatch,
     GeoSamplingSample,
     GeoScorecard,
@@ -95,6 +98,8 @@ from app.v1.schemas import (
     ContentLibraryItemRead,
     ContentReviewPackageRead,
     ContentGenerateRequest,
+    ArticleAssistantClientResults,
+    ArticleAssistantTaskRead,
     DistributionRunCreate,
     DistributionClientResults,
     DistributionRunRead,
@@ -113,6 +118,7 @@ from app.v1.schemas import (
     QuestionPlanRead,
     QuestionPlanUpdate,
     QuestionReviewRead,
+    QueueWorkerRepairRead,
     QueueWorkerStatusRead,
     OfficialApiObservationBatchCreate,
     OfficialApiObservationBatchListRead,
@@ -163,7 +169,7 @@ from app.v1.scoring import SCORING_VERSION, audit_content_snapshot, score_eviden
 from app.v1.source_map import build_source_map
 from app.v1.question_analysis import build_question_analysis
 from app.v1.yao_adapter import normalize_yao_stage1_dataset
-from app.v1.action_opportunities import valid_action_evidence
+from app.v1.action_opportunities import WEBSITE_RULE_VERSION, valid_action_evidence
 from app.v1.agent_errors import public_agent_error
 from app.v1.opportunity_agent import (
     AGENT_RULE_VERSION,
@@ -176,6 +182,18 @@ from app.v1.website_gap_agent import (
     load_skill_contract,
 )
 from app.v1.action_retests import build_batch_metrics, compare_batches
+from app.v1.action_workflow import (
+    action_approvals as v2_action_approvals,
+    action_payload as v2_action_payload,
+    classify_opportunity as classify_action_opportunity,
+    create_opportunity_targets,
+    is_past as v2_is_past,
+    opportunity_scope_fields,
+    synchronize_article_action_targets as v2_synchronize_article_action_targets,
+    target_is_final as v2_target_is_final,
+)
+from app.v1.action_workflow_schemas import ActionRetestCreate
+from app.v1.results_roi import default_measurement_plan, derive_action_outcome
 from app.v1.brand_facts import (
     BRAND_FACT_CANDIDATES_DISCOVERED_ACTION,
     BRAND_FACT_VERIFICATION_ACTION,
@@ -221,10 +239,23 @@ from app.services.workspace_secrets import (
     secret_status,
     set_workspace_secret,
 )
-from app.services.workspace_access import add_membership, require_workspace_access
+from app.services.workspace_access import (
+    add_membership,
+    require_workspace_access,
+    require_workspace_manager,
+)
+from app.services.job_queue import recover_orphaned_jobs
 from app.services.worker_heartbeat import (
     get_workspace_worker_status,
     workspace_worker_is_online,
+)
+from app.services.worker_service import (
+    inspect_managed_worker_service,
+    repair_managed_worker_service,
+)
+from app.v1.observation_alert_routes import (
+    process_observation_schedules,
+    retry_worker_interrupted_schedule_runs,
 )
 
 
@@ -1226,7 +1257,106 @@ def get_queue_worker_status(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    return get_workspace_worker_status(db, workspace_id)
+    status = get_workspace_worker_status(db, workspace_id)
+    status["managed_service"] = inspect_managed_worker_service().as_dict()
+    last_repair = db.scalar(
+        select(AuditLog)
+        .where(
+            AuditLog.action == "queue_worker.repair",
+            AuditLog.resource_type == "geo_workspace",
+            AuditLog.resource_id == workspace_id,
+        )
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(1)
+    )
+    status["last_repair"] = (
+        {
+            **dict(last_repair.detail_json or {}),
+            "repaired_at": last_repair.created_at,
+        }
+        if last_repair is not None
+        else None
+    )
+    return status
+
+
+@router.post(
+    "/workspaces/{workspace_id}/queue-worker-repair",
+    response_model=QueueWorkerRepairRead,
+)
+def repair_queue_worker(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace, _membership = require_workspace_manager(db, user, workspace_id)
+    service_result = repair_managed_worker_service()
+    recovery = recover_orphaned_jobs(db, workspace_id=workspace_id)
+    schedule_retries = (
+        retry_worker_interrupted_schedule_runs(
+            db,
+            workspace_id=workspace_id,
+            actor=user,
+        )
+        if service_result.status.running
+        else {"retried": 0, "failed": 0, "skipped_scope_changed": 0}
+    )
+    schedules = process_observation_schedules(db, workspace_id=workspace_id)
+    worker = get_workspace_worker_status(db, workspace_id)
+    worker["managed_service"] = service_result.status.as_dict()
+    worker["last_repair"] = None
+
+    if worker["online"] and service_result.status.running:
+        status = "online"
+        message = "Worker 已恢复在线，符合条件的中断任务和到期计划已完成检查。"
+    elif service_result.action == "unsupported":
+        status = "unsupported"
+        message = "当前部署方式不由 macOS 常驻服务管理，已完成队列状态检查。"
+    elif service_result.action in {"failed", "repository_conflict"}:
+        status = "needs_attention"
+        message = service_result.message
+    else:
+        status = "recovering"
+        message = "系统已发起 Worker 恢复，心跳可能需要数秒后显示在线。"
+
+    repair_summary = {
+        "status": status,
+        "action": service_result.action,
+        "recovered_jobs": recovery["recovered"],
+        "exhausted_jobs": recovery["failed"],
+        "schedules_dispatched": schedules["dispatched"],
+        "schedules_failed": schedules["failed"],
+        "schedule_retries": schedule_retries["retried"],
+        "schedule_retry_failures": schedule_retries["failed"],
+        "message": message,
+    }
+    record_audit_log(
+        db,
+        user=user,
+        action="queue_worker.repair",
+        resource_type="geo_workspace",
+        resource_id=workspace_id,
+        company_id=workspace.company_id,
+        detail=repair_summary,
+    )
+    db.commit()
+    worker["last_repair"] = {
+        **repair_summary,
+        "repaired_at": datetime.now(timezone.utc),
+    }
+    return {
+        "status": status,
+        "service_action": service_result.action,
+        "managed_service": service_result.status.as_dict(),
+        "recovered_jobs": recovery["recovered"],
+        "exhausted_jobs": recovery["failed"],
+        "schedules_dispatched": schedules["dispatched"],
+        "schedules_failed": schedules["failed"],
+        "schedule_retries": schedule_retries["retried"],
+        "schedule_retry_failures": schedule_retries["failed"],
+        "worker": worker,
+        "message": message,
+    }
 
 
 @router.post("/workspaces", response_model=WorkspaceRead, status_code=201)
@@ -1465,11 +1595,15 @@ def read_question_library(
     stage: str | None = Query(default=None, max_length=40),
     role: str | None = Query(default=None, max_length=60),
     topic: str | None = Query(default=None, max_length=80),
+    question_plan_ids: list[int] | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     workspace = workspace_or_404(db, user, workspace_id)
     query = select(GeoQuestionPlan).where(GeoQuestionPlan.workspace_id == workspace_id)
+    selected_question_ids = sorted(set(value for value in (question_plan_ids or []) if value > 0))
+    if selected_question_ids:
+        query = query.where(GeoQuestionPlan.id.in_(selected_question_ids))
     if status and status in QUESTION_STATUSES:
         query = query.where(GeoQuestionPlan.status == status)
     if stage and stage in QUESTION_STAGES:
@@ -3227,14 +3361,47 @@ def get_source_map(
     date_to: datetime | None = Query(default=None),
     model_key: str | None = Query(default=None, min_length=1, max_length=120),
     question_plan_id: int | None = Query(default=None, ge=1),
+    model_keys: list[str] | None = Query(default=None),
+    question_plan_ids: list[int] | None = Query(default=None),
+    batch_ids: list[int] | None = Query(default=None),
     limit: int = Query(default=12, ge=1, le=50),
     evidence_limit: int = Query(default=12, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     workspace = workspace_or_404(db, user, workspace_id)
-    if question_plan_id is not None:
-        scoped_or_404(db, GeoQuestionPlan, workspace_id, question_plan_id)
+    selected_models = sorted(set(value.strip() for value in (model_keys or []) if value.strip()))
+    if model_key and model_key.strip() not in selected_models:
+        selected_models.append(model_key.strip())
+    selected_questions = sorted(set(value for value in (question_plan_ids or []) if value > 0))
+    if question_plan_id is not None and question_plan_id not in selected_questions:
+        selected_questions.append(question_plan_id)
+    selected_batches = sorted(set(value for value in (batch_ids or []) if value > 0))
+    for selected_question in selected_questions:
+        scoped_or_404(db, GeoQuestionPlan, workspace_id, selected_question)
+    batch_evidence_ids: set[int] | None = None
+    if selected_batches:
+        valid_batch_count = int(
+            db.scalar(
+                select(func.count(GeoObservationBatch.id)).where(
+                    GeoObservationBatch.workspace_id == workspace_id,
+                    GeoObservationBatch.id.in_(selected_batches),
+                )
+            )
+            or 0
+        )
+        if valid_batch_count != len(selected_batches):
+            raise HTTPException(status_code=404, detail="Observation batch not found")
+        batch_evidence_ids = {
+            int(value)
+            for value in db.scalars(
+                select(GeoObservationTask.evidence_id).where(
+                    GeoObservationTask.workspace_id == workspace_id,
+                    GeoObservationTask.batch_id.in_(selected_batches),
+                    GeoObservationTask.evidence_id.is_not(None),
+                )
+            )
+        }
 
     effective_to = date_to or datetime.now(timezone.utc)
     effective_from = date_from
@@ -3252,10 +3419,12 @@ def get_source_map(
         scoped_query = scoped_query.where(GeoEvidence.captured_at >= effective_from)
     if effective_to is not None:
         scoped_query = scoped_query.where(GeoEvidence.captured_at <= effective_to)
-    if model_key:
-        scoped_query = scoped_query.where(GeoEvidence.model_key == model_key.strip())
-    if question_plan_id is not None:
-        scoped_query = scoped_query.where(GeoEvidence.question_plan_id == question_plan_id)
+    if selected_models:
+        scoped_query = scoped_query.where(GeoEvidence.model_key.in_(selected_models))
+    if selected_questions:
+        scoped_query = scoped_query.where(GeoEvidence.question_plan_id.in_(selected_questions))
+    if batch_evidence_ids is not None:
+        scoped_query = scoped_query.where(GeoEvidence.id.in_(batch_evidence_ids))
     scoped_rows = list(
         db.scalars(scoped_query.order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc()))
     )
@@ -3291,8 +3460,11 @@ def get_source_map(
             "date_from": effective_from,
             "date_to": effective_to,
             "period_days": period_days if date_from is None else None,
-            "model_key": model_key.strip() if model_key else None,
-            "question_plan_id": question_plan_id,
+            "model_key": selected_models[0] if len(selected_models) == 1 else None,
+            "model_keys": selected_models,
+            "question_plan_id": selected_questions[0] if len(selected_questions) == 1 else None,
+            "question_plan_ids": selected_questions,
+            "batch_ids": selected_batches,
             "real_provider_evidence_only": True,
         },
         **aggregates,
@@ -3318,13 +3490,29 @@ def get_competitor_comparison(
     date_to: datetime | None = Query(default=None),
     model_key: str | None = Query(default=None, min_length=1, max_length=120),
     question_plan_id: int | None = Query(default=None, ge=1),
+    model_keys: list[str] | None = Query(default=None),
+    question_plan_ids: list[int] | None = Query(default=None),
+    batch_ids: list[int] | None = Query(default=None),
     evidence_limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     workspace = workspace_or_404(db, user, workspace_id)
-    if question_plan_id is not None:
-        scoped_or_404(db, GeoQuestionPlan, workspace_id, question_plan_id)
+    selected_models = sorted(set(value.strip() for value in (model_keys or []) if value.strip()))
+    if model_key and model_key.strip() not in selected_models:
+        selected_models.append(model_key.strip())
+    selected_questions = sorted(set(value for value in (question_plan_ids or []) if value > 0))
+    if question_plan_id is not None and question_plan_id not in selected_questions:
+        selected_questions.append(question_plan_id)
+    selected_batches = sorted(set(value for value in (batch_ids or []) if value > 0))
+    for selected_question in selected_questions:
+        scoped_or_404(db, GeoQuestionPlan, workspace_id, selected_question)
+    batch_evidence_ids: set[int] | None = None
+    if selected_batches:
+        valid_batch_count = int(db.scalar(select(func.count(GeoObservationBatch.id)).where(GeoObservationBatch.workspace_id == workspace_id, GeoObservationBatch.id.in_(selected_batches))) or 0)
+        if valid_batch_count != len(selected_batches):
+            raise HTTPException(status_code=404, detail="Observation batch not found")
+        batch_evidence_ids = {int(value) for value in db.scalars(select(GeoObservationTask.evidence_id).where(GeoObservationTask.workspace_id == workspace_id, GeoObservationTask.batch_id.in_(selected_batches), GeoObservationTask.evidence_id.is_not(None)))}
 
     effective_to = date_to or datetime.now(timezone.utc)
     effective_from = date_from
@@ -3342,10 +3530,12 @@ def get_competitor_comparison(
         scoped_query = scoped_query.where(GeoEvidence.captured_at >= effective_from)
     if effective_to is not None:
         scoped_query = scoped_query.where(GeoEvidence.captured_at <= effective_to)
-    if model_key:
-        scoped_query = scoped_query.where(GeoEvidence.model_key == model_key.strip())
-    if question_plan_id is not None:
-        scoped_query = scoped_query.where(GeoEvidence.question_plan_id == question_plan_id)
+    if selected_models:
+        scoped_query = scoped_query.where(GeoEvidence.model_key.in_(selected_models))
+    if selected_questions:
+        scoped_query = scoped_query.where(GeoEvidence.question_plan_id.in_(selected_questions))
+    if batch_evidence_ids is not None:
+        scoped_query = scoped_query.where(GeoEvidence.id.in_(batch_evidence_ids))
     scoped_rows = list(
         db.scalars(scoped_query.order_by(GeoEvidence.captured_at.desc(), GeoEvidence.id.desc()))
     )
@@ -3384,8 +3574,11 @@ def get_competitor_comparison(
             "date_from": effective_from,
             "date_to": effective_to,
             "period_days": period_days if date_from is None else None,
-            "model_key": model_key.strip() if model_key else None,
-            "question_plan_id": question_plan_id,
+            "model_key": selected_models[0] if len(selected_models) == 1 else None,
+            "model_keys": selected_models,
+            "question_plan_id": selected_questions[0] if len(selected_questions) == 1 else None,
+            "question_plan_ids": selected_questions,
+            "batch_ids": selected_batches,
             "real_provider_evidence_only": True,
         },
         **comparison,
@@ -3684,8 +3877,11 @@ def get_decision_map(
     workspace_id: int,
     period_days: int = Query(30, ge=1, le=3650),
     model_key: str | None = Query(default=None, min_length=1, max_length=40),
+    model_keys: list[str] | None = Query(default=None),
     scope: str = Query("high", pattern=r"^(all|high)$"),
     batch_id: int | None = Query(default=None, ge=1),
+    batch_ids: list[int] | None = Query(default=None),
+    question_plan_ids: list[int] | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -3697,6 +3893,21 @@ def get_decision_map(
         scope = "high"
     if not isinstance(model_key, str) or not model_key.strip():
         model_key = None
+    if not isinstance(model_keys, (list, tuple)):
+        model_keys = []
+    if not isinstance(batch_id, int):
+        batch_id = None
+    if not isinstance(batch_ids, (list, tuple)):
+        batch_ids = []
+    if not isinstance(question_plan_ids, (list, tuple)):
+        question_plan_ids = []
+    selected_models = sorted(set(value.strip() for value in (model_keys or []) if value.strip()))
+    if model_key and model_key not in selected_models:
+        selected_models.append(model_key)
+    selected_batches = sorted(set(value for value in (batch_ids or []) if value > 0))
+    if batch_id is not None and batch_id not in selected_batches:
+        selected_batches.append(batch_id)
+    selected_questions = sorted(set(value for value in (question_plan_ids or []) if value > 0))
     workspace = workspace_or_404(db, user, workspace_id)
     questions = list(
         db.scalars(
@@ -3709,6 +3920,11 @@ def get_decision_map(
             .order_by(GeoQuestionPlan.importance.desc(), GeoQuestionPlan.id)
         )
     )
+    if selected_questions:
+        available_question_ids = {question.id for question in questions}
+        if any(value not in available_question_ids for value in selected_questions):
+            raise HTTPException(status_code=404, detail="Question not found")
+        questions = [question for question in questions if question.id in selected_questions]
     all_evidence_rows = list(
         db.scalars(
             select(GeoEvidence)
@@ -3717,17 +3933,19 @@ def get_decision_map(
         )
     )
     measurement_batch: GeoObservationBatch | None = None
+    measurement_batches: list[GeoObservationBatch] = []
     measurement_evidence_ids: set[int] | None = None
-    if batch_id is not None:
-        measurement_batch = db.get(GeoObservationBatch, batch_id)
-        if measurement_batch is None or measurement_batch.workspace_id != workspace_id:
+    if selected_batches:
+        measurement_batches = list(db.scalars(select(GeoObservationBatch).where(GeoObservationBatch.workspace_id == workspace_id, GeoObservationBatch.id.in_(selected_batches))))
+        if len(measurement_batches) != len(selected_batches):
             raise HTTPException(status_code=404, detail="Observation batch not found")
+        measurement_batch = max(measurement_batches, key=lambda item: item.id)
         measurement_evidence_ids = {
             int(value)
             for value in db.scalars(
                 select(GeoObservationTask.evidence_id).where(
                     GeoObservationTask.workspace_id == workspace_id,
-                    GeoObservationTask.batch_id == measurement_batch.id,
+                    GeoObservationTask.batch_id.in_(selected_batches),
                     GeoObservationTask.evidence_id.is_not(None),
                 )
             )
@@ -3752,7 +3970,7 @@ def get_decision_map(
         and evidence.is_real_provider_evidence
         and (measurement_evidence_ids is None or evidence.id in measurement_evidence_ids)
         and is_recent(evidence.captured_at)
-        and (model_key is None or evidence.model_key == model_key)
+        and (not selected_models or evidence.model_key in selected_models)
     ]
     if scope == "high":
         high_importance = {plan.id for plan in questions if plan.importance >= 4}
@@ -3765,7 +3983,11 @@ def get_decision_map(
     # V1 has one stable decision-map column per supported official platform.
     # Historic/experimental providers remain in the evidence archive, but must
     # not add columns or rename the product surface (for example "聚合 API").
-    models = [{"key": key, "label": label} for key, label in STANDARD_MODELS]
+    models = [
+        {"key": key, "label": label}
+        for key, label in STANDARD_MODELS
+        if not selected_models or key in selected_models or (key == "qianwen" and "qwen" in selected_models)
+    ]
     cells = [
         {
             "question_plan_id": plan.id,
@@ -3801,10 +4023,13 @@ def get_decision_map(
         "metric_scope": {
             "period_days": period_days,
             "batch_id": measurement_batch.id if measurement_batch else None,
+            "batch_ids": selected_batches,
             "batch_created_at": measurement_batch.created_at if measurement_batch else None,
             "batch_finished_at": measurement_batch.completed_at if measurement_batch else None,
-            "measurement_basis": "single_batch" if measurement_batch else "historical_period",
-            "model_key": model_key,
+            "measurement_basis": "multi_batch" if len(selected_batches) > 1 else "single_batch" if measurement_batch else "historical_period",
+            "model_key": selected_models[0] if len(selected_models) == 1 else None,
+            "model_keys": selected_models,
+            "question_plan_ids": selected_questions,
             "scope": scope,
             "collection_method": "official_api_web_search",
             "last_observed_at": metric_evidence_rows[0].captured_at
@@ -4411,21 +4636,30 @@ def list_action_opportunities(
     batch_id: int | None = Query(default=None, ge=1),
     model_key: str | None = Query(default=None, min_length=1, max_length=120),
     question_plan_id: int | None = Query(default=None, ge=1),
+    action_id: int | None = Query(default=None, ge=1),
     include_legacy: bool = Query(default=True),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
+    # Direct service calls in tests and workers do not run FastAPI's Query
+    # coercion, so normalize its default sentinel before using it as an id.
+    if not isinstance(action_id, int):
+        action_id = None
+    focus_opportunity = None
+    if action_id is not None:
+        focus_action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+        if focus_action.opportunity_id:
+            focus_opportunity = db.get(GeoActionOpportunity, focus_action.opportunity_id)
+
     query = select(GeoActionOpportunity).where(
         GeoActionOpportunity.workspace_id == workspace_id,
-        GeoActionOpportunity.opportunity_type.notin_(
-            ("website_scope_gap", "website_citation_readiness")
-        ),
+        GeoActionOpportunity.opportunity_type != "website_scope_gap",
     )
     if not include_legacy:
         query = query.where(
             GeoActionOpportunity.rule_version.in_(
-                [AGENT_RULE_VERSION, WEBSITE_GAP_RULE_VERSION]
+                [AGENT_RULE_VERSION, WEBSITE_GAP_RULE_VERSION, WEBSITE_RULE_VERSION]
             )
         )
     if status:
@@ -4439,11 +4673,16 @@ def list_action_opportunities(
             )
         )
     )
+    # Website citation readiness is an audit finding rather than a model-batch
+    # recommendation.  It remains visible under the unfiltered "all" view.
+    if model_key or question_plan_id is not None:
+        rows = [row for row in rows if row.opportunity_type != "website_citation_readiness"]
     if batch_id is not None:
         rows = [
             row
             for row in rows
-            if int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
+            if row.opportunity_type == "website_citation_readiness"
+            or int((row.scope_snapshot or {}).get("batch_id") or 0) == batch_id
         ]
     if model_key:
         rows = [
@@ -4458,6 +4697,8 @@ def list_action_opportunities(
             if int((row.scope_snapshot or {}).get("question_plan_id") or 0)
             == question_plan_id
         ]
+    if focus_opportunity is not None and all(row.id != focus_opportunity.id for row in rows):
+        rows.insert(0, focus_opportunity)
     return [_opportunity_read(db, opportunity) for opportunity in rows]
 
 
@@ -4508,6 +4749,10 @@ def select_action_opportunity(
                 "finding_codes": opportunity.scope_snapshot.get("finding_codes", []),
             }
         )
+    action_type, deliverable_type = classify_action_opportunity(opportunity)
+    affected_question_ids, affected_model_keys, scope_fingerprint = opportunity_scope_fields(
+        db, opportunity
+    )
     action = GeoOptimizationAction(
         workspace_id=workspace_id,
         opportunity_id=opportunity.id,
@@ -4525,11 +4770,19 @@ def select_action_opportunity(
         stage="selected",
         baseline_snapshot=opportunity.scope_snapshot,
         selected_scope=selected_scope,
+        action_type=action_type,
+        deliverable_type=deliverable_type,
+        workflow_version="action-flow.v2",
+        affected_question_ids=affected_question_ids,
+        affected_model_keys=affected_model_keys,
+        scope_fingerprint=scope_fingerprint,
+        measurement_status="not_eligible",
         selected_at=datetime.now(timezone.utc),
     )
     opportunity.status = "selected"
     db.add(action)
     db.flush()
+    action_targets = create_opportunity_targets(db, action, opportunity)
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -4544,6 +4797,9 @@ def select_action_opportunity(
                 "source_type": selected_scope["source_type"],
                 "evidence_ids": selected_scope["evidence_ids"],
                 "website_audit_id": selected_scope.get("website_audit_id"),
+                "action_type": action.action_type,
+                "deliverable_type": action.deliverable_type,
+                "target_ids": [target.id for target in action_targets],
             },
         )
     )
@@ -4945,6 +5201,13 @@ def _content_review_package(
             .order_by(GeoContentReview.id.desc())
         )
     )
+    reviewer_ids = {review.reviewer_id for review in reviews if review.reviewer_id is not None}
+    reviewer_names = {
+        reviewer.id: reviewer.name
+        for reviewer in db.scalars(select(User).where(User.id.in_(reviewer_ids or {-1})))
+    }
+    for review in reviews:
+        review.reviewer_name = reviewer_names.get(review.reviewer_id)
     approved_variant_ids = {
         review.subject_id
         for review in reviews
@@ -5192,8 +5455,6 @@ def decide_content_review(
             status_code=409,
             detail="This version was already rejected; generate a revised version before reviewing again",
         )
-    if asset.status == "approved":
-        raise HTTPException(status_code=409, detail="This content version was already approved")
     platform_keys = list(dict.fromkeys(payload.platform_keys))
     reviewed_platform_keys = list(dict.fromkeys(payload.reviewed_platform_keys))
     missing_platforms = [key for key in platform_keys if key not in variants_by_key]
@@ -5262,6 +5523,11 @@ def decide_content_review(
             status_code=422,
             detail="A claim cannot be both confirmed and kept unverified",
         )
+    if payload.verdict == "approved" and unverified_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="未核验主张不能随稿批准；请退回并生成删除或补证后的新版本",
+        )
     reviewed_ids = confirmed_ids | unverified_ids
     invalid_ids = reviewed_ids - unresolved_ids
     if payload.verdict == "approved" and invalid_ids:
@@ -5285,10 +5551,18 @@ def decide_content_review(
             if claim.id in confirmed_ids:
                 claim.verification_status = "human_confirmed"
                 claim.review_note = note or "人工审核时明确确认"
-            elif claim.id in unverified_ids:
-                claim.verification_status = "explicitly_unverified"
-                claim.review_note = "人工审核明确保留为未核验；所选稿件不得将其作为已证实事实"
-        asset.status = "approved"
+        approved_variant_ids = {
+            review.subject_id
+            for review in db.scalars(
+                select(GeoContentReview).where(
+                    GeoContentReview.workspace_id == workspace_id,
+                    GeoContentReview.subject_type == "platform_variant",
+                    GeoContentReview.verdict == "approved",
+                )
+            )
+        }
+        approved_variant_ids.update(variants_by_key[key].id for key in platform_keys)
+        asset.status = "approved" if all(variant.id in approved_variant_ids for variant in variants) else "draft"
     else:
         asset.status = "changes_requested"
 
@@ -5314,6 +5588,18 @@ def decide_content_review(
     for platform_key in platform_keys:
         variant = variants_by_key[platform_key]
         variant.status = payload.verdict
+        if variant.image_manifest:
+            variant.image_manifest = [
+                {
+                    **item,
+                    "review_status": (
+                        "approved" if payload.verdict == "approved" else "changes_requested"
+                    ),
+                    "reviewed_by_user_id": user.id,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                }
+                for item in variant.image_manifest
+            ]
         db.add(
             GeoContentReview(
                 workspace_id=workspace_id,
@@ -5350,6 +5636,13 @@ def decide_content_review(
                 "unverified_claim_count": len(unverified_ids & unresolved_ids),
             },
         )
+    )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        action,
+        actor_user_id=user.id,
+        trigger="content_review_decided",
     )
     db.commit()
     db.refresh(asset)
@@ -5440,7 +5733,7 @@ def update_platform_variant(
             GeoContentReview.verdict == "approved",
         )
     )
-    if started_distribution or approved_review or asset.status == "approved":
+    if started_distribution or approved_review:
         raise HTTPException(
             status_code=409,
             detail="Approved or distributed drafts cannot be edited; generate a new version instead",
@@ -5455,6 +5748,15 @@ def update_platform_variant(
     }
     if not all(normalized[key] for key in ("title", "summary", "body_markdown")):
         raise HTTPException(status_code=422, detail="Title, summary, and body are required")
+
+    if any(
+        normalized[key] != getattr(variant, key)
+        for key in ("title", "summary", "body_markdown")
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="平台正文不能在审核外直接改写；请退回并生成可重新核验的新版本",
+        )
 
     previous_fingerprint = variant.content_fingerprint
     content_fingerprint = sha256(
@@ -5517,6 +5819,103 @@ def _distribution_read(db: Session, run: GeoDistributionRun) -> dict:
     return {"id": run.id, "targets": targets, **run.__dict__}
 
 
+def _synchronize_article_action_truth(
+    db: Session,
+    action: GeoOptimizationAction | None,
+    *,
+    actor_user_id: int | None,
+    trigger: str,
+) -> list[dict]:
+    """Keep the action-target projection aligned with durable content evidence."""
+
+    if action is None:
+        return []
+    previous_stage = action.stage
+    changes = v2_synchronize_article_action_targets(db, action)
+    if changes:
+        db.add(
+            GeoActionEvent(
+                workspace_id=action.workspace_id,
+                action_id=action.id,
+                event_type="action_target_truth_synchronized",
+                from_stage=previous_stage,
+                to_stage=action.stage,
+                actor_type="system",
+                actor_user_id=actor_user_id,
+                detail={"trigger": trigger, "changes": changes},
+            )
+        )
+    return changes
+
+
+def _record_verified_distribution_publication(
+    db: Session,
+    *,
+    run: GeoDistributionRun,
+    distribution_target: GeoDistributionTarget,
+    public_url: str,
+    verification: dict,
+    user_id: int,
+) -> GeoActionCompletionEvidence | None:
+    """Bridge a verified public distribution result into the action evidence ledger."""
+
+    if not run.action_id:
+        return None
+    action_target = db.scalar(
+        select(GeoActionTarget).where(
+            GeoActionTarget.action_id == run.action_id,
+            GeoActionTarget.target_type == "platform",
+            GeoActionTarget.platform_key == distribution_target.platform_key,
+        )
+    )
+    if action_target is None:
+        return None
+    idempotency_key = f"distribution-publication:{run.id}:{distribution_target.id}"
+    existing = db.scalar(
+        select(GeoActionCompletionEvidence).where(
+            GeoActionCompletionEvidence.workspace_id == run.workspace_id,
+            GeoActionCompletionEvidence.idempotency_key == idempotency_key,
+        )
+    )
+    if existing is not None:
+        return existing
+    observed_sha = str(verification.get("sha256") or "")
+    if len(observed_sha) != 64:
+        observed_sha = sha256(
+            json.dumps(verification, ensure_ascii=False, sort_keys=True).encode()
+        ).hexdigest()
+    now = datetime.now(timezone.utc)
+    evidence = GeoActionCompletionEvidence(
+        workspace_id=run.workspace_id,
+        action_id=run.action_id,
+        target_id=action_target.id,
+        evidence_type="public_url",
+        source_url=public_url,
+        artifact_uri=None,
+        sha256=observed_sha,
+        verification_status="verified",
+        detail={
+            "source": "distribution_human_publication",
+            "distribution_run_id": run.id,
+            "distribution_target_id": distribution_target.id,
+            "verification": verification,
+            "final_action_clicked": False,
+        },
+        submitted_by_user_id=user_id,
+        verified_by_user_id=user_id,
+        submitted_at=now,
+        verified_at=now,
+        supersedes_evidence_id=None,
+        idempotency_key=idempotency_key,
+    )
+    db.add(evidence)
+    db.flush()
+    action_target.verified_at = now
+    action_target.completed_at = now
+    action_target.completed_by_user_id = user_id
+    return evidence
+
+
 @router.get(
     "/workspaces/{workspace_id}/distribution-runs",
     response_model=list[DistributionRunRead],
@@ -5548,8 +5947,6 @@ def create_distribution_run(
 ):
     workspace_or_404(db, user, workspace_id)
     asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
-    if asset.status != "approved":
-        raise HTTPException(status_code=409, detail="Content asset must pass human review before sync")
     platform_keys = list(dict.fromkeys(payload.platform_keys))
     if "official_site" in platform_keys and platform_keys != ["official_site"]:
         raise HTTPException(status_code=422, detail="官网人工交付必须建立独立任务")
@@ -5627,7 +6024,7 @@ def create_distribution_run(
                     request_status="not_started",
                     draft_readback_status="not_started",
                     human_publish_status="not_ready",
-                    waiting_human_reason="等待用户在当前浏览器中打开文章同步助手并确认写入。",
+                    waiting_human_reason="等待用户在当前浏览器中打开 GEO 文章助手并确认写入。",
                 )
             )
         existing_client_run.requested_platforms = list(
@@ -5666,6 +6063,13 @@ def create_distribution_run(
                     },
                 )
             )
+        db.flush()
+        _synchronize_article_action_truth(
+            db,
+            action,
+            actor_user_id=user.id,
+            trigger="distribution_targets_extended",
+        )
         db.commit()
         db.refresh(existing_client_run)
         return _distribution_read(db, existing_client_run)
@@ -5695,7 +6099,7 @@ def create_distribution_run(
                 waiting_human_reason=(
                     "官网稿已通过审核并建立交付记录；等待网站负责人部署后回填公开 URL。"
                     if is_website_handoff
-                    else "等待用户在当前浏览器中打开文章同步助手并确认写入。"
+                    else "等待用户在当前浏览器中打开 GEO 文章助手并确认写入。"
                 ),
             )
         )
@@ -5724,9 +6128,262 @@ def create_distribution_run(
                 },
             )
         )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        action,
+        actor_user_id=user.id,
+        trigger="distribution_run_created",
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)
+
+
+ARTICLE_ASSISTANT_PROTOCOL = "geo-article-assistant.v1"
+ARTICLE_ASSISTANT_TASK_TTL = timedelta(minutes=10)
+ARTICLE_ASSISTANT_PLATFORMS = {
+    "wechat", "zhihu", "juejin", "51cto", "csdn", "bilibili", "baijiahao",
+    "weibo", "yuque", "douban", "sohu", "xueqiu", "cnblogs", "oschina",
+    "segmentfault", "imooc", "woshipm", "eastmoney",
+}
+
+
+def _article_assistant_task_targets(
+    db: Session, run: GeoDistributionRun
+) -> tuple[list[dict], str]:
+    if not run.content_asset_id:
+        raise HTTPException(status_code=409, detail="当前任务没有可写入的已审核内容")
+    targets = list(
+        db.scalars(
+            select(GeoDistributionTarget)
+            .where(GeoDistributionTarget.distribution_run_id == run.id)
+            .order_by(GeoDistributionTarget.id)
+        )
+    )
+    task_targets: list[dict] = []
+    for target in targets:
+        if target.platform_key not in ARTICLE_ASSISTANT_PLATFORMS:
+            continue
+        if target.draft_readback_status in {"draft_saved", "awaiting_human_confirmation"}:
+            continue
+        variant = db.get(GeoPlatformVariant, target.platform_variant_id)
+        if (
+            variant is None
+            or variant.workspace_id != run.workspace_id
+            or variant.content_asset_id != run.content_asset_id
+            or variant.platform_key != target.platform_key
+            or variant.status != "approved"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=f"{target.platform_key} 平台稿不再是已审核版本，请重新审核",
+            )
+        task_targets.append(
+            {
+                "target_id": target.id,
+                "platform_key": target.platform_key,
+                "platform_variant_id": variant.id,
+                "title": variant.title,
+                "summary": variant.summary,
+                "body_markdown": variant.body_markdown,
+                "tags": list(variant.tags or []),
+                "category": variant.category,
+                "image_manifest": list(variant.image_manifest or []),
+                "content_fingerprint": variant.content_fingerprint,
+            }
+        )
+    if not task_targets:
+        raise HTTPException(status_code=409, detail="当前没有需要写入的已审核平台稿")
+    fingerprint_payload = [
+        {
+            "platform_key": item["platform_key"],
+            "platform_variant_id": item["platform_variant_id"],
+            "content_fingerprint": item["content_fingerprint"],
+            "media": [
+                {
+                    "artifact_id": media.get("artifact_id"),
+                    "sha256": media.get("sha256"),
+                    "review_status": media.get("review_status"),
+                    "placement": media.get("placement"),
+                    "caption": media.get("caption"),
+                }
+                for media in item.get("image_manifest") or []
+            ],
+        }
+        for item in task_targets
+    ]
+    fingerprint = sha256(
+        json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return task_targets, fingerprint
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/assistant-task",
+    response_model=ArticleAssistantTaskRead,
+)
+def issue_article_assistant_task(
+    workspace_id: int,
+    run_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    task_targets, content_fingerprint = _article_assistant_task_targets(db, run)
+    issued_at = datetime.now(timezone.utc)
+    expires_at = issued_at + ARTICLE_ASSISTANT_TASK_TTL
+    task_token = secrets.token_urlsafe(32)
+    run.assistant_protocol_version = ARTICLE_ASSISTANT_PROTOCOL
+    run.assistant_task_nonce_hash = sha256(task_token.encode()).hexdigest()
+    run.assistant_task_expires_at = expires_at
+    run.assistant_content_fingerprint = content_fingerprint
+    run.assistant_task_issued_at = issued_at
+    run.assistant_operator_user_id = user.id
+    db.add(
+        GeoActionEvent(
+            workspace_id=workspace_id,
+            action_id=run.action_id,
+            event_type="geo_article_assistant_task_issued",
+            from_stage=run.stage,
+            to_stage=run.stage,
+            actor_type="user",
+            actor_user_id=user.id,
+            detail={
+                "distribution_run_id": run.id,
+                "protocol_version": ARTICLE_ASSISTANT_PROTOCOL,
+                "content_fingerprint": content_fingerprint,
+                "platform_keys": [item["platform_key"] for item in task_targets],
+                "expires_at": expires_at.isoformat(),
+                "final_action_clicked": False,
+            },
+        )
+    )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        db.get(GeoOptimizationAction, run.action_id) if run.action_id else None,
+        actor_user_id=user.id,
+        trigger="article_assistant_task_issued",
+    )
+    db.commit()
+    # The extension receives only a short-lived, run-scoped media URL.  The
+    # browser session cookie is neither exposed to nor required by the
+    # extension, and pending/unreviewed images never get a delivery URL.
+    delivery_targets: list[dict] = []
+    for target in task_targets:
+        delivered_manifest: list[dict] = []
+        for media in target.get("image_manifest") or []:
+            delivered = dict(media)
+            artifact_id = int(delivered.get("artifact_id") or 0)
+            if (
+                artifact_id > 0
+                and delivered.get("review_status") == "approved"
+                and delivered.get("quality_gate") == "passed"
+            ):
+                delivered["content_path"] = (
+                    f"/api/geo/{workspace_id}/distribution-runs/{run.id}"
+                    f"/assistant-media/{artifact_id}?task_token={task_token}"
+                )
+            delivered_manifest.append(delivered)
+        delivery_targets.append(
+            {**target, "image_manifest": delivered_manifest}
+        )
+    return {
+        "protocol_version": ARTICLE_ASSISTANT_PROTOCOL,
+        "task_token": task_token,
+        "run_id": run.id,
+        "workspace_id": workspace_id,
+        "action_id": run.action_id,
+        "content_asset_id": run.content_asset_id,
+        "issued_at": issued_at,
+        "expires_at": expires_at,
+        "content_fingerprint": content_fingerprint,
+        "targets": delivery_targets,
+    }
+
+
+@router.get(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/assistant-media/{artifact_id}",
+    response_class=FileResponse,
+)
+def read_article_assistant_media(
+    workspace_id: int,
+    run_id: int,
+    artifact_id: int,
+    task_token: str = Query(min_length=20, max_length=200),
+    db: Session = Depends(get_db),
+):
+    """Serve one reviewed image to the local draft-only browser extension.
+
+    This deliberately uses the short-lived, one-time task credential rather
+    than the user's session cookie.  The artifact must still be referenced by
+    an approved variant in this exact distribution run.
+    """
+
+    run = db.get(GeoDistributionRun, run_id)
+    if run is None or run.workspace_id != workspace_id:
+        raise HTTPException(status_code=404, detail="Article assistant media not found")
+    if not run.assistant_task_nonce_hash or not hmac.compare_digest(
+        run.assistant_task_nonce_hash,
+        sha256(task_token.encode()).hexdigest(),
+    ):
+        raise HTTPException(status_code=403, detail="Article assistant task credential is invalid")
+    now = datetime.now(timezone.utc)
+    if not run.assistant_task_expires_at or _as_utc(run.assistant_task_expires_at) <= now:
+        raise HTTPException(status_code=410, detail="Article assistant task has expired")
+
+    artifact = db.get(GeoAgentArtifact, artifact_id)
+    if artifact is None or artifact.workspace_id != workspace_id or artifact.artifact_kind not in {
+        "official_page_screenshot",
+        "generated_article_image",
+        "licensed_web_image",
+    }:
+        raise HTTPException(status_code=404, detail="Article assistant media not found")
+    variant_ids = {
+        int(value)
+        for value in db.scalars(
+            select(GeoDistributionTarget.platform_variant_id).where(
+                GeoDistributionTarget.distribution_run_id == run.id
+            )
+        )
+        if value
+    }
+    variants = list(
+        db.scalars(
+            select(GeoPlatformVariant).where(
+                GeoPlatformVariant.id.in_(variant_ids or {-1}),
+                GeoPlatformVariant.status == "approved",
+            )
+        )
+    )
+    referenced = any(
+        int(item.get("artifact_id") or 0) == artifact.id
+        and item.get("review_status") == "approved"
+        and item.get("quality_gate") == "passed"
+        for variant in variants
+        for item in (variant.image_manifest or [])
+    )
+    if not referenced:
+        raise HTTPException(status_code=404, detail="Reviewed article media not found")
+    try:
+        root = AGENT_ARTIFACT_ROOT.resolve(strict=True)
+        artifact_path = Path(artifact.uri).resolve(strict=True)
+        artifact_path.relative_to(root)
+    except (OSError, ValueError):
+        raise HTTPException(status_code=404, detail="Article assistant media file not found") from None
+    payload = artifact_path.read_bytes()
+    if sha256(payload).hexdigest() != artifact.sha256:
+        raise HTTPException(status_code=409, detail="Article assistant media integrity check failed")
+    media_type = str((artifact.metadata_json or {}).get("media_type") or "image/png")
+    if media_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise HTTPException(status_code=409, detail="Article assistant media type is invalid")
+    return FileResponse(
+        artifact_path,
+        media_type=media_type,
+        headers={"Cache-Control": "private, no-store", "ETag": f'"{artifact.sha256}"'},
+    )
 
 
 @router.post(
@@ -5759,7 +6416,7 @@ def record_distribution_client_results(
         if target is None:
             raise HTTPException(status_code=422, detail=f"Platform is not part of this sync run: {result.platform_key}")
         if target.adapter_version == "manual-website.v1":
-            raise HTTPException(status_code=409, detail="官网人工交付不接受文章同步助手草稿结果")
+            raise HTTPException(status_code=409, detail="官网人工交付不接受 GEO 文章助手草稿结果")
         if result.request_status == "draft_link_returned":
             if not result.draft_url:
                 raise HTTPException(
@@ -5777,35 +6434,13 @@ def record_distribution_client_results(
             target.last_error_code = None
             target.human_publish_status = "not_ready"
             target.publication_verification_status = "not_checked"
-        elif result.request_status == "draft_saved":
-            if not result.draft_url and not result.external_draft_id:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"{result.platform_key} requires a draft URL or external draft ID",
-                )
-            verified_draft_url = (
-                _validated_draft_url(result.platform_key, result.draft_url)
-                if result.draft_url
-                else None
-            )
-            target.request_status = "draft_saved"
-            target.draft_readback_status = "draft_saved"
-            target.candidate_draft_url = verified_draft_url
-            target.draft_url = verified_draft_url
-            target.external_draft_id = result.external_draft_id
-            target.waiting_human_reason = "平台草稿已回读；最终发布仍等待人工确认。"
-            target.blocked_reason = None
-            target.last_error_code = None
-            if target.human_publish_status != "published":
-                target.human_publish_status = "awaiting_publish"
-                target.publication_verification_status = "not_checked"
         elif result.request_status == "failed":
             target.request_status = "failed"
             target.draft_readback_status = "failed"
             target.candidate_draft_url = None
             target.draft_url = None
             target.external_draft_id = None
-            target.blocked_reason = (result.message or "文章同步助手未能保存草稿")[:2000]
+            target.blocked_reason = (result.message or "GEO 文章助手未能保存草稿")[:2000]
             target.last_error_code = "client_sync_failed"
             target.waiting_human_reason = None
         else:
@@ -5860,9 +6495,68 @@ def record_distribution_client_results(
             },
         )
     )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        action,
+        actor_user_id=user.id,
+        trigger="distribution_client_results_recorded",
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/distribution-runs/{run_id}/assistant-results",
+    response_model=DistributionRunRead,
+)
+def record_article_assistant_results(
+    workspace_id: int,
+    run_id: int,
+    payload: ArticleAssistantClientResults,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    run = scoped_or_404(db, GeoDistributionRun, workspace_id, run_id)
+    if run.assistant_protocol_version != payload.protocol_version:
+        raise HTTPException(status_code=409, detail="GEO 文章助手协议版本不匹配，请刷新后重试")
+    if run.assistant_operator_user_id != user.id:
+        raise HTTPException(status_code=403, detail="本次草稿写入必须由发起人回传结果")
+    if not run.assistant_task_nonce_hash or not hmac.compare_digest(
+        run.assistant_task_nonce_hash, sha256(payload.task_token.encode()).hexdigest()
+    ):
+        raise HTTPException(status_code=409, detail="GEO 文章助手任务凭证无效或已使用")
+    now = datetime.now(timezone.utc)
+    if not run.assistant_task_expires_at or _as_utc(run.assistant_task_expires_at) <= now:
+        raise HTTPException(status_code=409, detail="GEO 文章助手任务已过期，请重新发起")
+    _, current_fingerprint = _article_assistant_task_targets(db, run)
+    if (
+        payload.content_fingerprint != run.assistant_content_fingerprint
+        or current_fingerprint != run.assistant_content_fingerprint
+    ):
+        raise HTTPException(status_code=409, detail="已审核内容发生变化，本次草稿写入已取消")
+    allowed_platforms = {
+        target.platform_key
+        for target in db.scalars(
+            select(GeoDistributionTarget).where(GeoDistributionTarget.distribution_run_id == run.id)
+        )
+    }
+    if any(result.platform_key not in allowed_platforms for result in payload.targets):
+        raise HTTPException(status_code=422, detail="回传结果包含本次任务之外的平台")
+
+    # One-time credential: consume it before recording the durable, auditable
+    # per-platform outcomes. Browser cookies and account tokens never enter API.
+    run.assistant_task_nonce_hash = None
+    result = record_distribution_client_results(
+        workspace_id,
+        run_id,
+        DistributionClientResults(targets=payload.targets),
+        db,
+        user,
+    )
+    return result
 
 
 def _validated_draft_url(platform_key: str, value: str) -> str:
@@ -5878,6 +6572,19 @@ def _validated_draft_url(platform_key: str, value: str) -> str:
         "csdn": "csdn.net",
         "51cto": "51cto.com",
         "wechat": "mp.weixin.qq.com",
+        "bilibili": "bilibili.com",
+        "baijiahao": "baidu.com",
+        "weibo": "weibo.com",
+        "yuque": "yuque.com",
+        "douban": "douban.com",
+        "sohu": "sohu.com",
+        "xueqiu": "xueqiu.com",
+        "cnblogs": "cnblogs.com",
+        "oschina": "oschina.net",
+        "segmentfault": "segmentfault.com",
+        "imooc": "imooc.com",
+        "woshipm": "woshipm.com",
+        "eastmoney": "eastmoney.com",
     }
     expected = expected_domains.get(platform_key)
     valid = expected is not None and (host == expected or host.endswith(f".{expected}"))
@@ -5958,6 +6665,13 @@ def confirm_human_draft_readback(
             },
         )
     )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        action,
+        actor_user_id=user.id,
+        trigger="draft_readback_human_confirmed",
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)
@@ -5976,30 +6690,38 @@ def _validated_publication_url(
     def host_matches(expected: str) -> bool:
         return host == expected or host.endswith(f".{expected}")
 
-    if platform_key == "zhihu":
-        valid = host_matches("zhihu.com")
-        expected_label = "知乎"
-    elif platform_key == "juejin":
-        valid = host_matches("juejin.cn")
-        expected_label = "稀土掘金"
-    elif platform_key == "csdn":
-        valid = host_matches("csdn.net")
-        expected_label = "CSDN"
-    elif platform_key == "51cto":
-        valid = host_matches("51cto.com")
-        expected_label = "51CTO"
-    elif platform_key == "wechat":
+    public_platforms = {
+        "zhihu": ("zhihu.com", "知乎"),
+        "juejin": ("juejin.cn", "稀土掘金"),
+        "csdn": ("csdn.net", "CSDN"),
+        "51cto": ("51cto.com", "51CTO"),
+        "bilibili": ("bilibili.com", "哔哩哔哩"),
+        "baijiahao": ("baidu.com", "百家号"),
+        "weibo": ("weibo.com", "微博"),
+        "yuque": ("yuque.com", "语雀"),
+        "douban": ("douban.com", "豆瓣"),
+        "sohu": ("sohu.com", "搜狐号"),
+        "xueqiu": ("xueqiu.com", "雪球"),
+        "cnblogs": ("cnblogs.com", "博客园"),
+        "oschina": ("oschina.net", "开源中国"),
+        "segmentfault": ("segmentfault.com", "思否"),
+        "imooc": ("imooc.com", "慕课手记"),
+        "woshipm": ("woshipm.com", "人人都是产品经理"),
+        "eastmoney": ("eastmoney.com", "东方财富"),
+        "xiaohongshu": ("xiaohongshu.com", "小红书"),
+    }
+    if platform_key == "wechat":
         valid = host == "mp.weixin.qq.com"
         expected_label = "微信公众号"
-    elif platform_key == "xiaohongshu":
-        valid = host_matches("xiaohongshu.com")
-        expected_label = "小红书"
     elif platform_key == "official_site":
         website_host = (urlsplit(workspace.website_url or "").hostname or "").lower().rstrip(".")
         if not website_host:
             raise HTTPException(status_code=422, detail="请先在设置中配置官网域名")
         valid = host == website_host or host.endswith(f".{website_host}")
         expected_label = "当前工作区官网"
+    elif platform_key in public_platforms:
+        expected_domain, expected_label = public_platforms[platform_key]
+        valid = host_matches(expected_domain)
     else:
         raise HTTPException(status_code=422, detail="当前平台尚不支持发布结果归档")
     if not valid:
@@ -6038,7 +6760,6 @@ def record_human_publication(
         if (
             asset is None
             or asset.workspace_id != workspace_id
-            or asset.status != "approved"
             or variant is None
             or variant.content_asset_id != asset.id
             or variant.status != "approved"
@@ -6115,6 +6836,20 @@ def record_human_publication(
     if action:
         action.stage = "ready_for_retest" if all_published else "awaiting_publication"
         action.blocked_reason = None
+    _record_verified_distribution_publication(
+        db,
+        run=run,
+        distribution_target=target,
+        public_url=public_url,
+        verification=verification,
+        user_id=user.id,
+    )
+    _synchronize_article_action_truth(
+        db,
+        action,
+        actor_user_id=user.id,
+        trigger="human_publication_recorded",
+    )
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -6215,6 +6950,13 @@ def request_distribution_run(
             detail={"distribution_run_id": run.id, "accepted_target_count": accepted},
         )
     )
+    db.flush()
+    _synchronize_article_action_truth(
+        db,
+        db.get(GeoOptimizationAction, run.action_id) if run.action_id else None,
+        actor_user_id=user.id,
+        trigger="distribution_mcp_requested",
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)
@@ -6262,6 +7004,12 @@ def readback_distribution_target(
     ) and all(item.draft_readback_status == "draft_saved" for item in targets)
     run.stage = "draft_saved" if all_saved else "awaiting_readback"
     run.status = "draft_saved" if all_saved else "pending"
+    _synchronize_article_action_truth(
+        db,
+        db.get(GeoOptimizationAction, run.action_id) if run.action_id else None,
+        actor_user_id=user.id,
+        trigger="distribution_mcp_readback",
+    )
     db.commit()
     db.refresh(run)
     return _distribution_read(db, run)
@@ -7072,10 +7820,15 @@ def capture_agent_run_visuals(
             )
         )
     }
+    accepted_visual_kinds = {
+        "official_page_screenshot",
+        "generated_article_image",
+        "licensed_web_image",
+    }
     manifest_is_verified = bool(manifest_items) and all(
         item.get("quality_gate") == "passed"
         and (artifact := referenced_artifacts.get(int(item.get("artifact_id") or 0))) is not None
-        and artifact.artifact_kind == "official_page_screenshot"
+        and artifact.artifact_kind in accepted_visual_kinds
         and (artifact.metadata_json or {}).get("quality_gate") == "passed"
         for item in manifest_items
     )
@@ -7280,7 +8033,11 @@ def read_agent_artifact_content(
 ):
     workspace_or_404(db, user, workspace_id)
     artifact = scoped_or_404(db, GeoAgentArtifact, workspace_id, artifact_id)
-    if artifact.artifact_kind != "official_page_screenshot":
+    if artifact.artifact_kind not in {
+        "official_page_screenshot",
+        "generated_article_image",
+        "licensed_web_image",
+    }:
         raise HTTPException(status_code=404, detail="Visual artifact not found")
     try:
         root = AGENT_ARTIFACT_ROOT.resolve(strict=True)
@@ -7293,9 +8050,12 @@ def read_agent_artifact_content(
     payload = artifact_path.read_bytes()
     if sha256(payload).hexdigest() != artifact.sha256:
         raise HTTPException(status_code=409, detail="Visual artifact integrity check failed")
+    media_type = str((artifact.metadata_json or {}).get("media_type") or "image/png")
+    if media_type not in {"image/png", "image/jpeg", "image/webp"}:
+        raise HTTPException(status_code=409, detail="Visual artifact media type is invalid")
     return FileResponse(
         artifact_path,
-        media_type="image/png",
+        media_type=media_type,
         headers={
             "Cache-Control": "private, max-age=3600",
             "ETag": f'"{artifact.sha256}"',
@@ -7498,16 +8258,39 @@ def revise_agent_run(
 
 @router.get("/workspaces/{workspace_id}/actions", response_model=list[ActionRead])
 def list_actions(
-    workspace_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    workspace_id: int,
+    view: str = Query(default="all", pattern="^(all|mine|approvals|overdue_blocked)$"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    return list(
+    rows = list(
         db.scalars(
             select(GeoOptimizationAction)
             .where(GeoOptimizationAction.workspace_id == workspace_id)
             .order_by(GeoOptimizationAction.id.desc())
         )
     )
+    if view == "mine":
+        rows = [row for row in rows if row.assignee_user_id == user.id]
+    elif view == "approvals":
+        rows = [
+            row
+            for row in rows
+            if any(
+                approval.status == "pending" and approval.reviewer_user_id == user.id
+                for approval in v2_action_approvals(db, row.id)
+            )
+        ]
+    elif view == "overdue_blocked":
+        rows = [
+            row
+            for row in rows
+            if row.stage == "blocked"
+            or v2_is_past(row.due_at)
+            or v2_is_past(row.approval_due_at)
+        ]
+    return [v2_action_payload(db, row) for row in rows]
 
 
 @router.patch("/workspaces/{workspace_id}/actions/{action_id}", response_model=ActionRead)
@@ -7549,8 +8332,6 @@ def create_reobservation(
 ):
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
-    if db.scalar(select(GeoReobservation).where(GeoReobservation.action_id == action.id)):
-        raise HTTPException(status_code=409, detail="Action already has a re-observation")
     run = scoped_or_404(db, GeoObservationRun, workspace_id, payload.run_id)
     evidence = scoped_or_404(db, GeoEvidence, workspace_id, payload.evidence_id)
     if evidence.run_id != run.id:
@@ -7560,6 +8341,15 @@ def create_reobservation(
     row = GeoReobservation(
         action_id=action.id,
         workspace_id=workspace_id,
+        round_index=int(
+            db.scalar(
+                select(func.max(GeoReobservation.round_index)).where(
+                    GeoReobservation.action_id == action.id
+                )
+            )
+            or 0
+        )
+        + 1,
         run_id=run.id,
         evidence_id=evidence.id,
         status="legacy_recorded",
@@ -7580,8 +8370,7 @@ def create_reobservation(
     return {"id": row.id, "action_id": action.id, "status": action.status}
 
 
-def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
-    batch_summary = None
+def _retest_ledger_batch(db: Session, row: GeoReobservation) -> GeoObservationBatch | None:
     retest_ledger_batch = (
         db.get(GeoObservationBatch, row.retest_batch_id) if row.retest_batch_id else None
     )
@@ -7591,6 +8380,56 @@ def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
                 GeoObservationBatch.queue_job_id == row.retest_queue_job_id
             )
         )
+    return retest_ledger_batch
+
+
+def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
+    """Read the retest ledger only. GET endpoints must never advance workflow state."""
+    target_links = list(
+        db.scalars(
+            select(GeoReobservationTarget)
+            .where(GeoReobservationTarget.reobservation_id == row.id)
+            .order_by(GeoReobservationTarget.id.asc())
+        )
+    )
+    retest_ledger_batch = _retest_ledger_batch(db, row)
+    batch_summary = (
+        _official_api_batch_summary(db, retest_ledger_batch)
+        if retest_ledger_batch is not None
+        else None
+    )
+    return {
+        "id": row.id,
+        "action_id": row.action_id,
+        "workspace_id": row.workspace_id,
+        "round_index": row.round_index,
+        "status": row.status,
+        "baseline_batch_id": row.baseline_batch_id,
+        "retest_batch_id": row.retest_batch_id,
+        "retest_queue_job_id": row.retest_queue_job_id,
+        "scope_snapshot": row.scope_snapshot or {},
+        "baseline_metrics": row.baseline_metrics or {},
+        "retest_metrics": row.retest_metrics or {},
+        "conclusion": row.conclusion,
+        "measured_delta": row.measured_delta or {},
+        "target_evidence": [
+            {
+                "action_target_id": link.action_target_id,
+                "completion_evidence_id": link.completion_evidence_id,
+                "evidence_sha256": link.evidence_sha256,
+                "scope_fingerprint": link.scope_fingerprint,
+            }
+            for link in target_links
+        ],
+        "batch": batch_summary,
+        "started_at": row.started_at,
+        "completed_at": row.completed_at,
+    }
+
+
+def _refresh_action_retest(db: Session, row: GeoReobservation) -> dict:
+    batch_summary = None
+    retest_ledger_batch = _retest_ledger_batch(db, row)
     if retest_ledger_batch is not None:
         batch_summary = _official_api_batch_summary(db, retest_ledger_batch)
         if row.status not in {"completed", "failed"}:
@@ -7600,26 +8439,44 @@ def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
                 baseline_batch = db.get(GeoObservationBatch, row.baseline_batch_id)
                 retest_batch = retest_ledger_batch
                 scope = row.scope_snapshot or {}
+                question_plan_ids = sorted(
+                    {
+                        int(value)
+                        for value in scope.get("question_plan_ids") or []
+                        if int(value) > 0
+                    }
+                )
                 question_plan_id = int(scope.get("question_plan_id") or 0)
+                if question_plan_id and question_plan_id not in question_plan_ids:
+                    question_plan_ids.append(question_plan_id)
+                    question_plan_ids.sort()
                 provider_ids = [int(value) for value in scope.get("provider_ids") or []]
-                if baseline_batch is None or retest_batch is None or not question_plan_id or not provider_ids:
+                action = db.get(GeoOptimizationAction, row.action_id)
+                if baseline_batch is None or retest_batch is None or not question_plan_ids or not provider_ids:
                     row.status = "failed"
                     row.conclusion = "insufficient_evidence"
                     row.measured_delta = {
                         "comparable": False,
                         "reason": "retest_scope_or_batch_missing",
                     }
+                    if action:
+                        action.status = "in_progress"
+                        if action.workflow_version == "action-flow.v2":
+                            action.measurement_status = "inconclusive"
+                        else:
+                            action.stage = "retest_failed"
+                        action.blocked_reason = "复测范围或观测批次缺失，请重新创建复测。"
                 else:
                     baseline_metrics = build_batch_metrics(
                         db,
                         baseline_batch,
-                        question_plan_id=question_plan_id,
+                        question_plan_ids=question_plan_ids,
                         provider_ids=provider_ids,
                     )
                     retest_metrics = build_batch_metrics(
                         db,
                         retest_batch,
-                        question_plan_id=question_plan_id,
+                        question_plan_ids=question_plan_ids,
                         provider_ids=provider_ids,
                     )
                     conclusion, measured_delta = compare_batches(
@@ -7634,29 +8491,94 @@ def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
                     row.measured_delta = measured_delta
                     row.status = "completed"
                     row.completed_at = datetime.now(timezone.utc)
-                    action = db.get(GeoOptimizationAction, row.action_id)
                     if action:
                         if conclusion in {"improved", "unchanged", "regressed"}:
-                            action.status = "verified"
-                            action.stage = "verified"
-                            action.completed_at = row.completed_at
+                            if action.workflow_version == "action-flow.v2":
+                                eligible_target_ids = {
+                                    target.id
+                                    for target in db.scalars(
+                                        select(GeoActionTarget).where(
+                                            GeoActionTarget.action_id == action.id
+                                        )
+                                    )
+                                    if v2_target_is_final(
+                                        action.action_type, target.delivery_status
+                                    )
+                                    and db.scalar(
+                                        select(GeoActionCompletionEvidence.id).where(
+                                            GeoActionCompletionEvidence.target_id == target.id,
+                                            GeoActionCompletionEvidence.verification_status
+                                            == "verified",
+                                        )
+                                    )
+                                }
+                                completed_reobservation_ids = list(
+                                    db.scalars(
+                                        select(GeoReobservation.id).where(
+                                            GeoReobservation.action_id == action.id,
+                                            GeoReobservation.status == "completed",
+                                            GeoReobservation.conclusion.in_(
+                                                ("improved", "unchanged", "regressed")
+                                            ),
+                                        )
+                                    )
+                                )
+                                measured_target_ids = set(
+                                    db.scalars(
+                                        select(GeoReobservationTarget.action_target_id).where(
+                                            GeoReobservationTarget.reobservation_id.in_(
+                                                completed_reobservation_ids or [-1]
+                                            )
+                                        )
+                                    )
+                                )
+                                fully_measured = bool(eligible_target_ids) and (
+                                    eligible_target_ids <= measured_target_ids
+                                )
+                                action.measurement_status = (
+                                    "measured" if fully_measured else "partially_measured"
+                                )
+                                action.status = "verified" if fully_measured else "in_progress"
+                            else:
+                                action.status = "verified"
+                                action.stage = "verified"
+                                action.completed_at = row.completed_at
                             action.blocked_reason = None
                             if action.opportunity_id:
                                 opportunity = db.get(
                                     GeoActionOpportunity, action.opportunity_id
                                 )
                                 if opportunity and opportunity.workspace_id == row.workspace_id:
-                                    opportunity.status = "completed"
+                                    action_rows = list(
+                                        db.scalars(
+                                            select(GeoReobservation)
+                                            .where(GeoReobservation.action_id == action.id)
+                                            .order_by(GeoReobservation.round_index)
+                                        )
+                                    )
+                                    outcome = derive_action_outcome(action_rows)
+                                    opportunity.status = (
+                                        "completed"
+                                        if outcome["status"] == "stable_improvement"
+                                        else "selected"
+                                    )
                         else:
                             action.status = "in_progress"
-                            action.stage = "retest_inconclusive"
+                            if action.workflow_version == "action-flow.v2":
+                                action.measurement_status = "inconclusive"
+                            else:
+                                action.stage = "retest_inconclusive"
                             action.blocked_reason = "复测已结束，但样本或模型版本不满足同口径比较要求。"
                     db.add(
                         GeoActionEvent(
                             workspace_id=row.workspace_id,
                             action_id=row.action_id,
                             event_type="comparable_retest_completed",
-                            from_stage="retesting",
+                            from_stage=(
+                                action.stage
+                                if action and action.workflow_version == "action-flow.v2"
+                                else "retesting"
+                            ),
                             to_stage=action.stage if action else "retest_completed",
                             actor_type="system",
                             job_id=row.retest_queue_job_id,
@@ -7678,27 +8600,14 @@ def _action_retest_read(db: Session, row: GeoReobservation) -> dict:
         action = db.get(GeoOptimizationAction, row.action_id)
         if action:
             action.status = "in_progress"
-            action.stage = "retest_failed"
+            if action.workflow_version == "action-flow.v2":
+                action.measurement_status = "inconclusive"
+            else:
+                action.stage = "retest_failed"
             action.blocked_reason = "复测队列记录不存在，请重新创建复测。"
         db.commit()
         db.refresh(row)
-    return {
-        "id": row.id,
-        "action_id": row.action_id,
-        "workspace_id": row.workspace_id,
-        "status": row.status,
-        "baseline_batch_id": row.baseline_batch_id,
-        "retest_batch_id": row.retest_batch_id,
-        "retest_queue_job_id": row.retest_queue_job_id,
-        "scope_snapshot": row.scope_snapshot or {},
-        "baseline_metrics": row.baseline_metrics or {},
-        "retest_metrics": row.retest_metrics or {},
-        "conclusion": row.conclusion,
-        "measured_delta": row.measured_delta or {},
-        "batch": batch_summary,
-        "started_at": row.started_at,
-        "completed_at": row.completed_at,
-    }
+    return _action_retest_read(db, row)
 
 
 @router.get(
@@ -7713,10 +8622,36 @@ def read_action_retest(
 ):
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
-    row = db.scalar(select(GeoReobservation).where(GeoReobservation.action_id == action.id))
+    row = db.scalar(
+        select(GeoReobservation)
+        .where(GeoReobservation.action_id == action.id)
+        .order_by(GeoReobservation.round_index.desc())
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="该行动还没有复测任务")
     return _action_retest_read(db, row)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/retest/refresh",
+    response_model=ActionRetestRead,
+)
+def refresh_action_retest(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    workspace_or_404(db, user, workspace_id)
+    action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
+    row = db.scalar(
+        select(GeoReobservation)
+        .where(GeoReobservation.action_id == action.id)
+        .order_by(GeoReobservation.round_index.desc())
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="该行动还没有复测任务")
+    return _refresh_action_retest(db, row)
 
 
 @router.get(
@@ -7785,50 +8720,137 @@ def read_action_workbench_state(
     }
 
 
-@router.post(
-    "/workspaces/{workspace_id}/actions/{action_id}/retest",
-    response_model=ActionRetestRead,
-    status_code=202,
-)
-def create_action_retest(
+def _latest_verified_target_evidence(
+    db: Session,
+    *,
+    action: GeoOptimizationAction,
+    target: GeoActionTarget,
+) -> GeoActionCompletionEvidence | None:
+    return db.scalar(
+        select(GeoActionCompletionEvidence)
+        .where(
+            GeoActionCompletionEvidence.workspace_id == action.workspace_id,
+            GeoActionCompletionEvidence.action_id == action.id,
+            GeoActionCompletionEvidence.target_id == target.id,
+            GeoActionCompletionEvidence.verification_status == "verified",
+        )
+        .order_by(GeoActionCompletionEvidence.id.desc())
+    )
+
+
+def _action_retest_target_evidence(
+    db: Session,
+    *,
+    action: GeoOptimizationAction,
+    selected_target_ids: list[int] | None,
+) -> list[tuple[GeoActionTarget, GeoActionCompletionEvidence]]:
+    targets = list(
+        db.scalars(
+            select(GeoActionTarget)
+            .where(GeoActionTarget.action_id == action.id)
+            .order_by(GeoActionTarget.ordinal.asc(), GeoActionTarget.id.asc())
+        )
+    )
+    if not targets:
+        return []
+    targets_by_id = {target.id: target for target in targets}
+    requested_ids = sorted(set(selected_target_ids or []))
+    if requested_ids:
+        missing_ids = sorted(set(requested_ids) - set(targets_by_id))
+        if missing_ids:
+            raise HTTPException(status_code=404, detail="部分复测目标不存在或不属于当前行动")
+        selected_targets = [targets_by_id[target_id] for target_id in requested_ids]
+    else:
+        eligible_targets = [
+            target
+            for target in targets
+            if v2_target_is_final(action.action_type, target.delivery_status)
+            and _latest_verified_target_evidence(db, action=action, target=target) is not None
+        ]
+        if not eligible_targets:
+            raise HTTPException(status_code=409, detail="当前还没有已完成且证据核验通过的目标")
+        if len(eligible_targets) > 1:
+            raise HTTPException(status_code=409, detail="多个目标已具备复测条件，请明确选择本轮复测目标")
+        selected_targets = eligible_targets
+
+    pairs: list[tuple[GeoActionTarget, GeoActionCompletionEvidence]] = []
+    for target in selected_targets:
+        if not v2_target_is_final(action.action_type, target.delivery_status):
+            raise HTTPException(status_code=409, detail=f"目标“{target.display_name}”尚未真实完成")
+        evidence = _latest_verified_target_evidence(db, action=action, target=target)
+        if evidence is None:
+            raise HTTPException(status_code=409, detail=f"目标“{target.display_name}”缺少核验通过的完成证据")
+        pairs.append((target, evidence))
+    return pairs
+
+
+def _create_action_retest_impl(
     workspace_id: int,
     action_id: int,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_roles(*WRITE_ROLES)),
+    db: Session,
+    user: User,
+    *,
+    selected_target_ids: list[int] | None = None,
+    idempotency_key: str | None = None,
 ):
     workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
-    existing = db.scalar(select(GeoReobservation).where(GeoReobservation.action_id == action.id))
+    existing = db.scalar(
+        select(GeoReobservation)
+        .where(GeoReobservation.action_id == action.id)
+        .order_by(GeoReobservation.round_index.desc())
+    )
+    requested_target_ids = sorted(set(selected_target_ids or []))
+    if existing and idempotency_key:
+        existing_scope = existing.scope_snapshot or {}
+        if existing_scope.get("idempotency_key") == idempotency_key:
+            existing_target_ids = sorted(
+                int(value) for value in existing_scope.get("action_target_ids") or []
+            )
+            if existing_target_ids != requested_target_ids:
+                raise HTTPException(status_code=409, detail="同一幂等键不能用于不同的复测目标")
+            return _refresh_action_retest(db, existing)
     if existing and existing.status in {"preparing", "queued", "running"}:
-        return _action_retest_read(db, existing)
-    if existing and existing.status == "completed" and existing.conclusion != "insufficient_evidence":
-        return _action_retest_read(db, existing)
+        existing_target_ids = sorted(
+            int(value)
+            for value in (existing.scope_snapshot or {}).get("action_target_ids") or []
+        )
+        if requested_target_ids and existing_target_ids != requested_target_ids:
+            raise HTTPException(status_code=409, detail="已有另一组目标正在复测，请等待本轮结束")
+        return _refresh_action_retest(db, existing)
+
+    target_evidence = _action_retest_target_evidence(
+        db,
+        action=action,
+        selected_target_ids=selected_target_ids,
+    )
 
     published_run = None
-    for distribution in db.scalars(
-        select(GeoDistributionRun)
-        .where(
-            GeoDistributionRun.workspace_id == workspace_id,
-            GeoDistributionRun.action_id == action.id,
-        )
-        .order_by(GeoDistributionRun.id.desc())
-    ):
-        targets = list(
-            db.scalars(
-                select(GeoDistributionTarget).where(
-                    GeoDistributionTarget.distribution_run_id == distribution.id
+    if not target_evidence:
+        for distribution in db.scalars(
+            select(GeoDistributionRun)
+            .where(
+                GeoDistributionRun.workspace_id == workspace_id,
+                GeoDistributionRun.action_id == action.id,
+            )
+            .order_by(GeoDistributionRun.id.desc())
+        ):
+            targets = list(
+                db.scalars(
+                    select(GeoDistributionTarget).where(
+                        GeoDistributionTarget.distribution_run_id == distribution.id
+                    )
                 )
             )
-        )
-        if targets and all(
-            target.human_publish_status == "published"
-            and target.public_url
-            and target.publication_verification_status == "publicly_verified"
-            for target in targets
-        ):
-            published_run = (distribution, targets)
-            break
-    if published_run is None:
+            if targets and all(
+                target.human_publish_status == "published"
+                and target.public_url
+                and target.publication_verification_status == "publicly_verified"
+                for target in targets
+            ):
+                published_run = (distribution, targets)
+                break
+    if not target_evidence and published_run is None:
         raise HTTPException(
             status_code=409,
             detail="请先为全部平台记录并通过公网校验的真实公开文章 URL",
@@ -7840,21 +8862,68 @@ def create_action_retest(
         raise HTTPException(status_code=409, detail="行动缺少可追溯的基线观测批次")
     if baseline_batch.status != "completed":
         raise HTTPException(status_code=409, detail="基线观测批次尚未完整结束")
-    if not action.question_plan_id:
+    question_plan_ids = sorted(
+        {
+            int(value)
+            for value in (action.affected_question_ids or [])
+            if int(value) > 0
+        }
+    )
+    if action.question_plan_id and action.question_plan_id not in question_plan_ids:
+        question_plan_ids.append(action.question_plan_id)
+        question_plan_ids.sort()
+    if not question_plan_ids:
         raise HTTPException(status_code=409, detail="行动未关联原始问题，不能创建同口径复测")
+    if len(question_plan_ids) > 5:
+        raise HTTPException(status_code=409, detail="单轮复测最多支持 5 个问题，请分批执行")
     configuration = baseline_batch.configuration or {}
-    provider_ids = [
-        int(item.get("id") or 0)
-        for item in configuration.get("providers") or []
-        if isinstance(item, dict) and int(item.get("id") or 0) > 0
+    selected_model_keys = list(
+        dict.fromkeys(
+            str(value).strip()
+            for value in (
+                action.affected_model_keys
+                or (action.baseline_snapshot or {}).get("model_keys")
+                or []
+            )
+            if str(value).strip()
+        )
+    )
+    configured_providers = [
+        item for item in configuration.get("providers") or [] if isinstance(item, dict)
     ]
+    if selected_model_keys:
+        configured_providers = [
+            item
+            for item in configured_providers
+            if str(item.get("model_key") or item.get("key") or "") in selected_model_keys
+        ]
+        available_model_keys = {
+            str(item.get("model_key") or item.get("key") or "")
+            for item in configuration.get("providers") or []
+            if isinstance(item, dict)
+        }
+        missing_model_keys = sorted(set(selected_model_keys) - available_model_keys)
+        if missing_model_keys:
+            raise HTTPException(
+                status_code=409,
+                detail=f"基线批次缺少原行动选定的模型渠道：{', '.join(missing_model_keys)}",
+            )
+    provider_ids = [int(item.get("id") or 0) for item in configured_providers if int(item.get("id") or 0) > 0]
     provider_ids = list(dict.fromkeys(provider_ids))
     if not provider_ids:
         raise HTTPException(status_code=409, detail="基线批次没有可复用的模型渠道")
+    available_question_ids = {
+        int(item.get("id") or 0)
+        for item in configuration.get("questions") or []
+        if isinstance(item, dict) and int(item.get("id") or 0) > 0
+    }
+    missing_question_ids = sorted(set(question_plan_ids) - available_question_ids)
+    if missing_question_ids:
+        raise HTTPException(status_code=409, detail="基线批次缺少本轮行动影响的问题口径")
     baseline_metrics = build_batch_metrics(
         db,
         baseline_batch,
-        question_plan_id=action.question_plan_id,
+        question_plan_ids=question_plan_ids,
         provider_ids=provider_ids,
     )
     if (
@@ -7864,44 +8933,59 @@ def create_action_retest(
         raise HTTPException(status_code=409, detail="基线样本不满足真实联网证据门槛，不能做可比复测")
 
     now = datetime.now(timezone.utc)
-    distribution, publication_targets = published_run
-    previous_attempts = []
-    if existing:
-        previous_attempts = list((existing.scope_snapshot or {}).get("previous_attempts") or [])
-        previous_attempts.append(
-            {
-                "retest_batch_id": existing.retest_batch_id,
-                "retest_queue_job_id": existing.retest_queue_job_id,
-                "status": existing.status,
-                "conclusion": existing.conclusion,
-                "completed_at": existing.completed_at.isoformat() if existing.completed_at else None,
-            }
-        )
-        row = existing
-    else:
-        row = GeoReobservation(action_id=action.id, workspace_id=workspace_id)
-        db.add(row)
+    opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
+    if not action.measurement_plan:
+        action.measurement_plan = default_measurement_plan(action, opportunity)
+    row = GeoReobservation(
+        action_id=action.id,
+        workspace_id=workspace_id,
+        round_index=(existing.round_index + 1) if existing else 1,
+    )
+    db.add(row)
     row.status = "preparing"
     row.baseline_batch_id = baseline_batch.id
     row.retest_batch_id = None
     row.retest_queue_job_id = None
+    scope_fingerprint = str(action.scope_fingerprint or "")
+    if target_evidence and len(scope_fingerprint) != 64:
+        raise HTTPException(status_code=409, detail="行动缺少可追溯的范围指纹，请先重新确认行动范围")
     row.scope_snapshot = {
-        "schema": "comparable-action-retest/v1",
-        "question_plan_id": action.question_plan_id,
+        "schema": "target-action-retest/v3" if target_evidence else "comparable-action-retest/v2",
+        "question_plan_id": question_plan_ids[0],
+        "question_plan_ids": question_plan_ids,
         "provider_ids": provider_ids,
+        "model_keys": selected_model_keys,
         "repeat_count": baseline_batch.repeat_count,
         "baseline_batch_id": baseline_batch.id,
-        "distribution_run_id": distribution.id,
-        "published_targets": [
+        "measurement_plan": action.measurement_plan,
+        "idempotency_key": idempotency_key,
+        "action_target_ids": [target.id for target, _evidence in target_evidence],
+        "completion_evidence_ids": [evidence.id for _target, evidence in target_evidence],
+        "scope_fingerprint": scope_fingerprint or None,
+        "target_evidence": [
             {
-                "platform_key": target.platform_key,
-                "public_url": target.public_url,
-                "published_at": target.published_at.isoformat() if target.published_at else None,
+                "action_target_id": target.id,
+                "completion_evidence_id": evidence.id,
+                "evidence_sha256": evidence.sha256,
+                "scope_fingerprint": scope_fingerprint,
             }
-            for target in publication_targets
+            for target, evidence in target_evidence
         ],
-        "previous_attempts": previous_attempts,
     }
+    if published_run:
+        distribution, publication_targets = published_run
+        row.scope_snapshot = {
+            **row.scope_snapshot,
+            "distribution_run_id": distribution.id,
+            "published_targets": [
+                {
+                    "platform_key": target.platform_key,
+                    "public_url": target.public_url,
+                    "published_at": target.published_at.isoformat() if target.published_at else None,
+                }
+                for target in publication_targets
+            ],
+        }
     row.baseline_metrics = baseline_metrics
     row.retest_metrics = {}
     row.conclusion = "pending"
@@ -7909,12 +8993,24 @@ def create_action_retest(
     row.started_at = now
     row.completed_at = None
     db.flush()
+    for target, evidence in target_evidence:
+        db.add(
+            GeoReobservationTarget(
+                workspace_id=workspace_id,
+                reobservation_id=row.id,
+                action_target_id=target.id,
+                completion_evidence_id=evidence.id,
+                evidence_sha256=evidence.sha256,
+                scope_fingerprint=scope_fingerprint,
+            )
+        )
+    db.flush()
     try:
         batch_receipt = create_provider_web_search_batch(
             workspace_id,
             OfficialApiObservationBatchCreate(
                 provider_ids=provider_ids,
-                question_plan_ids=[action.question_plan_id],
+                question_plan_ids=question_plan_ids,
                 repeat_count=baseline_batch.repeat_count,
             ),
             db,
@@ -7929,6 +9025,8 @@ def create_action_retest(
         row.status = "failed"
         row.conclusion = "insufficient_evidence"
         row.measured_delta = {"comparable": False, "reason": "ledger_batch_missing"}
+        if target_evidence:
+            action.measurement_status = "inconclusive"
         db.commit()
         raise HTTPException(status_code=500, detail="复测队列已创建，但统一观测账本缺失")
     queue_job_id = int(retest_batch.queue_job_id or 0)
@@ -7937,6 +9035,8 @@ def create_action_retest(
         row.status = "failed"
         row.conclusion = "insufficient_evidence"
         row.measured_delta = {"comparable": False, "reason": "queue_job_missing"}
+        if target_evidence:
+            action.measurement_status = "inconclusive"
         db.commit()
         raise HTTPException(status_code=500, detail="复测账本已创建，但队列任务缺失")
     retest_batch.source_type = "action_retest"
@@ -7953,7 +9053,10 @@ def create_action_retest(
     row.status = "queued"
     action.status = "in_progress"
     previous_stage = action.stage
-    action.stage = "retesting"
+    if target_evidence:
+        action.measurement_status = "retesting"
+    else:
+        action.stage = "retesting"
     action.blocked_reason = None
     db.add(
         GeoActionEvent(
@@ -7961,23 +9064,64 @@ def create_action_retest(
             action_id=action.id,
             event_type="comparable_retest_queued",
             from_stage=previous_stage,
-            to_stage="retesting",
+            to_stage=action.stage,
             actor_type="user",
             actor_user_id=user.id,
             job_id=queue_job_id,
             detail={
                 "reobservation_id": row.id,
+                "round_index": row.round_index,
                 "baseline_batch_id": baseline_batch.id,
                 "retest_batch_id": retest_batch.id,
-                "question_plan_id": action.question_plan_id,
+                "question_plan_id": question_plan_ids[0],
+                "question_plan_ids": question_plan_ids,
                 "provider_ids": provider_ids,
                 "repeat_count": baseline_batch.repeat_count,
+                "action_target_ids": [target.id for target, _evidence in target_evidence],
+                "completion_evidence_ids": [evidence.id for _target, evidence in target_evidence],
+                "scope_fingerprint": scope_fingerprint or None,
             },
         )
     )
     db.commit()
     db.refresh(row)
     return _action_retest_read(db, row)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/retest",
+    response_model=ActionRetestRead,
+    status_code=202,
+)
+def create_action_retest(
+    workspace_id: int,
+    action_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    return _create_action_retest_impl(workspace_id, action_id, db, user)
+
+
+@router.post(
+    "/workspaces/{workspace_id}/actions/{action_id}/retests",
+    response_model=ActionRetestRead,
+    status_code=202,
+)
+def create_target_action_retest(
+    workspace_id: int,
+    action_id: int,
+    payload: ActionRetestCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*WRITE_ROLES)),
+):
+    return _create_action_retest_impl(
+        workspace_id,
+        action_id,
+        db,
+        user,
+        selected_target_ids=payload.target_ids,
+        idempotency_key=payload.idempotency_key,
+    )
 
 
 def _verify_brand_fact_source_or_http_error(source_url: str, statement: str) -> dict:

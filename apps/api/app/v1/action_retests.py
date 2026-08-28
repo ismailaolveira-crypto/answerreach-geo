@@ -57,11 +57,15 @@ def build_batch_metrics(
     batch: GeoObservationBatch,
     *,
     question_plan_id: int | None = None,
+    question_plan_ids: list[int] | None = None,
     provider_ids: list[int] | None = None,
 ) -> dict:
     task_query = select(GeoObservationTask).where(GeoObservationTask.batch_id == batch.id)
+    selected_question_ids = set(question_plan_ids or [])
     if question_plan_id is not None:
-        task_query = task_query.where(GeoObservationTask.question_plan_id == question_plan_id)
+        selected_question_ids.add(question_plan_id)
+    if selected_question_ids:
+        task_query = task_query.where(GeoObservationTask.question_plan_id.in_(selected_question_ids))
     if provider_ids is not None:
         task_query = task_query.where(GeoObservationTask.provider_id.in_(provider_ids))
     tasks = list(
@@ -111,6 +115,7 @@ def build_batch_metrics(
     scope = batch_scope(
         batch,
         question_plan_id=question_plan_id,
+        question_plan_ids=sorted(selected_question_ids) or None,
         provider_ids=provider_ids,
     )
     expected = int(scope["expected_samples"] or len(tasks))
@@ -144,6 +149,7 @@ def batch_scope(
     batch: GeoObservationBatch,
     *,
     question_plan_id: int | None = None,
+    question_plan_ids: list[int] | None = None,
     provider_ids: list[int] | None = None,
 ) -> dict:
     configuration = batch.configuration or {}
@@ -158,11 +164,17 @@ def batch_scope(
         if isinstance(item, dict)
         and (not provider_filter or int(item.get("id") or 0) in provider_filter)
     )
+    selected_question_ids = set(question_plan_ids or [])
+    if question_plan_id is not None:
+        selected_question_ids.add(question_plan_id)
     questions = sorted(
         int(item.get("id") or 0)
         for item in configuration.get("questions") or []
         if isinstance(item, dict)
-        and (question_plan_id is None or int(item.get("id") or 0) == question_plan_id)
+        and (
+            not selected_question_ids
+            or int(item.get("id") or 0) in selected_question_ids
+        )
     )
     return {
         "provider_versions": [

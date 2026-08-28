@@ -1,0 +1,62 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://www.zhihu.com" },
+        { "header": "Referer", "operation": "set", "value": "https://www.zhihu.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||zhihu.com/api/",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://juejin.cn" },
+        { "header": "Referer", "operation": "set", "value": "https://juejin.cn/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||api.juejin.cn/",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  },
+  {
+    "id": 4,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://blog.51cto.com" },
+        { "header": "Referer", "operation": "set", "value": "https://blog.51cto.com/blogger/publish" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||blog.51cto.com/",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  },
+  {
+    "id": 5,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "Origin", "operation": "set", "value": "https://mp.weixin.qq.com" },
+        { "header": "Referer", "operation": "set", "value": "https://mp.weixin.qq.com/" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||mp.weixin.qq.com/",
+      "resourceTypes": ["xmlhttprequest"]
+    }
+  }
+]

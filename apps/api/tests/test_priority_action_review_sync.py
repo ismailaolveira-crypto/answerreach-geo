@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -21,7 +22,6 @@ from app.models.company import Company
 from app.models.cleanroom_v1 import (
     GeoActionOpportunity,
     GeoActionOpportunityEvidence,
-    GeoActionEvent,
     GeoAgentArtifact,
     GeoAgentEvent,
     GeoContentAsset,
@@ -280,6 +280,7 @@ def test_review_gate_and_browser_client_draft_readback(
         if review["subject_type"] == "content_asset"
     )
     assert asset_review["checks"]["reviewed_platform_keys"] == ["zhihu"]
+    assert asset_review["reviewer_name"] == "审核员"
     with review_client.app.state.review_session_factory() as db:
         variant_review = (
             db.query(GeoContentReview)
@@ -309,17 +310,25 @@ def test_review_gate_and_browser_client_draft_readback(
     )
     assert missing_readback.status_code == 422
 
-    persisted = review_client.post(
+    returned = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
         json={
             "targets": [
                 {
                     "platform_key": "zhihu",
-                    "request_status": "draft_saved",
+                    "request_status": "draft_link_returned",
                     "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/example",
                 }
             ]
         },
+    )
+    assert returned.status_code == 200
+    assert returned.json()["status"] == "pending"
+    assert returned.json()["targets"][0]["draft_readback_status"] == "awaiting_human_confirmation"
+    target_id = returned.json()["targets"][0]["id"]
+    persisted = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-draft-readback",
+        json={"confirmed_visible": True},
     )
     assert persisted.status_code == 200
     assert persisted.json()["status"] == "draft_saved"
@@ -327,7 +336,6 @@ def test_review_gate_and_browser_client_draft_readback(
     assert persisted.json()["targets"][0]["final_action_clicked"] is False
     assert persisted.json()["targets"][0]["human_publish_status"] == "awaiting_publish"
 
-    target_id = persisted.json()["targets"][0]["id"]
     wrong_platform = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
         json={"public_url": "https://example.com/articles/not-zhihu"},
@@ -382,7 +390,7 @@ def test_review_gate_and_browser_client_draft_readback(
     assert library.json()[0]["draft_targets"][0]["public_url"].endswith("/answer/456")
 
 
-def test_platform_variant_can_be_edited_before_review_with_audit(
+def test_platform_variant_body_cannot_be_edited_outside_a_new_verified_version(
     review_client: TestClient,
 ) -> None:
     updated = review_client.patch(
@@ -396,19 +404,8 @@ def test_platform_variant_can_be_edited_before_review_with_audit(
         },
     )
 
-    assert updated.status_code == 200
-    payload = updated.json()
-    assert payload["title"] == "知乎人工修订标题"
-    assert payload["body_markdown"].startswith("# 修订正文")
-    assert payload["content_fingerprint"] != "c" * 64
-    assert payload["adaptation_contract"]["manual_edit"]["editor_user_id"] == 1
-
-    with review_client.app.state.review_session_factory() as db:
-        event = db.query(GeoActionEvent).filter_by(
-            event_type="platform_variant_edited"
-        ).one()
-        assert event.detail["variant_id"] == 1
-        assert "body_markdown" not in event.detail
+    assert updated.status_code == 409
+    assert "重新核验" in updated.json()["detail"]
 
 
 def test_platform_variant_edit_is_blocked_after_human_approval(
@@ -715,7 +712,7 @@ def test_review_rejects_draft_that_ignored_available_sourced_brand_facts(
     assert returned.json()["asset"]["status"] == "changes_requested"
 
 
-def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
+def test_review_cannot_approve_unknown_claim_as_unverified(
     review_client: TestClient,
 ) -> None:
     conflicting = review_client.post(
@@ -741,35 +738,8 @@ def test_review_can_keep_unknown_claim_unverified_without_false_confirmation(
             "note": "稿件明确将该能力保留为待核验，不作为产品事实使用",
         },
     )
-    assert approved.status_code == 201
-    payload = approved.json()
-    assert payload["approved_platform_keys"] == ["wechat", "zhihu"]
-    assert payload["pending_claim_count"] == 0
-    pending_claim = next(claim for claim in payload["claims"] if claim["id"] == 2)
-    assert pending_claim["verification_status"] == "explicitly_unverified"
-    assert "不得将其作为已证实事实" in pending_claim["review_note"]
-    asset_review = next(
-        review
-        for review in payload["reviews"]
-        if review["subject_type"] == "content_asset"
-    )
-    assert asset_review["checks"]["confirmed_claim_ids"] == []
-    assert asset_review["checks"]["unverified_claim_ids"] == [2]
-
-    distribution = review_client.post(
-        "/api/v1/workspaces/1/distribution-runs",
-        json={
-            "content_asset_id": 1,
-            "platform_keys": ["zhihu", "wechat"],
-            "idempotency_key": "asset-1-explicitly-unverified",
-        },
-    )
-    assert distribution.status_code == 201
-    assert distribution.json()["stage"] == "ready_for_client"
-    assert {target["platform_key"] for target in distribution.json()["targets"]} == {
-        "zhihu",
-        "wechat",
-    }
+    assert approved.status_code == 409
+    assert "未核验主张" in approved.json()["detail"]
 
 
 def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
@@ -803,18 +773,24 @@ def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
             "targets": [
                 {
                     "platform_key": "zhihu",
-                    "request_status": "draft_saved",
+                    "request_status": "draft_link_returned",
                     "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/one",
                 }
             ]
         },
     )
     assert first.status_code == 200
-    assert first.json()["status"] == "partial"
+    assert first.json()["status"] == "pending"
     by_platform = {target["platform_key"]: target for target in first.json()["targets"]}
-    assert by_platform["zhihu"]["draft_readback_status"] == "draft_saved"
+    assert by_platform["zhihu"]["draft_readback_status"] == "awaiting_human_confirmation"
     assert by_platform["wechat"]["draft_readback_status"] == "not_started"
     assert all(target["final_action_clicked"] is False for target in first.json()["targets"])
+
+    confirmed_zhihu = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{by_platform['zhihu']['id']}/human-draft-readback",
+        json={"confirmed_visible": True},
+    )
+    assert confirmed_zhihu.status_code == 200
 
     second = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/client-results",
@@ -837,18 +813,24 @@ def test_two_platform_draft_results_can_be_archived_sequentially_and_retried(
             "targets": [
                 {
                     "platform_key": "wechat",
-                    "request_status": "draft_saved",
-                    "external_draft_id": "wechat-draft-1",
+                    "request_status": "draft_link_returned",
+                    "draft_url": "https://mp.weixin.qq.com/s/wechat-draft-1",
                 }
             ]
         },
     )
     assert retry.status_code == 200
-    assert retry.json()["status"] == "draft_saved"
+    wechat_target = next(target for target in retry.json()["targets"] if target["platform_key"] == "wechat")
+    completed = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{wechat_target['id']}/human-draft-readback",
+        json={"confirmed_visible": True},
+    )
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "draft_saved"
     assert all(
         target["draft_readback_status"] == "draft_saved"
         and target["final_action_clicked"] is False
-        for target in retry.json()["targets"]
+        for target in completed.json()["targets"]
     )
 
 
@@ -882,14 +864,20 @@ def test_later_platform_login_extends_the_same_distribution_run(
             "targets": [
                 {
                     "platform_key": "zhihu",
-                    "request_status": "draft_saved",
+                    "request_status": "draft_link_returned",
                     "draft_url": "https://www.zhihu.com/creator/manage/creation/draft/later-login",
                 }
             ]
         },
     )
     assert zhihu_saved.status_code == 200
-    assert zhihu_saved.json()["status"] == "draft_saved"
+    assert zhihu_saved.json()["status"] == "pending"
+    zhihu_target_id = zhihu_saved.json()["targets"][0]["id"]
+    zhihu_saved = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{zhihu_target_id}/human-draft-readback",
+        json={"confirmed_visible": True},
+    )
+    assert zhihu_saved.status_code == 200
 
     extended = review_client.post(
         "/api/v1/workspaces/1/distribution-runs",
@@ -914,11 +902,17 @@ def test_later_platform_login_extends_the_same_distribution_run(
             "targets": [
                 {
                     "platform_key": "wechat",
-                    "request_status": "draft_saved",
-                    "external_draft_id": "wechat-later-login-draft",
+                    "request_status": "draft_link_returned",
+                    "draft_url": "https://mp.weixin.qq.com/s/wechat-later-login-draft",
                 }
             ]
         },
+    )
+    assert completed.status_code == 200
+    wechat_target = next(target for target in completed.json()["targets"] if target["platform_key"] == "wechat")
+    completed = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{wechat_target['id']}/human-draft-readback",
+        json={"confirmed_visible": True},
     )
     assert completed.status_code == 200
     assert completed.json()["status"] == "draft_saved"
@@ -996,7 +990,7 @@ def test_official_site_uses_manual_handoff_before_human_publication(
             "targets": [
                 {
                     "platform_key": "official_site",
-                    "request_status": "draft_saved",
+                    "request_status": "draft_link_returned",
                     "draft_url": "https://brand.example.com/preview",
                 }
             ]
@@ -1025,12 +1019,229 @@ def test_official_site_uses_manual_handoff_before_human_publication(
     assert library.status_code == 200
     assert library.json()[0]["saved_draft_count"] == 0
     assert library.json()[0]["draft_targets"][0]["adapter_version"] == "manual-website.v1"
-
     session_factory = review_client.app.state.review_session_factory
     with session_factory() as db:
         action = db.get(GeoOptimizationAction, 1)
         assert action is not None
         assert action.stage == "ready_for_retest"
+
+
+def test_native_geo_article_assistant_uses_expiring_one_time_task(
+    review_client: TestClient,
+) -> None:
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
+    )
+    assert approved.status_code == 201
+    created = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu"],
+            "idempotency_key": "native-assistant-zhihu-v1",
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["id"]
+
+    issued = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-task"
+    )
+    assert issued.status_code == 200
+    task = issued.json()
+    assert task["protocol_version"] == "geo-article-assistant.v1"
+    assert task["targets"][0]["platform_key"] == "zhihu"
+    assert task["targets"][0]["title"] == "知乎版标题"
+    assert "cookie" not in json.dumps(task).lower()
+    with review_client.app.state.review_session_factory() as db:
+        run = db.get(routes.GeoDistributionRun, run_id)
+        assert run is not None
+        assert run.assistant_task_nonce_hash == sha256(task["task_token"].encode()).hexdigest()
+        assert run.assistant_task_nonce_hash != task["task_token"]
+
+    tampered = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-results",
+        json={
+            "protocol_version": task["protocol_version"],
+            "task_token": task["task_token"],
+            "content_fingerprint": "0" * 64,
+            "targets": [{"platform_key": "zhihu", "request_status": "cancelled"}],
+        },
+    )
+    assert tampered.status_code == 409
+
+    recorded = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-results",
+        json={
+            "protocol_version": task["protocol_version"],
+            "task_token": task["task_token"],
+            "content_fingerprint": task["content_fingerprint"],
+            "targets": [
+                {
+                    "platform_key": "zhihu",
+                    "request_status": "draft_link_returned",
+                    "draft_url": "https://zhuanlan.zhihu.com/p/123456789/edit",
+                    "external_draft_id": "123456789",
+                }
+            ],
+        },
+    )
+    assert recorded.status_code == 200
+    assert recorded.json()["targets"][0]["draft_readback_status"] == "awaiting_human_confirmation"
+
+    replay = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-results",
+        json={
+            "protocol_version": task["protocol_version"],
+            "task_token": task["task_token"],
+            "content_fingerprint": task["content_fingerprint"],
+            "targets": [{"platform_key": "zhihu", "request_status": "cancelled"}],
+        },
+    )
+    assert replay.status_code == 409
+
+
+def test_article_assistant_delivers_only_reviewed_media_with_task_token(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent-runs"
+    image_path = root / "1" / "1" / "visuals" / "generated-image.png"
+    image_path.parent.mkdir(parents=True)
+    Image.new("RGB", (1200, 675), "white").save(image_path)
+    payload = image_path.read_bytes()
+    with review_client.app.state.review_session_factory() as db:
+        db.add(
+            GeoAgentArtifact(
+                id=88,
+                workspace_id=1,
+                agent_run_id=1,
+                artifact_kind="generated_article_image",
+                uri=str(image_path),
+                sha256=sha256(payload).hexdigest(),
+                size_bytes=len(payload),
+                metadata_json={
+                    "media_type": "image/png",
+                    "quality_gate": "passed",
+                },
+            )
+        )
+        variant = db.get(GeoPlatformVariant, 1)
+        assert variant is not None
+        variant.image_manifest = [
+            {
+                "artifact_id": 88,
+                "artifact_kind": "generated_article_image",
+                "review_status": "pending",
+                "quality_gate": "passed",
+                "strategy": "generate",
+                "placement": "after_intro",
+                "alt_text": "GEO 闭环图",
+                "caption": "优化、发布与复测闭环",
+                "sha256": sha256(payload).hexdigest(),
+            }
+        ]
+        db.commit()
+    monkeypatch.setattr(routes, "AGENT_ARTIFACT_ROOT", root)
+
+    approved = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "approved",
+            "confirmed_claim_ids": [2],
+            "platform_keys": ["zhihu"],
+            "reviewed_platform_keys": ["zhihu"],
+        },
+    )
+    assert approved.status_code == 201
+    created = review_client.post(
+        "/api/v1/workspaces/1/distribution-runs",
+        json={
+            "content_asset_id": 1,
+            "platform_keys": ["zhihu"],
+            "idempotency_key": "native-assistant-reviewed-media-v1",
+        },
+    )
+    assert created.status_code == 201
+    run_id = created.json()["id"]
+    issued = review_client.post(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-task"
+    )
+    assert issued.status_code == 200
+    task = issued.json()
+    media = task["targets"][0]["image_manifest"][0]
+    assert media["review_status"] == "approved"
+    assert media["content_path"].startswith(
+        f"/api/geo/1/distribution-runs/{run_id}/assistant-media/88?task_token="
+    )
+
+    # The browser-facing Next route rewrites /api/geo/... to this API route;
+    # exercise the API endpoint directly here to keep the test independent of Next.
+    direct_path = (
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-media/88"
+        f"?task_token={task['task_token']}"
+    )
+    delivered = review_client.get(direct_path)
+    assert delivered.status_code == 200
+    assert delivered.content == payload
+    assert delivered.headers["cache-control"] == "private, no-store"
+
+    rejected = review_client.get(
+        f"/api/v1/workspaces/1/distribution-runs/{run_id}/assistant-media/88"
+        "?task_token=abcdefghijklmnopqrstuvwxyz_invalid"
+    )
+    assert rejected.status_code == 403
+    with review_client.app.state.review_session_factory() as db:
+        stored = db.get(GeoPlatformVariant, 1)
+        assert stored is not None
+        assert "content_path" not in stored.image_manifest[0]
+
+
+@pytest.mark.parametrize(
+    ("platform_key", "draft_url", "public_url"),
+    [
+        ("bilibili", "https://member.bilibili.com/platform/upload/text/edit?aid=1", "https://www.bilibili.com/read/cv1"),
+        ("baijiahao", "https://baijiahao.baidu.com/builder/rc/edit?article_id=1", "https://baijiahao.baidu.com/s?id=1"),
+        ("weibo", "https://card.weibo.com/article/v5/editor#/draft/1", "https://weibo.com/1/abc"),
+        ("yuque", "https://www.yuque.com/go/doc/1/edit", "https://www.yuque.com/team/book/doc"),
+        ("douban", "https://www.douban.com/note/create", "https://www.douban.com/note/1/"),
+        ("sohu", "https://mp.sohu.com/mpfe/v4/contentManagement/news/addarticle?id=1", "https://www.sohu.com/a/1_1"),
+        ("xueqiu", "https://mp.xueqiu.com/write/draft/1", "https://xueqiu.com/1/1"),
+        ("cnblogs", "https://i.cnblogs.com/articles/edit;postId=1", "https://www.cnblogs.com/user/p/1.html"),
+        ("oschina", "https://my.oschina.net/u/1/blog/write/draft/1", "https://my.oschina.net/u/1/blog/1"),
+        ("segmentfault", "https://segmentfault.com/write?draftId=1", "https://segmentfault.com/a/1"),
+        ("imooc", "https://www.imooc.com/article/draft/id/1", "https://www.imooc.com/article/1"),
+        ("woshipm", "https://www.woshipm.com/writing?pid=1", "https://www.woshipm.com/pd/1.html"),
+        ("eastmoney", "https://mp.eastmoney.com/collect/pc_article/index.html#/?id=1", "https://caifuhao.eastmoney.com/news/1"),
+    ],
+)
+def test_article_assistant_platform_catalog_urls_are_scoped(
+    platform_key: str,
+    draft_url: str,
+    public_url: str,
+) -> None:
+    assert routes._validated_draft_url(platform_key, draft_url) == draft_url
+    workspace = SimpleNamespace(website_url="https://brand.example.com/")
+    assert routes._validated_publication_url(workspace, platform_key, public_url) == public_url
+
+    with pytest.raises(HTTPException) as exc:
+        routes._validated_draft_url(platform_key, "https://attacker.example/draft/1")
+    assert exc.value.status_code == 422
+
+
+def test_article_assistant_platform_catalog_has_all_upstream_content_platforms() -> None:
+    assert routes.ARTICLE_ASSISTANT_PLATFORMS == {
+        "wechat", "zhihu", "juejin", "51cto", "csdn", "bilibili", "baijiahao",
+        "weibo", "yuque", "douban", "sohu", "xueqiu", "cnblogs", "oschina",
+        "segmentfault", "imooc", "woshipm", "eastmoney",
+    }
 
 
 def test_agent_progress_is_derived_from_persisted_events_without_local_paths(

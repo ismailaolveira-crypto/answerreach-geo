@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GEO 文章助手</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="hero">
+        <div class="product-mark" aria-hidden="true">
+          <img src="assets/icons/icon-48.png" alt="">
+        </div>
+        <div class="hero-copy">
+          <h1>GEO 文章助手</h1>
+          <p>账号与平台状态</p>
+        </div>
+        <span class="version" id="version">v0.1.2</span>
+      </header>
+
+      <section class="status-summary" aria-live="polite">
+        <span class="status-light" aria-hidden="true"></span>
+        <strong id="summaryText">正在检测当前浏览器…</strong>
+        <span id="lastChecked"></span>
+      </section>
+
+      <section class="platform-card" aria-label="平台登录状态">
+        <ul class="platform-list" id="platformList"></ul>
+      </section>
+
+      <section class="actions">
+        <button class="primary-button" id="refreshButton" type="button">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+          <span>重新检测</span>
+        </button>
+        <button class="secondary-button" id="managePlatformsButton" type="button">
+          管理平台
+          <span aria-hidden="true">↗</span>
+        </button>
+      </section>
+
+      <footer>
+        <span class="shield" aria-hidden="true">◇</span>
+        <span>仅检测当前浏览器登录状态，不读取密码</span>
+      </footer>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

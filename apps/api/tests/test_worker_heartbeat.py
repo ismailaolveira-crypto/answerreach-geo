@@ -1,6 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import app.models  # noqa: F401 - register every mapped table before create_all
@@ -8,11 +8,54 @@ from app.db.session import Base
 from app.models import QueueJob, QueueWorkerHeartbeat
 from app.services.job_queue import claim_next_job, recover_orphaned_jobs
 from app.services.worker_heartbeat import (
+    HeartbeatFailureBudget,
+    WorkerRegistration,
+    as_utc,
     get_workspace_worker_status,
     online_global_workers,
     register_worker,
     stop_worker,
+    touch_or_register_worker,
 )
+
+
+def test_heartbeat_failure_budget_requires_sustained_failure_and_resets() -> None:
+    budget = HeartbeatFailureBudget(limit=3)
+
+    assert budget.record_failure() is False
+    assert budget.record_failure() is False
+    budget.record_success()
+    assert budget.consecutive_failures == 0
+    assert budget.record_failure() is False
+    assert budget.record_failure() is False
+    assert budget.record_failure() is True
+
+
+def test_missing_heartbeat_row_is_re_registered() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC)
+    registration = WorkerRegistration(
+        worker_id="managed:test",
+        mode="continuous",
+        hostname="test-host",
+        process_id=404,
+        concurrency=8,
+        workspace_id=None,
+        observation_batch_id=None,
+    )
+    with Session(engine) as db:
+        assert touch_or_register_worker(db, registration, now=now) == "registered"
+        assert touch_or_register_worker(
+            db, registration, now=now + timedelta(seconds=15)
+        ) == "touched"
+        worker = db.scalar(
+            select(QueueWorkerHeartbeat).where(
+                QueueWorkerHeartbeat.worker_id == registration.worker_id
+            )
+        )
+        assert worker is not None
+        assert as_utc(worker.last_seen_at) == now + timedelta(seconds=15)
 
 
 def test_workspace_worker_status_uses_heartbeat_and_excludes_batch_receipts() -> None:
@@ -168,6 +211,56 @@ def test_recover_orphaned_job_requeues_only_executable_offline_work() -> None:
         assert recovered.payload_json["worker_id"] is None
         assert recovered.payload_json["recovery_count"] == 1
         assert receipt is not None and receipt.status == "running"
+
+
+def test_periodic_recovery_waits_for_expired_owner_then_recovers_once() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    now = datetime.now(UTC)
+    with Session(engine) as db:
+        register_worker(
+            db,
+            worker_id="queue:crashed:1",
+            mode="continuous",
+            hostname="test-host",
+            process_id=505,
+            concurrency=8,
+            workspace_id=None,
+            observation_batch_id=None,
+            now=now,
+        )
+        job = QueueJob(
+            job_type="geo_observation.collect",
+            status="running",
+            attempts=1,
+            max_attempts=3,
+            scheduled_at=now - timedelta(minutes=5),
+            started_at=now - timedelta(minutes=5),
+            payload_json={
+                "workspace_id": 1,
+                "worker_id": "queue:crashed:1",
+                "dispatch_enabled": True,
+            },
+        )
+        db.add(job)
+        db.commit()
+        job_id = job.id
+
+        assert recover_orphaned_jobs(db, now=now) == {"recovered": 0, "failed": 0}
+        assert db.get(QueueJob, job_id).status == "running"
+
+        after_expiry = now + timedelta(seconds=121)
+        assert recover_orphaned_jobs(db, now=after_expiry) == {
+            "recovered": 1,
+            "failed": 0,
+        }
+        assert recover_orphaned_jobs(db, now=after_expiry) == {
+            "recovered": 0,
+            "failed": 0,
+        }
+        recovered = db.get(QueueJob, job_id)
+        assert recovered.status == "pending"
+        assert recovered.payload_json["recovery_count"] == 1
 
 
 def test_online_global_workers_can_require_exact_process_id() -> None:

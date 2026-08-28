@@ -10,10 +10,12 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_PATH="${ROOT_DIR}/infra/launchd/com.chunqiu-yuanquan.geo.stack.plist.template"
 START_SCRIPT="${ROOT_DIR}/scripts/start-local.sh"
 SERVICE_LABEL="com.chunqiu-yuanquan.geo.stack"
+WORKER_SERVICE_LABEL="com.chunqiu-yuanquan.geo.worker"
 USER_ID="$(id -u)"
 USER_NAME="$(id -un)"
 USER_HOME_DIR="$(dscl . -read "/Users/${USER_NAME}" NFSHomeDirectory | awk '{print $2}')"
 LAUNCH_AGENTS_DIR="${USER_HOME_DIR}/Library/LaunchAgents"
+WORKER_PLIST_PATH="${LAUNCH_AGENTS_DIR}/${WORKER_SERVICE_LABEL}.plist"
 LOG_DIR="${USER_HOME_DIR}/Library/Logs/ChunqiuYuanquanGeo"
 PLIST_PATH="${LAUNCH_AGENTS_DIR}/${SERVICE_LABEL}.plist"
 UV_BIN="$(command -v uv || true)"
@@ -34,6 +36,10 @@ fi
 if [[ -z "$UV_BIN" || -z "$PNPM_BIN" ]]; then
   echo "uv and pnpm must both be available in the current login environment." >&2
   exit 2
+fi
+if [[ -f "$WORKER_PLIST_PATH" ]] || launchctl print "gui/${USER_ID}/${WORKER_SERVICE_LABEL}" >/dev/null 2>&1; then
+  echo "The dedicated Worker service is installed. Uninstall it before installing the full stack to avoid duplicate Workers." >&2
+  exit 3
 fi
 
 xml_escape() {

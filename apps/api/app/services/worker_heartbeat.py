@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
@@ -12,7 +13,34 @@ from app.models import QueueJob, QueueWorkerHeartbeat
 
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 15
 WORKER_OFFLINE_AFTER_SECONDS = 120
+WORKER_HEARTBEAT_FAILURE_LIMIT = 4
 LEGACY_RUNNING_JOB_STALE_AFTER_SECONDS = 15 * 60
+
+
+@dataclass(frozen=True)
+class WorkerRegistration:
+    worker_id: str
+    mode: str
+    hostname: str
+    process_id: int
+    concurrency: int
+    workspace_id: int | None
+    observation_batch_id: int | None
+
+
+@dataclass
+class HeartbeatFailureBudget:
+    """Escalate sustained monitoring failure without reacting to one hiccup."""
+
+    limit: int = WORKER_HEARTBEAT_FAILURE_LIMIT
+    consecutive_failures: int = 0
+
+    def record_success(self) -> None:
+        self.consecutive_failures = 0
+
+    def record_failure(self) -> bool:
+        self.consecutive_failures += 1
+        return self.consecutive_failures >= self.limit
 
 
 def as_utc(value: datetime | None) -> datetime | None:
@@ -69,6 +97,30 @@ def register_worker(
     db.commit()
     db.refresh(worker)
     return worker
+
+
+def touch_or_register_worker(
+    db: Session,
+    registration: WorkerRegistration,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Refresh liveness, recreating a missing row instead of staying invisible."""
+
+    if touch_worker(db, registration.worker_id, now=now):
+        return "touched"
+    register_worker(
+        db,
+        worker_id=registration.worker_id,
+        mode=registration.mode,
+        hostname=registration.hostname,
+        process_id=registration.process_id,
+        concurrency=registration.concurrency,
+        workspace_id=registration.workspace_id,
+        observation_batch_id=registration.observation_batch_id,
+        now=now,
+    )
+    return "registered"
 
 
 def touch_worker(

@@ -7,6 +7,7 @@ from app.services.official_site_capture import (
     OfficialSiteCapture,
     captured_visual_purpose,
 )
+from app.services.article_media import MAX_ARTICLE_VISUALS
 
 
 class FakeRunner:
@@ -109,6 +110,29 @@ def test_capture_archives_png_with_isolated_chrome(tmp_path: Path) -> None:
     assert item.capture_engine == "playwright_chrome"
     assert runner.commands[0][0:2] == ["playwright", "screenshot"]
     assert not any(command[0] == "opencli" for command in runner.commands)
+
+
+def test_capture_respects_safety_ceiling_without_forcing_a_target_count(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    candidates = [
+        {
+            "source_url": f"https://brand.example.com/product-{index}",
+            "alt_text": f"产品能力 {index}",
+            "purpose": f"解释第 {index} 个独立能力",
+            "recommended_platforms": ["wechat"],
+        }
+        for index in range(MAX_ARTICLE_VISUALS + 2)
+    ]
+
+    outcome = OfficialSiteCapture(runner=runner).capture(
+        run_id=11,
+        official_website="https://brand.example.com/",
+        candidates=candidates,
+        output_directory=tmp_path / "visuals",
+    )
+
+    assert outcome.status == "captured"
+    assert len(outcome.items) == MAX_ARTICLE_VISUALS
 
 
 def test_captured_purpose_removes_pre_capture_disclaimer() -> None:

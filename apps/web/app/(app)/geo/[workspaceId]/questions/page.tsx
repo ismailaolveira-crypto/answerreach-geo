@@ -10,6 +10,7 @@ import {
 	updateCleanroomQuestion,
 	type CleanroomQuestion,
 } from "@/lib/cleanroom-v1-api";
+import { GeoGlobalScopeBar } from "@/components/geo-global-scope-bar";
 
 const STAGE_LABELS: Record<string, string> = {
 	awareness: "认知",
@@ -47,14 +48,28 @@ export default async function QuestionLibraryPage({
 		role?: string;
 		topic?: string;
 		notice?: string;
+		range?: string;
+		from?: string;
+		to?: string;
+		batch?: string | string[];
+		model?: string | string[];
+		question?: string | string[];
 	}>;
 }) {
 	const { workspaceId } = await params;
 	const query = await searchParams;
-	const library = await getQuestionLibrary(workspaceId, query);
-	const returnQuery = new URLSearchParams(
-		Object.entries(query).filter(([, value]) => Boolean(value)) as string[][],
-	).toString();
+	const selectedQuestionIds = (Array.isArray(query.question) ? query.question : query.question ? [query.question] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0);
+	const library = await getQuestionLibrary(workspaceId, {
+		search: query.search,
+		status: query.status,
+		stage: query.stage,
+		role: query.role,
+		topic: query.topic,
+		question_plan_ids: selectedQuestionIds,
+	});
+	const returnParams = new URLSearchParams();
+	for (const [key, raw] of Object.entries(query)) for (const value of Array.isArray(raw) ? raw : raw ? [raw] : []) returnParams.append(key, value);
+	const returnQuery = returnParams.toString();
 
 	async function addQuestion(formData: FormData) {
 		"use server";
@@ -216,6 +231,7 @@ export default async function QuestionLibraryPage({
 						</form>
 					</details>
 				</header>
+				<GeoGlobalScopeBar workspaceId={workspaceId} />
 				<section className="sy-question-kpis">
 					<article>
 						<small>问题总量</small>

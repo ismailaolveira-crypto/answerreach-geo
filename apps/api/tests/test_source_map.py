@@ -108,4 +108,47 @@ def test_build_source_map_deduplicates_per_answer_and_keeps_traceability() -> No
     ]
     assert domain["evidence_total"] == 2
     assert domain["evidence_truncated"] is True
+    assert domain["influence_score"] == 100
+    assert domain["tier"] == "core"
+    assert domain["score_factors"] == {
+        "citation_frequency": 35,
+        "answer_reach": 25,
+        "model_breadth": 20,
+        "question_breadth": 20,
+    }
     assert result["opportunities"][0]["label"] == "example.com"
+
+
+def test_source_map_caps_single_answer_and_explains_relations() -> None:
+    question = GeoQuestionPlan(
+        id=1,
+        workspace_id=1,
+        question_text="企业应该如何选择 GEO 服务？",
+        journey_stage="decision",
+        importance=5,
+        is_brand_query=False,
+        active=True,
+        prompt_version="v1",
+    )
+    rows = [
+        evidence(
+            1,
+            model_key="deepseek",
+            model_label="DeepSeek",
+            brand_status="absent",
+            source_items=[
+                {"url": "https://alpha.example/a"},
+                {"url": "https://beta.example/b"},
+            ],
+        )
+    ]
+
+    result = build_source_map(rows, [question], limit=10, evidence_limit=10)
+
+    assert all(item["influence_score"] == 29 for item in result["domains"])
+    assert all(item["tier"] == "unverified" for item in result["domains"])
+    relation = result["domains"][0]["related_sources"][0]
+    assert relation["shared_answer_count"] == 1
+    assert relation["shared_model_count"] == 1
+    assert relation["shared_question_count"] == 1
+    assert relation["strength"] == "weak"
