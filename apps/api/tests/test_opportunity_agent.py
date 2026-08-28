@@ -251,6 +251,31 @@ def test_successful_codex_run_materializes_validated_opportunity(tmp_path, monke
         assert opportunity.scope_snapshot["question"] == "企业级大模型治理平台怎么选？"
 
 
+def test_same_recommendation_in_a_new_batch_updates_instead_of_duplicating() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        _seed(db)
+        context = opportunity_agent.build_opportunity_context(
+            db, 1, batch_id=1, model_keys=["deepseek"]
+        )
+        job = SimpleNamespace(id=1, payload_json={"codex_thread_id": "thread-1"})
+        first = opportunity_agent.materialize_agent_opportunities(
+            db, job=job, context=context, parsed=_result([1])
+        )
+        next_context = json.loads(json.dumps(context))
+        next_context["scope"]["batch_id"] = 2
+        next_context["input_fingerprint"] = "2" * 64
+        second = opportunity_agent.materialize_agent_opportunities(
+            db, job=job, context=next_context, parsed=_result([1])
+        )
+        db.commit()
+
+        assert first[0].id == second[0].id
+        assert db.scalars(select(GeoActionOpportunity)).all() == [first[0]]
+        assert first[0].latest_seen_batch_id == 2
+
+
 def test_out_of_scope_agent_evidence_creates_no_opportunity(tmp_path, monkeypatch) -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)

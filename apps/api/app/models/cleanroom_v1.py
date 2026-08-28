@@ -207,6 +207,100 @@ class GeoObservationTask(CleanRoomTimestamp, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class GeoObservationSchedule(CleanRoomTimestamp, Base):
+    """A versioned, immutable-scope plan for recurring GEO observations."""
+
+    __tablename__ = "geo_observation_schedules_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="active", index=True)
+    cadence: Mapped[str] = mapped_column(String(24), nullable=False, default="daily")
+    weekdays: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    local_time: Mapped[str] = mapped_column(String(5), nullable=False, default="09:00")
+    timezone_name: Mapped[str] = mapped_column(String(80), nullable=False, default="Asia/Shanghai")
+    provider_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    question_plan_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    repeat_count: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scope_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    next_run_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+
+
+class GeoObservationScheduleRun(CleanRoomTimestamp, Base):
+    """One idempotent execution receipt for a schedule window."""
+
+    __tablename__ = "geo_observation_schedule_runs_v1"
+    __table_args__ = (
+        UniqueConstraint("schedule_id", "window_key", name="uq_geo_schedule_window_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    schedule_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_observation_schedules_v1.id"), nullable=False, index=True
+    )
+    window_key: Mapped[str] = mapped_column(String(120), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    baseline_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+
+
+class GeoChangeAlert(CleanRoomTimestamp, Base):
+    """Evidence-linked, deduplicated alert derived from comparable observation batches."""
+
+    __tablename__ = "geo_change_alerts_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    schedule_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_schedule_runs_v1.id"), index=True
+    )
+    alert_type: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(24), nullable=False, default="warning", index=True)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="open", index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False, index=True)
+    baseline_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    current_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_observation_batches_v1.id"), index=True
+    )
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    completeness: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    metric_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    suggested_action: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    converted_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), index=True
+    )
+    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    resolved_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class GeoEvidence(CleanRoomTimestamp, Base):
     __tablename__ = "geo_evidence_v1"
 
@@ -311,6 +405,28 @@ class GeoOptimizationAction(CleanRoomTimestamp, Base):
     stage: Mapped[str] = mapped_column(String(32), nullable=False, default="selected", index=True)
     baseline_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     selected_scope: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    measurement_plan: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    action_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="legacy_unclassified", index=True
+    )
+    deliverable_type: Mapped[str] = mapped_column(
+        String(60), nullable=False, default="legacy_deliverable"
+    )
+    workflow_version: Mapped[str] = mapped_column(
+        String(40), nullable=False, default="action-flow.legacy-v1"
+    )
+    assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    approval_due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    approval_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    blocked_reason_code: Mapped[str | None] = mapped_column(String(80), index=True)
+    blocked_note: Mapped[str | None] = mapped_column(Text)
+    affected_question_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    affected_model_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    scope_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    measurement_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="not_eligible", index=True
+    )
     blocked_reason: Mapped[str | None] = mapped_column(Text)
     selected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -402,6 +518,135 @@ class GeoActionEvent(CleanRoomTimestamp, Base):
     actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
     job_id: Mapped[int | None] = mapped_column(ForeignKey("queue_jobs.id"), index=True)
     detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
+class GeoActionTarget(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_targets_v1"
+    __table_args__ = (
+        UniqueConstraint("action_id", "target_key", name="uq_geo_action_target_key_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
+    )
+    target_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    target_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    platform_key: Mapped[str | None] = mapped_column(String(80), index=True)
+    display_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    target_ref: Mapped[str] = mapped_column(String(1500), nullable=False)
+    delivery_status: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    ordinal: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class GeoActionCompletionEvidence(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_completion_evidence_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_geo_action_evidence_idempotency_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
+    )
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_action_targets_v1.id"), nullable=False, index=True
+    )
+    evidence_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    source_url: Mapped[str | None] = mapped_column(String(1500))
+    artifact_uri: Mapped[str | None] = mapped_column(String(1500))
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", index=True
+    )
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    submitted_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    verified_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    supersedes_evidence_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_action_completion_evidence_v1.id"), unique=True, index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False)
+
+
+class GeoActionApproval(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_action_approvals_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "action_id",
+            "target_id",
+            "approval_type",
+            "version",
+            name="uq_geo_action_approval_version_v1",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
+    )
+    target_id: Mapped[int | None] = mapped_column(ForeignKey("geo_action_targets_v1.id"), index=True)
+    approval_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    requested_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    reviewer_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    note: Mapped[str | None] = mapped_column(Text)
+    subject_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+
+
+class GeoReobservationTarget(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_reobservation_targets_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "reobservation_id", "action_target_id", name="uq_geo_reobservation_target_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    reobservation_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_reobservations_v1.id"), nullable=False, index=True
+    )
+    action_target_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_action_targets_v1.id"), nullable=False, index=True
+    )
+    completion_evidence_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_action_completion_evidence_v1.id"), nullable=False, index=True
+    )
+    evidence_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    scope_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
 
 
 class GeoAgentRun(CleanRoomTimestamp, Base):
@@ -633,6 +878,12 @@ class GeoDistributionRun(CleanRoomTimestamp, Base):
     idempotency_key: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
     requested_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    assistant_protocol_version: Mapped[str | None] = mapped_column(String(80))
+    assistant_task_nonce_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    assistant_task_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assistant_content_fingerprint: Mapped[str | None] = mapped_column(String(64), index=True)
+    assistant_task_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assistant_operator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
 
 
 class GeoDistributionTarget(CleanRoomTimestamp, Base):
@@ -670,11 +921,17 @@ class GeoDistributionTarget(CleanRoomTimestamp, Base):
 
 class GeoReobservation(CleanRoomTimestamp, Base):
     __tablename__ = "geo_reobservations_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "action_id", "round_index", name="uq_geo_reobservation_action_round_v1"
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     action_id: Mapped[int] = mapped_column(
-        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, unique=True, index=True
+        ForeignKey("geo_optimization_actions_v1.id"), nullable=False, index=True
     )
+    round_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     workspace_id: Mapped[int] = mapped_column(
         ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
     )
@@ -695,6 +952,135 @@ class GeoReobservation(CleanRoomTimestamp, Base):
     measured_delta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeoBusinessMetricEntry(CleanRoomTimestamp, Base):
+    """Append-only, source-labelled business input used by the ROI center."""
+
+    __tablename__ = "geo_business_metric_entries_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "idempotency_key", name="uq_geo_business_metric_idempotency_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_optimization_actions_v1.id"), index=True
+    )
+    metric_type: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    amount_minor: Mapped[int | None] = mapped_column(Integer)
+    quantity: Mapped[float | None] = mapped_column(Float)
+    currency: Mapped[str | None] = mapped_column(String(3), index=True)
+    attribution_type: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="not_applicable", index=True
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_label: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_reference: Mapped[str | None] = mapped_column(String(1500))
+    evidence_note: Mapped[str] = mapped_column(Text, nullable=False)
+    verification_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="user_confirmed", index=True
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    reverses_entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_business_metric_entries_v1.id"), unique=True, index=True
+    )
+    reversal_reason: Mapped[str | None] = mapped_column(Text)
+    import_batch_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_business_metric_import_batches_v1.id"), index=True
+    )
+    source_record_id: Mapped[str | None] = mapped_column(String(160), index=True)
+
+
+class GeoBusinessGoal(CleanRoomTimestamp, Base):
+    """One auditable operating goal for a frozen GEO measurement scope."""
+
+    __tablename__ = "geo_business_goals_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    metric_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="shortlist_rate", index=True
+    )
+    baseline_value: Mapped[float | None] = mapped_column(Float)
+    target_value: Mapped[float] = mapped_column(Float, nullable=False)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="active", index=True
+    )
+    question_plan_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    model_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    action_ids: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    scope_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+
+
+class GeoBusinessMetricImportBatch(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_business_metric_import_batches_v1"
+    __table_args__ = (
+        UniqueConstraint(
+            "workspace_id", "file_sha256", name="uq_geo_business_import_file_v1"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="preflight", index=True)
+    mapping_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    total_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    valid_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    duplicate_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    imported_rows: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class GeoBusinessMetricImportRow(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_business_metric_import_rows_v1"
+    __table_args__ = (
+        UniqueConstraint("import_batch_id", "row_number", name="uq_geo_business_import_row_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    import_batch_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_business_metric_import_batches_v1.id"), nullable=False, index=True
+    )
+    row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    record_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    normalized_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    errors_json: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    metric_entry_id: Mapped[int | None] = mapped_column(
+        ForeignKey("geo_business_metric_entries_v1.id"), index=True
+    )
 
 
 class GeoBrandFact(CleanRoomTimestamp, Base):

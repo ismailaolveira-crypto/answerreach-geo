@@ -9,7 +9,7 @@ const TABS: Array<{ id: SettingsSection; label: string; note: string }> = [
 	{ id: "basics", label: "基本信息", note: "品牌与运行入口" },
 	{ id: "collaboration", label: "成员与设备", note: "权限与 Local Agent" },
 	{ id: "facts", label: "品牌事实", note: "Agent 可用依据" },
-	{ id: "agent", label: "Agent 与交付", note: "Codex 与草稿同步" },
+	{ id: "agent", label: "Agent 与交付", note: "Codex 与 GEO 文章助手" },
 ];
 
 function sectionFromHash(): SettingsSection {

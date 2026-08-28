@@ -21,6 +21,13 @@ from app.api.routes import (
     workspace_access,
 )
 from app.v1.routes import router as cleanroom_v1_router
+from app.v1.global_scope import router as global_scope_router
+from app.v1.action_workflow_routes import router as action_workflow_router
+from app.v1.results_roi_routes import router as results_roi_router
+from app.v1.observation_alert_routes import router as observation_alert_router
+from app.v1.roi_import_routes import router as roi_import_router
+from app.v1.business_goal_routes import router as business_goal_router
+from app.v1.collaboration_routes import router as collaboration_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
@@ -37,6 +44,13 @@ api_router.include_router(projects.router)
 api_router.include_router(geo_config.router)
 api_router.include_router(geo_v1.router)
 api_router.include_router(cleanroom_v1_router)
+api_router.include_router(global_scope_router)
+api_router.include_router(action_workflow_router)
+api_router.include_router(results_roi_router)
+api_router.include_router(observation_alert_router)
+api_router.include_router(roi_import_router)
+api_router.include_router(business_goal_router)
+api_router.include_router(collaboration_router)
 api_router.include_router(providers.router)
 api_router.include_router(queue.router)
 api_router.include_router(crawl.router)

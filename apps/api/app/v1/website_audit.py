@@ -334,6 +334,64 @@ def verify_publication_page(
     }
 
 
+def verify_structured_data_page(
+    url: str,
+    *,
+    expected_types: list[str] | None = None,
+    resolver: Resolver = _default_resolver,
+    client: httpx.Client | None = None,
+) -> dict[str, Any]:
+    """Safely fetch public HTML and deterministically validate its JSON-LD types."""
+    owned_client = client is None
+    active_client = client or httpx.Client(
+        headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
+        timeout=httpx.Timeout(12.0, connect=8.0),
+        follow_redirects=False,
+    )
+    try:
+        document = _fetch(
+            active_client,
+            url,
+            resolver=resolver,
+            max_bytes=PUBLICATION_VERIFY_MAX_BYTES,
+        )
+    except WebsiteAuditTargetError:
+        raise
+    except (httpx.HTTPError, OSError) as exc:
+        raise PublicationVerificationError("structured_data_request_failed") from exc
+    finally:
+        if owned_client:
+            active_client.close()
+    status_code = int(document.get("status_code") or 0)
+    if status_code < 200 or status_code >= 400:
+        raise PublicationVerificationError(f"structured_data_http_{status_code or 'unknown'}")
+    content_type = str(document.get("content_type") or "").split(";", 1)[0].strip().lower()
+    if content_type not in {"text/html", "application/xhtml+xml"}:
+        raise PublicationVerificationError("structured_data_page_not_html")
+    parser = _PageParser()
+    parser.feed(str(document.get("body") or ""))
+    structured_types = sorted(set(parser.page.structured_types))
+    if not structured_types:
+        raise PublicationVerificationError("structured_data_missing")
+    required_types = sorted({str(value).strip() for value in expected_types or [] if str(value).strip()})
+    missing_types = sorted(set(required_types) - set(structured_types))
+    if missing_types:
+        raise PublicationVerificationError(
+            "structured_data_types_missing:" + ",".join(missing_types)
+        )
+    return {
+        "status": "schema_validated",
+        "verified_url": document["url"],
+        "status_code": status_code,
+        "content_type": content_type,
+        "sha256": document["sha256"],
+        "size_bytes": document["size_bytes"],
+        "structured_types": structured_types,
+        "expected_types": required_types,
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def verify_brand_fact_source(
     url: str,
     statement: str,

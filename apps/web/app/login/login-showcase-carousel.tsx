@@ -55,7 +55,7 @@ export function LoginShowcaseCarousel() {
   const [paused, setPaused] = useState(false);
   const [scheduleVersion, setScheduleVersion] = useState(0);
 
-  const activeIndex = position === TRAILING_FIRST_CLONE_POSITION ? 0 : position - FIRST_REAL_CARD_POSITION;
+  const activeIndex = ((position - FIRST_REAL_CARD_POSITION) % cards.length + cards.length) % cards.length;
 
   const centerActiveCard = useCallback(() => {
     const viewport = viewportRef.current;
@@ -90,7 +90,7 @@ export function LoginShowcaseCarousel() {
     if (paused || reducedMotion.matches) return;
 
     const advance = () => {
-      setPosition((current) => current + 1);
+      setPosition((current) => current >= TRAILING_FIRST_CLONE_POSITION ? FIRST_REAL_CARD_POSITION : current + 1);
     };
 
     let interval: number | undefined;

@@ -24,7 +24,6 @@ from app.models.cleanroom_v1 import (
     GeoContentAsset,
     GeoContentBrief,
     GeoContentClaim,
-    GeoOptimizationAction,
     GeoPlatformVariant,
     GeoWebsiteAudit,
     GeoWorkspace,

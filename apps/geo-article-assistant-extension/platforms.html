@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GEO 文章助手 · 平台目录</title>
+    <link rel="stylesheet" href="platforms.css">
+  </head>
+  <body>
+    <main class="catalog-shell">
+      <header class="catalog-header">
+        <div class="catalog-brand">
+          <img src="assets/icons/icon-48.png" alt="GEO 文章助手">
+          <div>
+            <h1>平台目录</h1>
+            <p>一键添加需要检测和写入草稿的平台</p>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button class="geo-link" id="openGeoButton" type="button">打开 GEO 平台 <span aria-hidden="true">↗</span></button>
+          <div class="catalog-count" aria-live="polite">已添加 <strong id="enabledCount">5</strong> / <span id="totalCount">18</span></div>
+        </div>
+      </header>
+
+      <section class="catalog-toolbar" aria-label="平台筛选">
+        <label class="search-box">
+          <span aria-hidden="true">⌕</span>
+          <input id="searchInput" type="search" placeholder="搜索平台" autocomplete="off">
+        </label>
+        <div class="filter-group" role="group" aria-label="添加状态">
+          <button class="filter-button active" data-filter="all" type="button">全部 <span id="allCount">18</span></button>
+          <button class="filter-button" data-filter="enabled" type="button">已添加 <span id="filterEnabledCount">5</span></button>
+          <button class="filter-button" data-filter="disabled" type="button">未添加 <span id="filterDisabledCount">13</span></button>
+        </div>
+      </section>
+
+      <section class="catalog-grid" id="catalogGrid" aria-live="polite"></section>
+      <p class="empty-state" id="emptyState" hidden>没有找到匹配的平台</p>
+
+      <nav class="catalog-pagination" id="catalogPagination" aria-label="平台目录分页">
+        <button class="page-arrow" id="previousPageButton" type="button" aria-label="上一页">‹</button>
+        <div class="page-indicators" id="pageIndicators" aria-label="页码"></div>
+        <button class="page-arrow" id="nextPageButton" type="button" aria-label="下一页">›</button>
+        <span class="page-summary" id="pageSummary" aria-live="polite"></span>
+      </nav>
+
+      <footer class="catalog-footer">
+        <p><span aria-hidden="true">◇</span> 仅使用当前浏览器登录状态，只写草稿，不自动发布</p>
+        <button id="doneButton" type="button">完成</button>
+      </footer>
+    </main>
+    <script type="module" src="platforms.js"></script>
+  </body>
+</html>

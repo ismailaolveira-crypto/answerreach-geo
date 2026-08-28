@@ -4,6 +4,18 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+ArticleAssistantPlatformKey = Literal[
+    "wechat", "zhihu", "juejin", "51cto", "csdn", "bilibili", "baijiahao",
+    "weibo", "yuque", "douban", "sohu", "xueqiu", "cnblogs", "oschina",
+    "segmentfault", "imooc", "woshipm", "eastmoney",
+]
+ContentPlatformKey = Literal[
+    "official_site", "xiaohongshu", "wechat", "zhihu", "juejin", "51cto",
+    "csdn", "bilibili", "baijiahao", "weibo", "yuque", "douban", "sohu",
+    "xueqiu", "cnblogs", "oschina", "segmentfault", "imooc", "woshipm",
+    "eastmoney",
+]
+
 
 class WorkspaceCreate(BaseModel):
     company_id: int
@@ -19,6 +31,30 @@ class WorkspaceRead(WorkspaceCreate):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ManagedWorkerServiceRead(BaseModel):
+    supported: bool
+    installed: bool
+    running: bool
+    repository_match: bool
+    state: str
+    pid: int | None = None
+    label: str
+    message: str
+
+
+class QueueWorkerRepairSummaryRead(BaseModel):
+    status: str
+    action: str
+    recovered_jobs: int = Field(ge=0)
+    exhausted_jobs: int = Field(ge=0)
+    schedules_dispatched: int = Field(ge=0)
+    schedules_failed: int = Field(ge=0)
+    schedule_retries: int = Field(default=0, ge=0)
+    schedule_retry_failures: int = Field(default=0, ge=0)
+    repaired_at: datetime
+    message: str
+
+
 class QueueWorkerStatusRead(BaseModel):
     workspace_id: int
     online: bool
@@ -32,6 +68,22 @@ class QueueWorkerStatusRead(BaseModel):
     last_seen_at: datetime | None = None
     heartbeat_interval_seconds: int = Field(ge=1)
     offline_after_seconds: int = Field(ge=1)
+    message: str
+    managed_service: ManagedWorkerServiceRead | None = None
+    last_repair: QueueWorkerRepairSummaryRead | None = None
+
+
+class QueueWorkerRepairRead(BaseModel):
+    status: Literal["online", "recovering", "needs_attention", "unsupported"]
+    service_action: str
+    managed_service: ManagedWorkerServiceRead
+    recovered_jobs: int = Field(ge=0)
+    exhausted_jobs: int = Field(ge=0)
+    schedules_dispatched: int = Field(ge=0)
+    schedules_failed: int = Field(ge=0)
+    schedule_retries: int = Field(default=0, ge=0)
+    schedule_retry_failures: int = Field(default=0, ge=0)
+    worker: QueueWorkerStatusRead
     message: str
 
 
@@ -446,6 +498,23 @@ class SourceMapEvidenceReference(BaseModel):
     source_title: str | None = None
 
 
+class SourceMapScoreFactors(BaseModel):
+    citation_frequency: int
+    answer_reach: int
+    model_breadth: int
+    question_breadth: int
+
+
+class SourceMapRelation(BaseModel):
+    key: str
+    label: str
+    shared_answer_count: int
+    shared_model_count: int
+    shared_question_count: int
+    strength_score: int
+    strength: Literal["strong", "medium", "weak"]
+
+
 class SourceMapItem(BaseModel):
     key: str
     label: str
@@ -462,6 +531,13 @@ class SourceMapItem(BaseModel):
     evidence_truncated: bool
     models: list[SourceMapBreakdown]
     questions: list[SourceMapBreakdown]
+    influence_score: int
+    tier: Literal["core", "high", "growth", "unverified"]
+    tier_label: str
+    question_count: int
+    score_factors: SourceMapScoreFactors
+    classification_reason: str
+    related_sources: list[SourceMapRelation]
     reason: str | None = None
 
 
@@ -1022,6 +1098,25 @@ class ActionRead(ActionCreate):
     stage: str = "selected"
     baseline_snapshot: dict = Field(default_factory=dict)
     selected_scope: dict = Field(default_factory=dict)
+    measurement_plan: dict = Field(default_factory=dict)
+    action_type: str = "legacy_unclassified"
+    deliverable_type: str = "legacy_deliverable"
+    workflow_version: str = "action-flow.legacy-v1"
+    assignee_user_id: int | None = None
+    due_at: datetime | None = None
+    approval_due_at: datetime | None = None
+    approval_requested_at: datetime | None = None
+    blocked_reason_code: str | None = None
+    blocked_note: str | None = None
+    affected_question_ids: list[int] = Field(default_factory=list)
+    affected_model_keys: list[str] = Field(default_factory=list)
+    scope_fingerprint: str | None = None
+    measurement_status: str = "not_eligible"
+    completed_target_count: int = 0
+    retest_eligible_target_count: int = 0
+    eligible_target_ids: list[int] = Field(default_factory=list)
+    is_overdue: bool = False
+    next_action: str = "查看行动"
     blocked_reason: str | None = None
     selected_at: datetime | None = None
     completed_at: datetime | None = None
@@ -1253,13 +1348,7 @@ class AgentRuntimeTestRead(BaseModel):
 
 
 class AgentRunCreate(BaseModel):
-    selected_platforms: list[
-        Literal[
-            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-        ]
-    ] = Field(
-        default_factory=list, max_length=7
-    )
+    selected_platforms: list[ContentPlatformKey] = Field(default_factory=list, max_length=20)
     runtime_key: Literal["local_codex", "claude_agent", "hermes", "openclaw"] = "local_codex"
     model: str | None = Field(default=None, max_length=120)
     reasoning_effort: Literal[
@@ -1390,9 +1479,7 @@ class ContentBriefRead(ContentBriefCreate):
 
 class ContentGenerateRequest(BaseModel):
     provider_id: int = Field(ge=1)
-    platform_key: Literal[
-        "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-    ] = "official_site"
+    platform_key: ContentPlatformKey = "official_site"
 
 
 class ContentAssetRead(BaseModel):
@@ -1417,12 +1504,8 @@ class ContentAssetRead(BaseModel):
 
 
 class PlatformVariantCreate(BaseModel):
-    platform_keys: list[
-        Literal[
-            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-        ]
-    ] = Field(
-        default_factory=lambda: ["official_site", "zhihu", "wechat"]
+    platform_keys: list[ContentPlatformKey] = Field(
+        default_factory=lambda: ["official_site", "zhihu", "wechat"], max_length=20
     )
 
 
@@ -1479,6 +1562,7 @@ class ContentReviewRead(BaseModel):
     checks: dict = Field(default_factory=dict)
     issues: list[dict] = Field(default_factory=list)
     reviewer_id: int | None
+    reviewer_name: str | None = None
     created_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
@@ -1502,18 +1586,8 @@ class ContentReviewDecision(BaseModel):
     verdict: Literal["approved", "changes_requested"]
     confirmed_claim_ids: list[int] = Field(default_factory=list, max_length=200)
     unverified_claim_ids: list[int] = Field(default_factory=list, max_length=200)
-    platform_keys: list[
-        Literal[
-            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-        ]
-    ] = Field(
-        default_factory=list, max_length=7
-    )
-    reviewed_platform_keys: list[
-        Literal[
-            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-        ]
-    ] = Field(default_factory=list, max_length=7)
+    platform_keys: list[ContentPlatformKey] = Field(default_factory=list, max_length=20)
+    reviewed_platform_keys: list[ContentPlatformKey] = Field(default_factory=list, max_length=20)
     note: str | None = Field(default=None, max_length=2000)
 
 
@@ -1523,11 +1597,7 @@ class AgentRevisionRequest(BaseModel):
 
 class DistributionRunCreate(BaseModel):
     content_asset_id: int = Field(ge=1)
-    platform_keys: list[
-        Literal[
-            "official_site", "zhihu", "juejin", "csdn", "51cto", "wechat", "xiaohongshu"
-        ]
-    ] = Field(min_length=1, max_length=7)
+    platform_keys: list[ContentPlatformKey] = Field(min_length=1, max_length=20)
     idempotency_key: str = Field(min_length=8, max_length=160)
 
 
@@ -1569,6 +1639,32 @@ class DistributionRunRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ArticleAssistantTaskTarget(BaseModel):
+    target_id: int
+    platform_key: ArticleAssistantPlatformKey
+    platform_variant_id: int
+    title: str
+    summary: str
+    body_markdown: str
+    tags: list[str] = Field(default_factory=list)
+    category: str | None = None
+    image_manifest: list[dict] = Field(default_factory=list)
+    content_fingerprint: str
+
+
+class ArticleAssistantTaskRead(BaseModel):
+    protocol_version: Literal["geo-article-assistant.v1"]
+    task_token: str
+    run_id: int
+    workspace_id: int
+    action_id: int | None = None
+    content_asset_id: int
+    issued_at: datetime
+    expires_at: datetime
+    content_fingerprint: str
+    targets: list[ArticleAssistantTaskTarget] = Field(min_length=1, max_length=18)
+
+
 class ContentLibraryItemRead(BaseModel):
     asset: ContentAssetRead
     action_id: int
@@ -1600,7 +1696,7 @@ class ContentLibraryItemRead(BaseModel):
 
 class DistributionClientTargetResult(BaseModel):
     platform_key: str = Field(min_length=1, max_length=80)
-    request_status: Literal["draft_link_returned", "draft_saved", "failed", "cancelled"]
+    request_status: Literal["draft_link_returned", "failed", "cancelled"]
     draft_url: str | None = Field(default=None, max_length=1500)
     external_draft_id: str | None = Field(default=None, max_length=255)
     message: str | None = Field(default=None, max_length=2000)
@@ -1608,6 +1704,13 @@ class DistributionClientTargetResult(BaseModel):
 
 class DistributionClientResults(BaseModel):
     targets: list[DistributionClientTargetResult] = Field(min_length=1, max_length=20)
+
+
+class ArticleAssistantClientResults(BaseModel):
+    protocol_version: Literal["geo-article-assistant.v1"]
+    task_token: str = Field(min_length=24, max_length=500)
+    content_fingerprint: str = Field(min_length=64, max_length=64)
+    targets: list[DistributionClientTargetResult] = Field(min_length=1, max_length=18)
 
 
 class HumanPublicationRecord(BaseModel):
@@ -1622,6 +1725,7 @@ class ActionRetestRead(BaseModel):
     id: int
     action_id: int
     workspace_id: int
+    round_index: int = Field(ge=1)
     status: str
     baseline_batch_id: int | None = None
     retest_batch_id: int | None = None
@@ -1631,6 +1735,7 @@ class ActionRetestRead(BaseModel):
     retest_metrics: dict = Field(default_factory=dict)
     conclusion: str = "pending"
     measured_delta: dict = Field(default_factory=dict)
+    target_evidence: list[dict] = Field(default_factory=list)
     batch: OfficialApiObservationBatchSummary | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None

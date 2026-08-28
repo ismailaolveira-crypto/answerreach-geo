@@ -15,6 +15,8 @@ from uuid import uuid4
 
 from PIL import Image, ImageStat
 
+from app.services.article_media import MAX_ARTICLE_VISUALS
+
 
 @dataclass(frozen=True)
 class CommandResult:
@@ -177,7 +179,7 @@ class OfficialSiteCapture:
                     )[:4],
                 }
             )
-            if len(accepted) == 2:
+            if len(accepted) == MAX_ARTICLE_VISUALS:
                 break
         if not accepted:
             return CaptureOutcome(status="rejected", items=[], reason="no_official_domain_candidate")

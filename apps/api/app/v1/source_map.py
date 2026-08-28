@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from itertools import combinations
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -43,6 +44,134 @@ class _Aggregate:
     brand_absent_evidence_ids: set[int] = field(default_factory=set)
     models: dict[str, _Breakdown] = field(default_factory=lambda: defaultdict(_Breakdown))
     questions: dict[int, _Breakdown] = field(default_factory=lambda: defaultdict(_Breakdown))
+
+
+@dataclass
+class _Relation:
+    evidence_ids: set[int] = field(default_factory=set)
+    model_keys: set[str] = field(default_factory=set)
+    question_ids: set[int] = field(default_factory=set)
+
+
+def _apply_influence_scores(items: list[dict]) -> None:
+    """Add an explainable, scope-relative observation weight to source rows.
+
+    The score describes how prominently a source appears in the selected evidence
+    scope.  It is deliberately not named authority, quality, or causal influence.
+    Four independently inspectable signals add to 100 points:
+
+    * citation frequency: 35
+    * distinct-answer reach: 25
+    * model breadth: 20
+    * question breadth: 20
+
+    Each signal is normalized against the strongest source in the same filtered
+    scope, so changing the date/model/question filters also changes the score.
+    A source seen in fewer than two archived answers remains "unverified" even if
+    it happens to be the only source in a very small scope.
+    """
+
+    if not items:
+        return
+    max_citations = max(item["citation_count"] for item in items) or 1
+    max_answers = max(item["answer_count"] for item in items) or 1
+    max_models = max(item["model_count"] for item in items) or 1
+    max_questions = max(len(item["questions"]) for item in items) or 1
+
+    for item in items:
+        factors = {
+            "citation_frequency": round(item["citation_count"] / max_citations * 35),
+            "answer_reach": round(item["answer_count"] / max_answers * 25),
+            "model_breadth": round(item["model_count"] / max_models * 20),
+            "question_breadth": round(len(item["questions"]) / max_questions * 20),
+        }
+        score = min(100, sum(factors.values()))
+        if item["answer_count"] < 2:
+            score = min(score, 29)
+
+        if score >= 70:
+            tier, tier_label = "core", "核心影响"
+        elif score >= 50:
+            tier, tier_label = "high", "高价值"
+        elif score >= 30:
+            tier, tier_label = "growth", "成长机会"
+        else:
+            tier, tier_label = "unverified", "待验证"
+
+        item.update(
+            {
+                "influence_score": score,
+                "tier": tier,
+                "tier_label": tier_label,
+                "question_count": len(item["questions"]),
+                "score_factors": factors,
+                "classification_reason": (
+                    f"出现在 {item['answer_count']} 条回答中，累计 {item['citation_count']} 次引用，"
+                    f"覆盖 {item['model_count']} 个模型和 {len(item['questions'])} 个问题。"
+                ),
+                "related_sources": [],
+            }
+        )
+
+
+def _attach_domain_relations(
+    items: list[dict],
+    relations: dict[tuple[str, str], _Relation],
+) -> None:
+    """Attach the strongest co-citation relationships to each visible source."""
+
+    if not items or not relations:
+        return
+    item_by_key = {item["key"]: item for item in items}
+    visible = set(item_by_key)
+    visible_relations = [
+        (pair, relation)
+        for pair, relation in relations.items()
+        if pair[0] in visible and pair[1] in visible
+    ]
+    if not visible_relations:
+        return
+
+    max_answers = max(len(relation.evidence_ids) for _, relation in visible_relations) or 1
+    max_models = max(len(relation.model_keys) for _, relation in visible_relations) or 1
+    max_questions = max(len(relation.question_ids) for _, relation in visible_relations) or 1
+
+    for (source_key, target_key), relation in visible_relations:
+        shared_answers = len(relation.evidence_ids)
+        shared_models = len(relation.model_keys)
+        shared_questions = len(relation.question_ids)
+        strength_score = round(
+            shared_answers / max_answers * 70
+            + shared_models / max_models * 15
+            + shared_questions / max_questions * 15
+        )
+        # Relative prominence alone is not enough to call a relationship strong:
+        # one coincidental co-citation must remain weak in a tiny evidence scope.
+        strength = (
+            "strong"
+            if shared_answers >= 3 and strength_score >= 65
+            else "medium"
+            if shared_answers >= 2 and strength_score >= 35
+            else "weak"
+        )
+        for current_key, related_key in ((source_key, target_key), (target_key, source_key)):
+            item_by_key[current_key]["related_sources"].append(
+                {
+                    "key": related_key,
+                    "label": item_by_key[related_key]["label"],
+                    "shared_answer_count": shared_answers,
+                    "shared_model_count": shared_models,
+                    "shared_question_count": shared_questions,
+                    "strength_score": strength_score,
+                    "strength": strength,
+                }
+            )
+
+    for item in items:
+        item["related_sources"].sort(
+            key=lambda row: (-row["strength_score"], -row["shared_answer_count"], row["label"])
+        )
+        item["related_sources"] = item["related_sources"][:5]
 
 
 def normalize_source_url(value: Any) -> NormalizedSource | None:
@@ -183,9 +312,11 @@ def build_source_map(
     duplicate_source_count = 0
     answers_with_sources: set[int] = set()
     total_citations = 0
+    relations: dict[tuple[str, str], _Relation] = defaultdict(_Relation)
 
     for evidence in evidence_rows:
         seen_pages: set[str] = set()
+        seen_domains: set[str] = set()
         for source in evidence.source_items or []:
             normalized = normalize_source_url(source.get("url") if isinstance(source, dict) else None)
             if normalized is None:
@@ -195,6 +326,7 @@ def build_source_map(
                 duplicate_source_count += 1
                 continue
             seen_pages.add(normalized.page_key)
+            seen_domains.add(normalized.domain)
             answers_with_sources.add(evidence.id)
             total_citations += 1
 
@@ -234,6 +366,12 @@ def build_source_map(
                 aggregate.questions[evidence.question_plan_id].citation_count += 1
                 aggregate.questions[evidence.question_plan_id].evidence_ids.add(evidence.id)
 
+        for pair in combinations(sorted(seen_domains), 2):
+            relation = relations[pair]
+            relation.evidence_ids.add(evidence.id)
+            relation.model_keys.add(evidence.model_key)
+            relation.question_ids.add(evidence.question_plan_id)
+
     serialized_domains = [
         _serialize_aggregate(item, evidence_by_id, questions, evidence_limit)
         for item in domains.values()
@@ -247,6 +385,10 @@ def build_source_map(
 
     serialized_domains.sort(key=rank_key)
     serialized_pages.sort(key=rank_key)
+    _apply_influence_scores(serialized_domains)
+    _apply_influence_scores(serialized_pages)
+    visible_domains = serialized_domains[:limit]
+    _attach_domain_relations(visible_domains, relations)
     opportunities = [
         {
             **item,
@@ -287,7 +429,7 @@ def build_source_map(
             "duplicate_source_count": duplicate_source_count,
             "excluded_non_real_answer_count": excluded_non_real_answer_count,
         },
-        "domains": serialized_domains[:limit],
+        "domains": visible_domains,
         "pages": serialized_pages[:limit],
         "opportunities": opportunities,
     }

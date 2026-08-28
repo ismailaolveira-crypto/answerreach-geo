@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Route } from "next";
+import { GeoGlobalScopeBar } from "@/components/geo-global-scope-bar";
 import { revalidatePath } from "next/cache";
 import { notFound } from "next/navigation";
 import { redirect } from "next/navigation";
@@ -24,20 +25,39 @@ import SamplingBatchPanel, {
 	type ObservationProvider,
 } from "./sampling-batch-panel";
 import ObservationBatchProgress from "./observation-batch-progress";
+import { BusinessDashboard } from "./business-dashboard";
 
 export const maxDuration = 300;
 
 type Props = {
 	params: Promise<{ workspaceId: string }>;
 	searchParams: Promise<{
-		model?: string;
+		model?: string | string[];
 		scope?: string;
 		period?: string;
+		range?: string;
+		from?: string;
+		to?: string;
+		question?: string | string[];
 		notice?: string;
-		error?: string;
-		batch?: string;
-	}>;
+			error?: string;
+			batch?: string | string[];
+			goal?: string;
+			__view?: "decision";
+		}>;
 };
+
+export default async function GeoWorkspaceHome({ params, searchParams }: Props) {
+	const { workspaceId } = await params;
+	const query = await searchParams;
+	if (query.__view === "decision") {
+		return DecisionMapContent({
+			params: Promise.resolve({ workspaceId }),
+			searchParams: Promise.resolve(query),
+		});
+	}
+	return <BusinessDashboard workspaceId={workspaceId} query={query} />;
+}
 
 const STATUS: Record<string, { label: string; tone: string; icon: string }> = {
 	absent: { label: "未出现", tone: "quiet", icon: "×" },
@@ -129,21 +149,28 @@ function Kpi({
 	);
 }
 
-export default async function SpringYuanDecisionMap({
+async function DecisionMapContent({
 	params,
 	searchParams,
 }: Props) {
 	const { workspaceId } = await params;
 	const query = await searchParams;
-	const activeBatchId = Number(query.batch);
-	const periodMode = ["7", "30", "90"].includes(String(query.period))
-		? String(query.period)
-		: "current";
-	const periodDays = periodMode === "7" ? 7 : periodMode === "90" ? 90 : 30;
+	const firstParam = (value: string | string[] | undefined) => Array.isArray(value) ? value[0] : value;
+	const activeBatchId = Number(firstParam(query.batch));
+	const selectedBatchIds = (Array.isArray(query.batch) ? query.batch : query.batch ? [query.batch] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0);
+	const selectedModelKeys = (Array.isArray(query.model) ? query.model : query.model ? [query.model] : []).filter((value) => value && value !== "all");
+	const selectedQuestionIds = (Array.isArray(query.question) ? query.question : query.question ? [query.question] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0);
+	const rangeDays = firstParam(query.range)?.replace("d", "");
+	const periodMode = ["7", "30", "90", "365"].includes(String(rangeDays))
+		? String(rangeDays)
+		: ["7", "30", "90"].includes(String(firstParam(query.period)))
+			? String(firstParam(query.period))
+			: firstParam(query.period) === "current" ? "current" : "30";
+	const periodDays = periodMode === "7" ? 7 : periodMode === "90" ? 90 : periodMode === "365" ? 365 : 30;
 	const isCurrentMeasurement = periodMode === "current";
 	const requestedScope = query.scope === "all" ? "all" : "high";
 	const requestedModel =
-		query.model &&
+		firstParam(query.model) &&
 		[
 			"deepseek",
 			"doubao",
@@ -152,8 +179,8 @@ export default async function SpringYuanDecisionMap({
 			"glm",
 			"kimi",
 			"hunyuan",
-		].includes(query.model)
-			? query.model
+		].includes(firstParam(query.model)!)
+			? firstParam(query.model)!
 			: "all";
 	// The dashboard describes one measurement, not a lifetime aggregate. Keep
 	// the last submitted batch selected until the user explicitly starts the
@@ -178,9 +205,11 @@ export default async function SpringYuanDecisionMap({
 			await Promise.all([
 				getCleanroomDecisionMap(workspaceId, {
 					periodDays,
-					modelKey: requestedModel,
+					modelKeys: selectedModelKeys,
 					scope: requestedScope,
 					batchId: isCurrentMeasurement ? activeBatch?.batch_id : undefined,
+					batchIds: isCurrentMeasurement ? undefined : selectedBatchIds,
+					questionPlanIds: selectedQuestionIds,
 				}),
 				getCleanroomActions(workspaceId),
 				getLLMProviders(),
@@ -193,7 +222,7 @@ export default async function SpringYuanDecisionMap({
 		throw error;
 	}
 
-	const selectedModel = decisionMap.models.some(
+	const selectedModel = selectedModelKeys.length === 1 && decisionMap.models.some(
 		(item) => item.key === requestedModel,
 	)
 		? requestedModel
@@ -413,14 +442,14 @@ export default async function SpringYuanDecisionMap({
 					`任务矩阵校验失败：期望 ${expectedTotal} 条，后台仅创建 ${batch.total} 条`,
 				);
 			}
-			revalidatePath(`/geo/${workspaceId}`);
-			redirect(`/geo/${workspaceId}?notice=queued&batch=${batch.batch_id}`);
+			revalidatePath(`/geo/${workspaceId}/insights/decision`);
+			redirect(`/geo/${workspaceId}/insights/decision?notice=queued&batch=${batch.batch_id}`);
 		} catch (error) {
 			if (error && typeof error === "object" && "digest" in error) throw error;
 			const message =
 				error instanceof Error ? error.message.slice(0, 240) : "模型观测失败";
 			redirect(
-				`/geo/${workspaceId}?notice=failed&error=${encodeURIComponent(message)}`,
+				`/geo/${workspaceId}/insights/decision?notice=failed&error=${encodeURIComponent(message)}`,
 			);
 		}
 	}
@@ -429,7 +458,7 @@ export default async function SpringYuanDecisionMap({
 		"use server";
 		try {
 			await updateCleanroomQuestion(workspaceId, questionId, questionText);
-			revalidatePath(`/geo/${workspaceId}`);
+			revalidatePath(`/geo/${workspaceId}/insights/decision`);
 			return { ok: true };
 		} catch (error) {
 			return {
@@ -470,28 +499,10 @@ export default async function SpringYuanDecisionMap({
 					</div>
 					<div className="sy-cta-row">
 						<form className="sy-filters" method="get" aria-label="筛选决策地图">
-							<select
-								name="period"
-								defaultValue={periodMode}
-								aria-label="观测时间"
-							>
-								<option value="current">当前测试</option>
-								<option value="7">近 7 天</option>
-								<option value="30">近 30 天</option>
-								<option value="90">近 90 天</option>
-							</select>
-							<select
-								name="model"
-								defaultValue={selectedModel}
-								aria-label="模型"
-							>
-								<option value="all">全部模型</option>
-								{decisionMap.models.map((item) => (
-									<option key={item.key} value={item.key}>
-										{item.label}
-									</option>
-								))}
-							</select>
+							{(["range", "from", "to", "batch", "model", "question"] as const).flatMap((key) => {
+								const values = Array.isArray(query[key]) ? query[key] : query[key] ? [query[key]] : [];
+								return values.map((value) => <input key={`${key}-${value}`} type="hidden" name={key} value={value} />);
+							})}
 							<select
 								name="scope"
 								defaultValue={selectedScope}
@@ -504,7 +515,7 @@ export default async function SpringYuanDecisionMap({
 						</form>
 					</div>
 				</section>
-
+				<GeoGlobalScopeBar workspaceId={workspaceId} />
 				{activeBatch ? (
 					<ObservationBatchProgress
 						key={`observation-progress-${activeBatch.batch_id}`}

@@ -1,0 +1,332 @@
+:root {
+  color-scheme: light;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+  color: #11223f;
+  background: #f4f7fd;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  width: 420px;
+  min-height: 570px;
+  margin: 0;
+  background:
+    radial-gradient(circle at 92% 2%, rgba(152, 192, 255, 0.35), transparent 31%),
+    radial-gradient(circle at 10% 96%, rgba(224, 215, 255, 0.42), transparent 34%),
+    linear-gradient(145deg, #f8faff 0%, #f1f5fc 100%);
+}
+
+button {
+  font: inherit;
+}
+
+.popup-shell {
+  min-height: 570px;
+  padding: 22px 20px 16px;
+}
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 2px 18px;
+}
+
+.product-mark {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 15px;
+  box-shadow: 0 10px 24px rgba(40, 102, 233, 0.22);
+}
+
+.product-mark img {
+  width: 48px;
+  height: 48px;
+}
+
+.hero-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.hero h1 {
+  margin: 0;
+  color: #10213d;
+  font-size: 19px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
+.hero p {
+  margin: 4px 0 0;
+  color: #70809b;
+  font-size: 13px;
+}
+
+.version {
+  align-self: flex-start;
+  margin-top: 3px;
+  color: #8a98ad;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.status-summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.66);
+  box-shadow: 0 8px 30px rgba(72, 92, 130, 0.08), inset 0 0 0 1px rgba(182, 198, 226, 0.22);
+  backdrop-filter: blur(18px) saturate(145%);
+}
+
+.status-light {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #2eb872;
+  box-shadow: 0 0 0 4px rgba(46, 184, 114, 0.12);
+}
+
+.status-summary strong {
+  flex: 1;
+  color: #334764;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.status-summary > span:last-child {
+  color: #98a4b7;
+  font-size: 11px;
+}
+
+.platform-card {
+  max-height: 392px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 18px 55px rgba(55, 76, 118, 0.11), inset 0 0 0 1px rgba(180, 197, 225, 0.24);
+  backdrop-filter: blur(24px) saturate(150%);
+}
+
+.platform-card:has(.platform-row:nth-child(6)) {
+  overflow-y: auto;
+}
+
+.platform-list {
+  margin: 0;
+  padding: 0 15px;
+  list-style: none;
+}
+
+.platform-row {
+  display: grid;
+  min-height: 66px;
+  grid-template-columns: 42px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  border-bottom: 1px solid rgba(197, 210, 231, 0.52);
+}
+
+.platform-row:last-child {
+  border-bottom: 0;
+}
+
+.platform-logo {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid rgba(208, 218, 234, 0.7);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 5px 14px rgba(45, 64, 99, 0.08);
+}
+
+.platform-logo img {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+}
+
+.platform-copy {
+  min-width: 0;
+}
+
+.platform-name {
+  margin: 0;
+  color: #20334f;
+  font-size: 14px;
+  font-weight: 690;
+}
+
+.platform-detail {
+  overflow: hidden;
+  margin: 4px 0 0;
+  color: #8b99ac;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-pill {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.status-pill::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.status-logged_in {
+  color: #1b9b5d;
+  background: rgba(35, 179, 105, 0.11);
+}
+
+.status-not_logged_in {
+  color: #74839a;
+  background: rgba(117, 133, 157, 0.1);
+}
+
+.status-requires_authorization {
+  color: #5f64d9;
+  background: rgba(104, 108, 224, 0.1);
+}
+
+.status-error {
+  color: #d06a3b;
+  background: rgba(222, 111, 60, 0.1);
+}
+
+.status-checking {
+  color: #5d77a4;
+  background: rgba(82, 119, 179, 0.09);
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.actions button {
+  min-height: 46px;
+  border-radius: 14px;
+  font-size: 13px;
+  font-weight: 680;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+
+.actions button:hover {
+  transform: translateY(-1px);
+}
+
+.actions button:active {
+  transform: translateY(0) scale(0.985);
+}
+
+.actions button:focus-visible {
+  outline: 3px solid rgba(50, 119, 245, 0.28);
+  outline-offset: 2px;
+}
+
+.primary-button {
+  border: 1px solid #2673ef;
+  color: white;
+  background: linear-gradient(180deg, #347ff5 0%, #1f68e5 100%);
+  box-shadow: 0 10px 22px rgba(35, 104, 225, 0.22);
+}
+
+.secondary-button {
+  border: 1px solid rgba(177, 194, 220, 0.62);
+  color: #315276;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 7px 18px rgba(55, 76, 118, 0.07);
+}
+
+.refresh-icon {
+  display: inline-block;
+  margin-right: 5px;
+  font-size: 17px;
+  line-height: 0;
+}
+
+.primary-button[data-loading="true"] {
+  cursor: progress;
+  opacity: 0.72;
+}
+
+.primary-button[data-loading="true"] .refresh-icon {
+  animation: spin 760ms linear infinite;
+}
+
+footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 14px 0 0;
+  color: #8c99ad;
+  font-size: 11px;
+}
+
+.shield {
+  color: #4b7ddd;
+  font-size: 14px;
+  transform: rotate(45deg);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .status-summary,
+  .platform-card,
+  .secondary-button {
+    background: #fff;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .status-summary,
+  .platform-card,
+  .secondary-button {
+    border-color: #8190a8;
+  }
+}

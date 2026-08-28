@@ -1,0 +1,98 @@
+{
+  "manifest_version": 3,
+  "name": "GEO 文章助手",
+  "version": "0.3.0",
+  "description": "将 GEO 平台中已审核的内容写入已登录平台的草稿箱，不执行发布。",
+  "permissions": [
+    "declarativeNetRequestWithHostAccess",
+    "storage"
+  ],
+  "optional_permissions": [
+    "cookies"
+  ],
+  "host_permissions": [
+    "http://localhost:39003/*",
+    "http://127.0.0.1:39003/*",
+    "https://www.zhihu.com/*",
+    "https://zhuanlan.zhihu.com/*",
+    "https://api.zhihu.com/*",
+    "https://zhihu-pics-upload.zhimg.com/*",
+    "https://api.juejin.cn/*",
+    "https://juejin.cn/*",
+    "https://*.bytedanceapi.com/*",
+    "https://*.byteimg.com/*",
+    "https://blog.51cto.com/*",
+    "https://home.51cto.com/*",
+    "https://*.myqcloud.com/*",
+    "https://mp.weixin.qq.com/*"
+  ],
+  "optional_host_permissions": [
+    "https://api.bilibili.com/*",
+    "https://member.bilibili.com/*",
+    "https://baijiahao.baidu.com/*",
+    "https://weibo.com/*",
+    "https://card.weibo.com/*",
+    "https://picupload.weibo.com/*",
+    "https://www.yuque.com/*",
+    "https://www.douban.com/*",
+    "https://mp.sohu.com/*",
+    "https://mp.xueqiu.com/*",
+    "https://www.cnblogs.com/*",
+    "https://i.cnblogs.com/*",
+    "https://home.cnblogs.com/*",
+    "https://upload.cnblogs.com/*",
+    "https://www.oschina.net/*",
+    "https://my.oschina.net/*",
+    "https://apiv1.oschina.net/*",
+    "https://segmentfault.com/*",
+    "https://www.imooc.com/*",
+    "https://www.woshipm.com/*",
+    "https://mp.eastmoney.com/*",
+    "https://caifuhaoapi.eastmoney.com/*",
+    "https://emfront.eastmoney.com/*",
+    "https://gbapi.eastmoney.com/*"
+  ],
+  "options_page": "platforms.html",
+  "action": {
+    "default_title": "GEO 文章助手",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://localhost:39003/*", "http://127.0.0.1:39003/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-bridge.js"],
+      "matches": ["http://localhost:39003/*", "http://127.0.0.1:39003/*"]
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "platform_headers",
+        "enabled": true,
+        "path": "rules/platform-headers.json"
+      }
+    ]
+  }
+}

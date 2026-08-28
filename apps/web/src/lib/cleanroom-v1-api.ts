@@ -16,6 +16,117 @@ export type CleanroomWorkspace = {
 	status: string;
 };
 
+export type GeoCollaborationMember = {
+	id: number;
+	name: string;
+	email: string;
+	role: WorkspaceMembership["role"];
+	initial: string;
+};
+
+export type GeoCollaborationItem = {
+	key: string;
+	context_type: "action" | "alert" | "question" | "evidence";
+	context_id: number;
+	thread_id?: number | null;
+	title: string;
+	category: string;
+	status: string;
+	priority: string;
+	assignee_user_id?: number | null;
+	assignee_name?: string | null;
+	start_at?: string | null;
+	due_at?: string | null;
+	participant_user_ids: number[];
+	progress: number;
+	target_progress: { completed: number; total: number };
+	pending_approvals: number;
+	evidence_count: number;
+	question_ids: number[];
+	model_keys: string[];
+	blocked_note?: string | null;
+	message_count: number;
+	has_conversation: boolean;
+	last_message_preview?: string | null;
+	last_message_author_name?: string | null;
+	mentioned_current_user: boolean;
+	requires_attention: boolean;
+	attention_reason?: string | null;
+	unread_count: number;
+	last_activity_at: string;
+};
+
+export type GeoCollaborationMessage = {
+	id: number;
+	kind: "comment" | "system";
+	body: string;
+	author?: GeoCollaborationMember | null;
+	mention_user_ids: number[];
+	attachment_refs: GeoCollaborationAttachmentRef[];
+	created_at: string;
+	delivery_state?: "sending" | "failed";
+};
+
+export type GeoCollaborationAttachmentRef = {
+	label: string;
+	url?: string | null;
+	kind: "link" | "evidence" | "image" | "video" | "file" | "geo_object";
+	attachment_id?: number;
+	mime_type?: string;
+	byte_size?: number;
+	object_type?: "module" | "action" | "alert" | "question" | "content_asset" | "evidence";
+	object_id?: number;
+	object_key?: string;
+	module_label?: string;
+	title?: string;
+	subtitle?: string;
+	href?: string;
+};
+
+export type GeoCollaborationShareDraft = {
+	kind: "module" | "action" | "alert" | "question" | "content_asset" | "evidence";
+	object_id?: number;
+	module_key?: string;
+};
+
+export type GeoCollaborationActivity = {
+	id: string;
+	kind: "system";
+	event_type: string;
+	from_stage?: string | null;
+	to_stage?: string | null;
+	detail: Record<string, unknown>;
+	author?: GeoCollaborationMember | null;
+	created_at: string;
+};
+
+export type GeoCollaborationChannel = {
+	provider: "wecom" | "feishu" | "dingtalk";
+	label: string;
+	status: "disconnected" | "configured" | "connected" | "error";
+	display_name?: string | null;
+	configured_at?: string | null;
+	last_tested_at?: string | null;
+	last_error_code?: string | null;
+};
+
+export type GeoCollaborationCenter = {
+	workspace_id: number;
+	current_user_id: number;
+	members: GeoCollaborationMember[];
+	summary: { unread: number; mentions: number; pending_approvals: number; blocked: number };
+	items: GeoCollaborationItem[];
+	selected?: GeoCollaborationItem | null;
+	selected_detail?: {
+		rationale?: string | null;
+		summary?: string | null;
+		questions: Array<{ id: number; text: string }>;
+		messages: GeoCollaborationMessage[];
+		activity: GeoCollaborationActivity[];
+	} | null;
+	channels: GeoCollaborationChannel[];
+};
+
 export type WorkspaceMembership = {
 	id: number;
 	workspace_id: number;
@@ -88,6 +199,110 @@ export type QueueWorkerStatus = {
 	heartbeat_interval_seconds: number;
 	offline_after_seconds: number;
 	message: string;
+	managed_service?: ManagedWorkerService | null;
+	last_repair?: QueueWorkerRepairSummary | null;
+};
+
+export type ManagedWorkerService = {
+	supported: boolean;
+	installed: boolean;
+	running: boolean;
+	repository_match: boolean;
+	state: string;
+	pid?: number | null;
+	label: string;
+	message: string;
+};
+
+export type QueueWorkerRepairSummary = {
+	status: string;
+	action: string;
+	recovered_jobs: number;
+	exhausted_jobs: number;
+	schedules_dispatched: number;
+	schedules_failed: number;
+	schedule_retries: number;
+	schedule_retry_failures: number;
+	repaired_at: string;
+	message: string;
+};
+
+export type QueueWorkerRepair = {
+	status: "online" | "recovering" | "needs_attention" | "unsupported";
+	service_action: string;
+	managed_service: ManagedWorkerService;
+	recovered_jobs: number;
+	exhausted_jobs: number;
+	schedules_dispatched: number;
+	schedules_failed: number;
+	schedule_retries: number;
+	schedule_retry_failures: number;
+	worker: QueueWorkerStatus;
+	message: string;
+};
+
+export type GeoObservationSchedule = {
+	id: number;
+	name: string;
+	status: "active" | "paused";
+	cadence: "daily" | "weekly" | "custom";
+	weekdays: number[];
+	local_time: string;
+	timezone_name: string;
+	provider_ids: number[];
+	question_plan_ids: number[];
+	repeat_count: number;
+	scope_snapshot: Record<string, unknown>;
+	scope_fingerprint: string;
+	scope_version: number;
+	next_run_at: string;
+	last_run_at?: string | null;
+};
+
+export type GeoObservationScheduleRun = {
+	id: number;
+	schedule_id: number;
+	window_key: string;
+	status: string;
+	batch_id?: number | null;
+	baseline_batch_id?: number | null;
+	scope_snapshot: Record<string, unknown>;
+	scope_fingerprint: string;
+	scheduled_for: string;
+	started_at?: string | null;
+	completed_at?: string | null;
+	failure_reason?: string | null;
+};
+
+export type GeoChangeAlert = {
+	id: number;
+	alert_type: string;
+	severity: "critical" | "warning" | "info";
+	status: "open" | "confirmed" | "ignored";
+	title: string;
+	summary: string;
+	baseline_batch_id?: number | null;
+	current_batch_id?: number | null;
+	scope_snapshot: Record<string, unknown>;
+	completeness: Record<string, boolean | number>;
+	metric_snapshot: Record<string, unknown>;
+	evidence_ids: number[];
+	suggested_action: Record<string, string>;
+	converted_action_id?: number | null;
+	created_at: string;
+	resolved_at?: string | null;
+};
+
+export type GeoObservationAlertCenter = {
+	summary: {
+		active_schedules: number;
+		today_runs: number;
+		open_alerts: number;
+		data_completeness?: number | null;
+	};
+	schedules: GeoObservationSchedule[];
+	alerts: GeoChangeAlert[];
+	runs: GeoObservationScheduleRun[];
 };
 
 export type WorkspaceIntegrationSettings = {
@@ -319,6 +534,26 @@ export type SourceMapItem = {
 	evidence_truncated: boolean;
 	models: SourceMapBreakdown[];
 	questions: SourceMapBreakdown[];
+	influence_score: number;
+	tier: "core" | "high" | "growth" | "unverified";
+	tier_label: string;
+	question_count: number;
+	score_factors: {
+		citation_frequency: number;
+		answer_reach: number;
+		model_breadth: number;
+		question_breadth: number;
+	};
+	classification_reason: string;
+	related_sources: Array<{
+		key: string;
+		label: string;
+		shared_answer_count: number;
+		shared_model_count: number;
+		shared_question_count: number;
+		strength_score: number;
+		strength: "strong" | "medium" | "weak";
+	}>;
 	reason?: string | null;
 };
 
@@ -650,6 +885,92 @@ export type CleanroomAction = {
 	completed_at?: string | null;
 };
 
+export type ActionExecutionTarget = {
+	id: number;
+	workspace_id: number;
+	action_id: number;
+	target_key: string;
+	target_type: "platform" | "official_page" | "schema" | "external_source" | string;
+	platform_key?: string | null;
+	display_name: string;
+	target_ref: string;
+	delivery_status: string;
+	recorded_delivery_status?: string | null;
+	status_source: string;
+	status_note?: string | null;
+	distribution_target_id?: number | null;
+	ordinal: number;
+	metadata_json: Record<string, unknown>;
+	completed_at?: string | null;
+	completed_by_user_id?: number | null;
+	verified_at?: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type ActionExecutionEvidence = {
+	id: number;
+	workspace_id: number;
+	action_id: number;
+	target_id: number;
+	evidence_type: string;
+	source_url?: string | null;
+	artifact_uri?: string | null;
+	sha256: string;
+	verification_status: string;
+	detail: Record<string, unknown>;
+	submitted_by_user_id: number;
+	verified_by_user_id?: number | null;
+	submitted_at: string;
+	verified_at?: string | null;
+	supersedes_evidence_id?: number | null;
+	created_at: string;
+};
+
+export type ActionExecutionApproval = {
+	id: number;
+	workspace_id: number;
+	action_id: number;
+	target_id?: number | null;
+	approval_type: string;
+	status: string;
+	version: number;
+	requested_by_user_id: number;
+	reviewer_user_id: number;
+	due_at: string;
+	requested_at: string;
+	decided_at?: string | null;
+	note?: string | null;
+	subject_fingerprint: string;
+	created_at: string;
+};
+
+export type ActionExecutionDetail = CleanroomAction & {
+	action_type: "article" | "official_site" | "structured_data" | "third_party_source" | "legacy_unclassified";
+	deliverable_type: string;
+	workflow_version: string;
+	assignee_user_id?: number | null;
+	due_at?: string | null;
+	approval_due_at?: string | null;
+	approval_requested_at?: string | null;
+	blocked_reason_code?: string | null;
+	blocked_note?: string | null;
+	affected_question_ids: number[];
+	affected_model_keys: string[];
+	scope_fingerprint?: string | null;
+	measurement_status: string;
+	completed_target_count: number;
+	retest_eligible_target_count: number;
+	eligible_target_ids: number[];
+	is_overdue: boolean;
+	next_action: string;
+	targets: ActionExecutionTarget[];
+	approvals: ActionExecutionApproval[];
+	evidence: ActionExecutionEvidence[];
+};
+
+export type ActionExecutionView = "all" | "mine" | "approvals" | "overdue_blocked";
+
 export type CodexReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
 
 export type AgentRuntimeKey = "local_codex" | "claude_agent" | "hermes" | "openclaw";
@@ -950,7 +1271,7 @@ export type CleanroomPlatformVariant = {
 	body_markdown: string;
 	tags: string[];
 	category?: string | null;
-	image_manifest: Array<Record<string, unknown>>;
+	image_manifest: Array<Record<string, unknown> & { content_path?: string }>;
 	adaptation_contract: Record<string, unknown>;
 	content_fingerprint: string;
 	prompt_template_id?: number | null;
@@ -968,6 +1289,7 @@ export type CleanroomContentReview = {
 	checks: Record<string, unknown>;
 	issues: Array<Record<string, unknown>>;
 	reviewer_id?: number | null;
+	reviewer_name?: string | null;
 	created_at: string;
 };
 
@@ -1051,10 +1373,41 @@ export type CleanroomDistributionRun = {
 	targets: CleanroomDistributionTarget[];
 };
 
+export type GeoArticleAssistantTaskTarget = {
+	target_id: number;
+	platform_key:
+		| "wechat" | "zhihu" | "juejin" | "51cto" | "csdn" | "bilibili"
+		| "baijiahao" | "weibo" | "yuque" | "douban" | "sohu" | "xueqiu"
+		| "cnblogs" | "oschina" | "segmentfault" | "imooc" | "woshipm" | "eastmoney";
+	platform_variant_id: number;
+	title: string;
+	summary: string;
+	body_markdown: string;
+	body_html?: string;
+	tags: string[];
+	category?: string | null;
+	image_manifest: Array<Record<string, unknown>>;
+	content_fingerprint: string;
+};
+
+export type GeoArticleAssistantTask = {
+	protocol_version: "geo-article-assistant.v1";
+	task_token: string;
+	run_id: number;
+	workspace_id: number;
+	action_id?: number | null;
+	content_asset_id: number;
+	issued_at: string;
+	expires_at: string;
+	content_fingerprint: string;
+	targets: GeoArticleAssistantTaskTarget[];
+};
+
 export type CleanroomActionRetest = {
 	id: number;
 	action_id: number;
 	workspace_id: number;
+	round_index: number;
 	status: string;
 	baseline_batch_id?: number | null;
 	retest_batch_id?: number | null;
@@ -1067,6 +1420,227 @@ export type CleanroomActionRetest = {
 	batch?: OfficialApiObservationBatchSummary | null;
 	started_at?: string | null;
 	completed_at?: string | null;
+};
+
+export type GeoResultsOverview = {
+	workspace: { id: number; brand_name: string };
+	generated_at: string;
+	effect: {
+		headline: string;
+		description: string;
+		total_actions: number;
+		measured_actions: number;
+		counts: Record<string, number>;
+		historical: {
+			mode: "historical_preview";
+			label: string;
+			warning: string;
+			change_percentage_points?: number | null;
+			complete_batch_count: number;
+			batch_count: number;
+			signal_counts: Record<string, number>;
+			filters: { period_days: number; model_key?: string | null; question_plan_id?: number | null; question_plan_ids: number[] };
+			model_options: Array<{ key: string; label: string }>;
+			question_options: Array<{ id: number; label: string }>;
+			series: Array<{
+				batch_id: number;
+				captured_at: string;
+				mention_rate: number;
+				impact_score: number;
+				shortlist_rate: number;
+				high_value_rate: number;
+				eligible_samples: number;
+				expected_samples: number;
+				complete: boolean;
+			}>;
+		};
+		actions: Array<{
+			action_id: number;
+			title: string;
+			status: string;
+			stage: string;
+			question?: string | null;
+			opportunity_type?: string | null;
+			measurement_plan: {
+				primary_metric: string;
+				primary_metric_label: string;
+				direction: "higher" | "lower";
+				principle: string;
+			};
+			outcome: {
+				status: "not_measured" | "insufficient_evidence" | "observed_improvement" | "stable_improvement" | "no_clear_change" | "regressed";
+				label: string;
+				confidence: "none" | "low" | "medium" | "high";
+				confidence_label: string;
+				comparable_rounds: number;
+				model_agreement?: number | null;
+				latest_model_directions?: Array<{ model_key: string; direction: string; before_rate: number; after_rate: number; delta: number }>;
+				causal_warning?: string;
+			};
+			round_count: number;
+			latest_retest_id?: number | null;
+			latest_completed_at?: string | null;
+			latest_delta: Record<string, unknown>;
+			historical_signal?: {
+				status: "no_history" | "history_up" | "history_down" | "history_flat";
+				label: string;
+				scope_quality: "none" | "same_scope" | "mixed_scope";
+				scope_label: string;
+				observation_count: number;
+				before_positive?: number;
+				before_total?: number;
+				after_positive?: number;
+				after_total?: number;
+				delta_percentage_points?: number;
+				first_batch_id?: number;
+				latest_batch_id?: number;
+				first_captured_at?: string;
+				latest_captured_at?: string;
+				attribution: "not_attributed";
+				warning?: string;
+				model_directions?: Array<{
+					model_key: string;
+					before_positive: number;
+					before_total: number;
+					after_positive: number;
+					after_total: number;
+					delta_percentage_points: number;
+					direction: "up" | "down" | "flat";
+				}>;
+			};
+			trend: Array<{
+				kind: "baseline" | "retest";
+				label: string;
+				round_index: number;
+				batch_id?: number | null;
+				value?: number | null;
+				captured_at?: string | null;
+				conclusion?: string;
+				comparable?: boolean;
+			}>;
+		}>;
+	};
+	roi: {
+		status: "calculable" | "tracking" | "setup_required";
+		status_label: string;
+		currency?: string | null;
+		total_cost_minor: number;
+		direct_revenue_minor: number;
+		assisted_revenue_minor: number;
+		pipeline_value_minor: number;
+		net_value_minor?: number | null;
+		roi_percent?: number | null;
+		quantities: Record<string, number>;
+		missing_inputs: string[];
+		formula: string;
+		attribution_note: string;
+		comparison: {
+			cost_change_percent?: number | null;
+			revenue_change_percent?: number | null;
+			net_change_percent?: number | null;
+			roi_change_percentage_points?: number | null;
+			previous: {
+				cost_minor: number;
+				revenue_minor: number;
+				net_value_minor?: number | null;
+				roi_percent?: number | null;
+			};
+		};
+		trend: Array<{
+			date: string;
+			cost_minor: number;
+			revenue_minor: number;
+			net_value_minor?: number | null;
+			roi_percent?: number | null;
+		}>;
+		action_markers: Array<{ action_id: number; title: string; date: string }>;
+		updated_at?: string | null;
+		scope: { period_days: number; action_ids: number[]; action_label: string };
+		decision: { status: string; headline: string; summary: string; next_action: string };
+		readiness: {
+			ready_count: number;
+			total_count: number;
+			percent: number;
+			items: Array<{ key: string; label: string; status: "complete" | "missing"; evidence: string; next_action: string }>;
+		};
+		funnel: Array<{ key: string; label: string; value: number; kind: "money" | "quantity"; available: boolean }>;
+		efficiency: {
+			cost_per_referral_visit_minor?: number | null;
+			cost_per_qualified_lead_minor?: number | null;
+			pipeline_to_cost_multiple?: number | null;
+			direct_revenue_to_cost_multiple?: number | null;
+		};
+		action_options: Array<{ id: number; label: string }>;
+		action_portfolio: Array<{
+			action_id: number;
+			title: string;
+			stage: string;
+			effect_status: string;
+			effect_label: string;
+			comparable_rounds: number;
+			cost_minor: number;
+			direct_revenue_minor: number;
+			pipeline_value_minor: number;
+			net_value_minor?: number | null;
+			roi_percent?: number | null;
+			quantities: Record<string, number>;
+			recommendation: string;
+		}>;
+		unallocated_entry_count: number;
+		guardrails: string[];
+		entry_count: number;
+		entries: Array<{
+			id: number;
+			action_id?: number | null;
+			metric_type: string;
+			metric_label: string;
+			amount_minor?: number | null;
+			quantity?: number | null;
+			currency?: string | null;
+			attribution_type: string;
+			source_type: string;
+			source_label: string;
+			source_reference?: string | null;
+			evidence_note: string;
+			verification_status: string;
+			occurred_at: string;
+			created_by_user_id: number;
+			reverses_entry_id?: number | null;
+			reversal_reason?: string | null;
+			is_reversal: boolean;
+			created_at: string;
+		}>;
+	};
+};
+
+export type GeoBusinessMetricImportRow = {
+	id: number;
+	row_number: number;
+	record_id?: string | null;
+	status: "valid" | "error" | "duplicate" | "imported";
+	normalized: Record<string, string | number | null>;
+	errors: Array<{ field: string; code: string; message: string }>;
+	metric_entry_id?: number | null;
+};
+
+export type GeoBusinessMetricImportBatch = {
+	id: number;
+	file_name: string;
+	file_sha256: string;
+	status: "preflight" | "confirmed" | "reversed";
+	mapping: {
+		mapping?: Record<string, string>;
+		file_errors?: Array<{ field: string; code: string; message: string }>;
+	};
+	total_rows: number;
+	valid_rows: number;
+	error_rows: number;
+	duplicate_rows: number;
+	imported_rows: number;
+	confirmed_at?: string | null;
+	reversed_at?: string | null;
+	created_at: string;
+	rows: GeoBusinessMetricImportRow[];
 };
 
 export type CleanroomActionWorkbenchState = {
@@ -1222,6 +1796,142 @@ export function getCleanroomWorkspaces() {
 	return apiRequest<CleanroomWorkspace[]>("/workspaces");
 }
 
+export function getGeoCollaborationCenter(
+	workspaceId: string | number,
+	selection?: { context_type: "action" | "alert" | "question" | "evidence"; context_id: number } | null,
+) {
+	const params = new URLSearchParams();
+	if (selection) {
+		params.set("context_type", selection.context_type);
+		params.set("context_id", String(selection.context_id));
+	}
+	return apiRequest<GeoCollaborationCenter>(
+		`/workspaces/${workspaceId}/collaboration${params.size ? `?${params}` : ""}`,
+	);
+}
+
+export function createGeoCollaborationMessage(
+	workspaceId: string | number,
+	payload: {
+		context_type: "action" | "alert" | "question" | "evidence";
+		context_id: number;
+		body: string;
+		mention_user_ids: number[];
+		attachment_refs?: Array<{ label: string; url?: string | null; kind: "link" | "evidence" | "file" }>;
+		attachment_ids?: number[];
+		shared_objects?: GeoCollaborationShareDraft[];
+		idempotency_key: string;
+	},
+) {
+	return apiRequest<{ id: number; thread_id: number; created_at: string; message: GeoCollaborationMessage }>(
+		`/workspaces/${workspaceId}/collaboration/messages`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function updateGeoCollaborationWorkInfo(
+	workspaceId: string | number,
+	contextType: GeoCollaborationItem["context_type"],
+	contextId: number,
+	payload: {
+		assignee_user_id: number | null;
+		start_at: string | null;
+		due_at: string | null;
+		participant_user_ids: number[];
+	},
+) {
+	return apiRequest<GeoCollaborationCenter>(
+		`/workspaces/${workspaceId}/collaboration/contexts/${contextType}/${contextId}/work-info`,
+		{ method: "PATCH", body: JSON.stringify(payload) },
+	);
+}
+
+export function markGeoCollaborationThreadRead(
+	workspaceId: string | number,
+	threadId: number,
+) {
+	return apiRequest<{ thread_id: number; last_read_message_id?: number | null; read_at: string }>(
+		`/workspaces/${workspaceId}/collaboration/threads/${threadId}/read`,
+		{ method: "POST" },
+	);
+}
+
+export function configureGeoCollaborationChannel(
+	workspaceId: string | number,
+	provider: GeoCollaborationChannel["provider"],
+	payload: { webhook_url: string; display_name?: string | null },
+) {
+	return apiRequest<GeoCollaborationChannel>(
+		`/workspaces/${workspaceId}/collaboration/channels/${provider}`,
+		{ method: "PUT", body: JSON.stringify({ provider, ...payload }) },
+	);
+}
+
+export function testGeoCollaborationChannel(
+	workspaceId: string | number,
+	provider: GeoCollaborationChannel["provider"],
+) {
+	return apiRequest<GeoCollaborationChannel>(
+		`/workspaces/${workspaceId}/collaboration/channels/${provider}/test`,
+		{ method: "POST" },
+	);
+}
+
+export function getObservationAlertCenter(workspaceId: string | number) {
+	return apiRequest<GeoObservationAlertCenter>(
+		`/workspaces/${workspaceId}/observation-alert-center`,
+	);
+}
+
+export function createObservationSchedule(
+	workspaceId: string | number,
+	payload: {
+		name: string;
+		cadence: "daily" | "weekly" | "custom";
+		weekdays: number[];
+		local_time: string;
+		timezone_name: string;
+		provider_ids: number[];
+		question_plan_ids: number[];
+		repeat_count: number;
+	},
+) {
+	return apiRequest<GeoObservationSchedule>(`/workspaces/${workspaceId}/observation-schedules`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function updateObservationScheduleStatus(
+	workspaceId: string | number,
+	scheduleId: number,
+	status: "active" | "paused",
+) {
+	return apiRequest<GeoObservationSchedule>(`/workspaces/${workspaceId}/observation-schedules/${scheduleId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ status }),
+	});
+}
+
+export function runObservationSchedule(workspaceId: string | number, scheduleId: number) {
+	return apiRequest<GeoObservationScheduleRun>(`/workspaces/${workspaceId}/observation-schedules/${scheduleId}/run`, { method: "POST" });
+}
+
+export function updateChangeAlertStatus(
+	workspaceId: string | number,
+	alertId: number,
+	status: "confirmed" | "ignored",
+) {
+	return apiRequest<GeoChangeAlert>(`/workspaces/${workspaceId}/change-alerts/${alertId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ status }),
+	});
+}
+
+export function convertChangeAlertToAction(workspaceId: string | number, alertId: number) {
+	return apiRequest<{ action_id: number; created: boolean }>(`/workspaces/${workspaceId}/change-alerts/${alertId}/convert-to-action`, { method: "POST" });
+}
+
 export function getWorkspaceMembers(workspaceId: string | number) {
 	return apiRequest<WorkspaceMembership[]>(`/workspaces/${workspaceId}/members`);
 }
@@ -1269,6 +1979,12 @@ export function getLocalAgentNodes(workspaceId: string | number) {
 
 export function getQueueWorkerStatus(workspaceId: string | number) {
 	return apiRequest<QueueWorkerStatus>(`/workspaces/${workspaceId}/queue-worker-status`);
+}
+
+export function repairQueueWorker(workspaceId: string | number) {
+	return apiRequest<QueueWorkerRepair>(`/workspaces/${workspaceId}/queue-worker-repair`, {
+		method: "POST",
+	});
 }
 
 export function createLocalAgentEnrollment(workspaceId: string | number) {
@@ -1327,18 +2043,28 @@ export function getCleanroomDecisionMap(
 	workspaceId: string | number,
 	filters?: {
 		periodDays?: number;
+		dateFrom?: string;
+		dateTo?: string;
 		modelKey?: string;
+		modelKeys?: string[];
 		scope?: "all" | "high";
 		batchId?: number;
+		batchIds?: number[];
+		questionPlanIds?: number[];
 	},
 ) {
 	const params = new URLSearchParams();
 	if (filters?.periodDays)
 		params.set("period_days", String(filters.periodDays));
+	if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+	if (filters?.dateTo) params.set("date_to", filters.dateTo);
 	if (filters?.modelKey && filters.modelKey !== "all")
 		params.set("model_key", filters.modelKey);
+	for (const value of filters?.modelKeys ?? []) params.append("model_keys", value);
 	if (filters?.scope) params.set("scope", filters.scope);
 	if (filters?.batchId) params.set("batch_id", String(filters.batchId));
+	for (const value of filters?.batchIds ?? []) params.append("batch_ids", String(value));
+	for (const value of filters?.questionPlanIds ?? []) params.append("question_plan_ids", String(value));
 	const suffix = params.toString() ? `?${params.toString()}` : "";
 	return apiRequest<CleanroomDecisionMap>(
 		`/workspaces/${workspaceId}/decision-map${suffix}`,
@@ -1349,18 +2075,28 @@ export function getCleanroomSourceMap(
 	workspaceId: string | number,
 	filters?: {
 		periodDays?: number;
+		dateFrom?: string;
+		dateTo?: string;
 		modelKey?: string;
+		modelKeys?: string[];
 		questionPlanId?: number;
+		questionPlanIds?: number[];
+		batchIds?: number[];
 		limit?: number;
 	},
 ) {
 	const params = new URLSearchParams();
 	if (filters?.periodDays)
 		params.set("period_days", String(filters.periodDays));
+	if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+	if (filters?.dateTo) params.set("date_to", filters.dateTo);
 	if (filters?.modelKey && filters.modelKey !== "all")
 		params.set("model_key", filters.modelKey);
+	for (const value of filters?.modelKeys ?? []) params.append("model_keys", value);
 	if (filters?.questionPlanId)
 		params.set("question_plan_id", String(filters.questionPlanId));
+	for (const value of filters?.questionPlanIds ?? []) params.append("question_plan_ids", String(value));
+	for (const value of filters?.batchIds ?? []) params.append("batch_ids", String(value));
 	if (filters?.limit) params.set("limit", String(filters.limit));
 	const suffix = params.toString() ? `?${params.toString()}` : "";
 	return apiRequest<CleanroomSourceMap>(
@@ -1372,18 +2108,28 @@ export function getCleanroomCompetitorComparison(
 	workspaceId: string | number,
 	filters?: {
 		periodDays?: number;
+		dateFrom?: string;
+		dateTo?: string;
 		modelKey?: string;
+		modelKeys?: string[];
 		questionPlanId?: number;
+		questionPlanIds?: number[];
+		batchIds?: number[];
 		evidenceLimit?: number;
 	},
 ) {
 	const params = new URLSearchParams();
 	if (filters?.periodDays)
 		params.set("period_days", String(filters.periodDays));
+	if (filters?.dateFrom) params.set("date_from", filters.dateFrom);
+	if (filters?.dateTo) params.set("date_to", filters.dateTo);
 	if (filters?.modelKey && filters.modelKey !== "all")
 		params.set("model_key", filters.modelKey);
+	for (const value of filters?.modelKeys ?? []) params.append("model_keys", value);
 	if (filters?.questionPlanId)
 		params.set("question_plan_id", String(filters.questionPlanId));
+	for (const value of filters?.questionPlanIds ?? []) params.append("question_plan_ids", String(value));
+	for (const value of filters?.batchIds ?? []) params.append("batch_ids", String(value));
 	if (filters?.evidenceLimit)
 		params.set("evidence_limit", String(filters.evidenceLimit));
 	const suffix = params.toString() ? `?${params.toString()}` : "";
@@ -1413,11 +2159,15 @@ export function getQuestionLibrary(
 		stage?: string;
 		role?: string;
 		topic?: string;
+		question_plan_ids?: number[];
 	},
 ) {
 	const params = new URLSearchParams();
-	for (const [key, value] of Object.entries(filters ?? {}))
-		if (value) params.set(key, value);
+	for (const [key, value] of Object.entries(filters ?? {})) {
+		if (key === "question_plan_ids" && Array.isArray(value)) {
+			for (const questionId of value) params.append("question_plan_ids", String(questionId));
+		} else if (typeof value === "string" && value) params.set(key, value);
+	}
 	const suffix = params.size ? `?${params.toString()}` : "";
 	return apiRequest<QuestionLibrary>(
 		`/workspaces/${workspaceId}/question-library${suffix}`,
@@ -1687,6 +2437,141 @@ export function getCleanroomActions(workspaceId: string | number) {
 	return apiRequest<CleanroomAction[]>(`/workspaces/${workspaceId}/actions`);
 }
 
+export function getActionExecutionList(
+	workspaceId: string | number,
+	view: ActionExecutionView = "all",
+) {
+	return apiRequest<ActionExecutionDetail[]>(
+		`/workspaces/${workspaceId}/actions-v2?view=${view}`,
+	);
+}
+
+export function getActionExecutionDetail(
+	workspaceId: string | number,
+	actionId: number,
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}`,
+	);
+}
+
+export function acceptActionExecution(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { assignee_user_id: number; due_at: string },
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/accept`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function blockActionExecution(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { reason_code: string; note: string },
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/block`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function unblockActionExecution(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { note?: string | null } = {},
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/unblock`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function transitionActionExecutionTarget(
+	workspaceId: string | number,
+	actionId: number,
+	targetId: number,
+	payload: { to_status: string; note?: string | null; idempotency_key: string },
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/targets/${targetId}/transition`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function submitActionExecutionEvidence(
+	workspaceId: string | number,
+	actionId: number,
+	targetId: number,
+	payload: {
+		evidence_type: string;
+		source_url?: string | null;
+		artifact_uri?: string | null;
+		sha256?: string | null;
+		detail?: Record<string, unknown>;
+		idempotency_key: string;
+		supersedes_evidence_id?: number | null;
+	},
+) {
+	return apiRequest<ActionExecutionEvidence>(
+		`/workspaces/${workspaceId}/actions/${actionId}/targets/${targetId}/evidence`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function requestActionExecutionApproval(
+	workspaceId: string | number,
+	actionId: number,
+	payload: {
+		target_id?: number | null;
+		approval_type: string;
+		reviewer_user_id: number;
+		due_at: string;
+		subject_fingerprint: string;
+		note?: string | null;
+	},
+) {
+	return apiRequest<ActionExecutionApproval>(
+		`/workspaces/${workspaceId}/actions/${actionId}/approvals`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function decideActionExecutionApproval(
+	workspaceId: string | number,
+	actionId: number,
+	approvalId: number,
+	payload: { decision: "approved" | "changes_requested"; note?: string | null },
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/approvals/${approvalId}/decide`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function selfApproveActionExecutionTarget(
+	workspaceId: string | number,
+	actionId: number,
+	targetId: number,
+) {
+	return apiRequest<ActionExecutionDetail>(
+		`/workspaces/${workspaceId}/actions/${actionId}/targets/${targetId}/self-approve`,
+		{ method: "POST" },
+	);
+}
+
+export function createTargetActionRetest(
+	workspaceId: string | number,
+	actionId: number,
+	payload: { target_ids: number[]; idempotency_key: string },
+) {
+	return apiRequest<CleanroomActionRetest>(
+		`/workspaces/${workspaceId}/actions/${actionId}/retests`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
 export function getCleanroomActionWorkbenchState(workspaceId: string | number) {
 	return apiRequest<CleanroomActionWorkbenchState>(`/workspaces/${workspaceId}/action-workbench-state`);
 }
@@ -1764,12 +2649,13 @@ export function getCleanroomActionOpportunityScope(workspaceId: string | number)
 
 export function getCleanroomActionOpportunities(
 	workspaceId: string | number,
-	options: { batch_id?: number | null; model_key?: string | null; question_plan_id?: number | null; include_legacy?: boolean } = {},
+	options: { batch_id?: number | null; model_key?: string | null; question_plan_id?: number | null; action_id?: number | null; include_legacy?: boolean } = {},
 ) {
 	const params = new URLSearchParams();
 	if (options.batch_id) params.set("batch_id", String(options.batch_id));
 	if (options.model_key) params.set("model_key", options.model_key);
 	if (options.question_plan_id) params.set("question_plan_id", String(options.question_plan_id));
+	if (options.action_id) params.set("action_id", String(options.action_id));
 	params.set("include_legacy", String(options.include_legacy ?? false));
 	const suffix = params.size ? `?${params.toString()}` : "";
 	return apiRequest<CleanroomActionOpportunity[]>(`/workspaces/${workspaceId}/action-opportunities${suffix}`);
@@ -1916,7 +2802,7 @@ export function recordCleanroomDistributionClientResults(
 	runId: number,
 	targets: Array<{
 		platform_key: string;
-		request_status: "draft_link_returned" | "draft_saved" | "failed" | "cancelled";
+		request_status: "draft_link_returned" | "failed" | "cancelled";
 		draft_url?: string | null;
 		external_draft_id?: string | null;
 		message?: string | null;
@@ -1925,6 +2811,35 @@ export function recordCleanroomDistributionClientResults(
 	return apiRequest<CleanroomDistributionRun>(`/workspaces/${workspaceId}/distribution-runs/${runId}/client-results`, {
 		method: "POST",
 		body: JSON.stringify({ targets }),
+	});
+}
+
+export function issueGeoArticleAssistantTask(workspaceId: string | number, runId: number) {
+	return apiRequest<GeoArticleAssistantTask>(`/workspaces/${workspaceId}/distribution-runs/${runId}/assistant-task`, {
+		method: "POST",
+	});
+}
+
+export function recordGeoArticleAssistantResults(
+	workspaceId: string | number,
+	runId: number,
+	task: Pick<GeoArticleAssistantTask, "protocol_version" | "task_token" | "content_fingerprint">,
+	targets: Array<{
+		platform_key: string;
+		request_status: "draft_link_returned" | "failed" | "cancelled";
+		draft_url?: string | null;
+		external_draft_id?: string | null;
+		message?: string | null;
+	}>,
+) {
+	return apiRequest<CleanroomDistributionRun>(`/workspaces/${workspaceId}/distribution-runs/${runId}/assistant-results`, {
+		method: "POST",
+		body: JSON.stringify({
+			protocol_version: task.protocol_version,
+			task_token: task.task_token,
+			content_fingerprint: task.content_fingerprint,
+			targets,
+		}),
 	});
 }
 
@@ -1964,6 +2879,154 @@ export function getCleanroomActionRetest(workspaceId: string | number, actionId:
 export function createCleanroomActionRetest(workspaceId: string | number, actionId: number) {
 	return apiRequest<CleanroomActionRetest>(`/workspaces/${workspaceId}/actions/${actionId}/retest`, {
 		method: "POST",
+	});
+}
+
+export function refreshCleanroomActionRetest(workspaceId: string | number, actionId: number) {
+	return apiRequest<CleanroomActionRetest>(`/workspaces/${workspaceId}/actions/${actionId}/retest/refresh`, {
+		method: "POST",
+	});
+}
+
+export function getGeoResultsOverview(
+	workspaceId: string | number,
+	filters?: { period_days?: number; model_key?: string | null; model_keys?: string[]; batch_ids?: number[]; question_plan_id?: number | null; question_plan_ids?: number[]; roi_action_ids?: number[] },
+) {
+	const query = new URLSearchParams();
+	if (filters?.period_days) query.set("period_days", String(filters.period_days));
+	if (filters?.model_key) query.set("model_key", filters.model_key);
+	for (const modelKey of filters?.model_keys ?? []) query.append("model_keys", modelKey);
+	for (const batchId of filters?.batch_ids ?? []) query.append("batch_ids", String(batchId));
+	if (filters?.question_plan_id) query.set("question_plan_id", String(filters.question_plan_id));
+	for (const questionId of filters?.question_plan_ids ?? []) query.append("question_plan_ids", String(questionId));
+	for (const actionId of filters?.roi_action_ids ?? []) query.append("roi_action_ids", String(actionId));
+	const suffix = query.size ? `?${query.toString()}` : "";
+	return apiRequest<GeoResultsOverview>(`/workspaces/${workspaceId}/results-overview${suffix}`);
+}
+
+export type GeoBusinessGoal = {
+	id: number;
+	workspace_id: number;
+	title: string;
+	metric_key: "shortlist_rate";
+	metric_label: "候选进入率";
+	baseline_value?: number | null;
+	current_value?: number | null;
+	target_value: number;
+	progress_percent?: number | null;
+	remaining_value?: number | null;
+	start_at: string;
+	due_at: string;
+	owner_user_id?: number | null;
+	owner_name?: string | null;
+	status: "active";
+	question_plan_ids: number[];
+	model_keys: string[];
+	action_ids: number[];
+	scope_snapshot: {
+		period_days?: number;
+		batch_ids?: number[];
+		model_keys?: string[];
+		question_plan_ids?: number[];
+		metric_contract?: string;
+	};
+	created_at: string;
+	updated_at: string;
+};
+
+export type GeoBusinessGoalInput = {
+	title: string;
+	metric_key: "shortlist_rate";
+	target_value: number;
+	due_at: string;
+	owner_user_id?: number | null;
+	question_plan_ids: number[];
+	model_keys: string[];
+	action_ids: number[];
+	period_days: number;
+	batch_ids: number[];
+};
+
+export function getGeoBusinessGoal(workspaceId: string | number) {
+	return apiRequest<GeoBusinessGoal | null>(`/workspaces/${workspaceId}/business-goal`);
+}
+
+export function upsertGeoBusinessGoal(
+	workspaceId: string | number,
+	payload: GeoBusinessGoalInput,
+) {
+	return apiRequest<GeoBusinessGoal>(`/workspaces/${workspaceId}/business-goal`, {
+		method: "PUT",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function createGeoBusinessMetric(
+	workspaceId: string | number,
+	payload: {
+		action_id?: number | null;
+		metric_type: "content_cost" | "labor_cost" | "distribution_cost" | "tool_cost" | "ai_referral_visit" | "qualified_lead" | "sales_opportunity" | "pipeline_value" | "won_revenue";
+		amount?: string | null;
+		quantity?: number | null;
+		currency?: string | null;
+		attribution_type: "direct" | "assisted" | "unallocated" | "not_applicable";
+		source_type: "manual" | "manual_import" | "analytics" | "crm" | "finance";
+		source_label: string;
+		source_reference?: string | null;
+		evidence_note: string;
+		occurred_at: string;
+		idempotency_key: string;
+	},
+) {
+	return apiRequest<{ id: number; status: string }>(`/workspaces/${workspaceId}/business-metrics`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function reverseGeoBusinessMetric(
+	workspaceId: string | number,
+	entryId: number,
+	payload: { reason: string; idempotency_key: string },
+) {
+	return apiRequest<{ id: number; status: string }>(`/workspaces/${workspaceId}/business-metrics/${entryId}/reverse`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function preflightGeoBusinessMetricCsv(
+	workspaceId: string | number,
+	payload: { file_name: string; csv_text: string; mapping?: Record<string, string> },
+) {
+	return apiRequest<GeoBusinessMetricImportBatch>(`/workspaces/${workspaceId}/business-metric-imports/preflight`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function getGeoBusinessMetricImports(workspaceId: string | number) {
+	return apiRequest<GeoBusinessMetricImportBatch[]>(`/workspaces/${workspaceId}/business-metric-imports`);
+}
+
+export function getGeoBusinessMetricImport(workspaceId: string | number, batchId: number) {
+	return apiRequest<GeoBusinessMetricImportBatch>(`/workspaces/${workspaceId}/business-metric-imports/${batchId}`);
+}
+
+export function confirmGeoBusinessMetricImport(workspaceId: string | number, batchId: number) {
+	return apiRequest<GeoBusinessMetricImportBatch>(`/workspaces/${workspaceId}/business-metric-imports/${batchId}/confirm`, {
+		method: "POST",
+	});
+}
+
+export function reverseGeoBusinessMetricImport(
+	workspaceId: string | number,
+	batchId: number,
+	reason: string,
+) {
+	return apiRequest<GeoBusinessMetricImportBatch>(`/workspaces/${workspaceId}/business-metric-imports/${batchId}/reverse`, {
+		method: "POST",
+		body: JSON.stringify({ reason }),
 	});
 }
 

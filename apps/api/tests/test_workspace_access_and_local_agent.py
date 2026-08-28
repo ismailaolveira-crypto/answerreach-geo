@@ -17,6 +17,7 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
     GeoWorkspace,
 )
+from app.models.audit import AuditLog
 from app.models.job import QueueJob
 from app.models.search import LLMProvider, LLMProviderTestRun
 from app.models.user import User
@@ -28,6 +29,10 @@ from app.models.workspace_access import (
 from app.services.auth import create_access_token, hash_password
 from app.services.workspace_access import add_membership, token_digest
 from app.services.worker_heartbeat import register_worker
+from app.services.worker_service import (
+    ManagedWorkerRepairResult,
+    ManagedWorkerServiceStatus,
+)
 from app.api.routes.providers import _project_output_root
 
 
@@ -203,6 +208,86 @@ def test_queue_worker_status_is_live_and_workspace_protected(access_api) -> None
         headers=headers(ids["non_member"]),
     )
     assert denied.status_code == 404
+
+
+def test_queue_worker_repair_requires_manager_and_records_result(
+    access_api, monkeypatch
+) -> None:
+    client, testing_session, ids = access_api
+    now = datetime.now(UTC)
+    with testing_session() as db:
+        register_worker(
+            db,
+            worker_id="managed:test-route",
+            mode="continuous",
+            hostname="route-test",
+            process_id=606,
+            concurrency=8,
+            workspace_id=None,
+            observation_batch_id=None,
+            now=now,
+        )
+
+    service_status = ManagedWorkerServiceStatus(
+        supported=True,
+        installed=True,
+        running=True,
+        repository_match=True,
+        state="running",
+        pid=606,
+        label="com.chunqiu-yuanquan.geo.worker",
+        message="Worker 已由系统守护。",
+    )
+    monkeypatch.setattr(
+        "app.v1.routes.repair_managed_worker_service",
+        lambda: ManagedWorkerRepairResult(
+            attempted=True,
+            action="restarted",
+            status=service_status,
+            message="Worker 常驻服务已重新拉起。",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.v1.routes.process_observation_schedules",
+        lambda _db, workspace_id: {
+            "checked_at": now.isoformat(),
+            "dispatched": 0,
+            "failed": 0,
+            "deduplicated": 0,
+        },
+    )
+    monkeypatch.setattr(
+        "app.v1.routes.retry_worker_interrupted_schedule_runs",
+        lambda _db, workspace_id, actor: {
+            "checked_at": now.isoformat(),
+            "retried": 1,
+            "failed": 0,
+            "skipped_scope_changed": 0,
+        },
+    )
+
+    response = client.post(
+        f"/api/v1/workspaces/{ids['workspace']}/queue-worker-repair",
+        headers=headers(ids["owner"]),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "online"
+    assert response.json()["service_action"] == "restarted"
+    assert response.json()["schedule_retries"] == 1
+
+    denied = client.post(
+        f"/api/v1/workspaces/{ids['workspace']}/queue-worker-repair",
+        headers=headers(ids["non_member"]),
+    )
+    assert denied.status_code == 404
+
+    with testing_session() as db:
+        audit = db.scalar(
+            select(AuditLog).where(AuditLog.action == "queue_worker.repair")
+        )
+        assert audit is not None
+        assert audit.resource_id == ids["workspace"]
+        assert audit.detail_json["action"] == "restarted"
 
 
 def test_offline_worker_rejects_batch_before_any_rows_are_created(access_api) -> None:

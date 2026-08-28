@@ -3,6 +3,7 @@ import type { Route } from "next";
 import { getLLMProviderReadiness, getLLMProviders, type LLMProvider, type LLMProviderReadiness } from "@/lib/geo-provider-api";
 import { BrandLogo } from "@/components/brand-logo";
 import { getCleanroomActions, getCleanroomActionWorkbenchState, getCleanroomEvidence, getOfficialProviderObservationBatches, getQueueWorkerStatus } from "@/lib/cleanroom-v1-api";
+import { WorkerRepairControl } from "./worker-repair-control";
 
 type Props = { params: Promise<{ workspaceId: string }> };
 type PlatformDefinition = {
@@ -45,6 +46,11 @@ function formatWorkerHeartbeat(value: string | null | undefined) {
   if (elapsedSeconds < 60) return "刚刚收到心跳";
   if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} 分钟前收到心跳`;
   return `最后心跳 ${formatOperationTime(value)}`;
+}
+
+function formatRepairTime(value: string | null | undefined) {
+  if (!value) return "尚未执行人工修复";
+  return `最近修复 ${formatOperationTime(value)}`;
 }
 
 function batchSourceLabel(sourceType: string) {
@@ -158,13 +164,21 @@ export default async function OperationsPage({ params }: Props) {
       <section className={`sy-worker-status ${workerStatus ? `is-${workerStatus.status}` : "is-unavailable"}`} aria-labelledby="worker-status-heading">
         <header>
           <div><span>采集服务</span><h2 id="worker-status-heading">Queue Worker</h2><p>{formatWorkerHeartbeat(workerStatus?.last_seen_at)}</p></div>
-          <strong><i aria-hidden="true" />{workerStatus ? workerStatus.online ? "Worker 在线" : "Worker 离线" : "状态不可用"}</strong>
+          <div className="sy-worker-header-actions">
+            <WorkerRepairControl workspaceId={workspaceId} />
+            <strong><i aria-hidden="true" />{workerStatus ? workerStatus.online ? "Worker 在线" : "Worker 离线" : "状态不可用"}</strong>
+          </div>
         </header>
         <div className="sy-worker-facts" aria-label="采集服务运行数据">
           <article><small>当前并发</small><b>{workerStatus?.concurrency ?? "—"}</b><span>{workerStatus ? `${workerStatus.worker_count} 个在线进程` : "等待状态接口恢复"}</span></article>
           <article><small>等待任务</small><b>{workerStatus?.pending_jobs ?? "—"}</b><span>只统计可执行队列</span></article>
           <article><small>执行中</small><b>{workerStatus?.running_jobs ?? "—"}</b><span>{workerStatus?.stale_running_jobs ? `${workerStatus.stale_running_jobs} 条可能已中断` : "未发现过期执行"}</span></article>
           <article><small>历史保留</small><b>{workerStatus?.historical_jobs ?? "—"}</b><span>只读展示，永不自动执行</span></article>
+        </div>
+        <div className="sy-worker-service-meta" aria-label="Worker 守护与修复状态">
+          <span><i aria-hidden="true" />{workerStatus?.managed_service?.running && workerStatus.managed_service.repository_match ? "受系统守护" : "未受系统守护"}</span>
+          <span>{formatWorkerHeartbeat(workerStatus?.last_seen_at)}</span>
+          <span>{formatRepairTime(workerStatus?.last_repair?.repaired_at)}</span>
         </div>
         <footer className={workerStatus?.stale_running_jobs ? "is-warning" : undefined}>
           <i aria-hidden="true">{workerStatus?.online ? "✓" : "!"}</i>

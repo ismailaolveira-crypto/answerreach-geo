@@ -16,15 +16,19 @@ from app import models  # noqa: F401
 from app.db.session import SessionLocal
 from app.services.job_queue import count_ready_jobs, recover_orphaned_jobs, run_next_job
 from app.services.worker_heartbeat import (
+    HeartbeatFailureBudget,
+    WorkerRegistration,
     WORKER_HEARTBEAT_INTERVAL_SECONDS,
     register_worker,
     stop_worker,
-    touch_worker,
+    touch_or_register_worker,
 )
+from app.v1.observation_alert_routes import process_observation_schedules
 
 
 DEFAULT_WORKER_CONCURRENCY = 125
 MAX_WORKER_CONCURRENCY = 125
+WORKER_MAINTENANCE_INTERVAL_SECONDS = 30
 
 
 def normalize_concurrency(value: int) -> int:
@@ -62,22 +66,52 @@ def run_once(
         }
 
 
-def worker_heartbeat_loop(stop_event: Event, worker_id: str) -> None:
+def worker_heartbeat_loop(
+    stop_event: Event,
+    unhealthy_event: Event,
+    registration: WorkerRegistration,
+) -> None:
+    failure_budget = HeartbeatFailureBudget()
     while not stop_event.wait(WORKER_HEARTBEAT_INTERVAL_SECONDS):
         try:
             with SessionLocal() as db:
-                touch_worker(db, worker_id)
+                action = touch_or_register_worker(db, registration)
+            failure_budget.record_success()
+            if action == "registered":
+                print(
+                    json.dumps(
+                        {"event": "worker_heartbeat_re_registered"},
+                        ensure_ascii=False,
+                    ),
+                    flush=True,
+                )
         except Exception as exc:  # keep paid work alive if monitoring briefly fails
+            exhausted = failure_budget.record_failure()
             print(
                 json.dumps(
                     {
                         "event": "worker_heartbeat_failed",
                         "error_type": type(exc).__name__,
+                        "consecutive_failures": failure_budget.consecutive_failures,
+                        "restart_required": exhausted,
                     },
                     ensure_ascii=False,
                 ),
                 flush=True,
             )
+            if exhausted:
+                unhealthy_event.set()
+                return
+
+
+def run_worker_maintenance(workspace_id: int | None = None) -> dict:
+    """Recover expired leases and reconcile schedules for the full process lifetime."""
+
+    with SessionLocal() as db:
+        recovery = recover_orphaned_jobs(db, workspace_id=workspace_id)
+    with SessionLocal() as db:
+        schedules = process_observation_schedules(db, workspace_id=workspace_id)
+    return {"recovery": recovery, "schedules": schedules}
 
 
 def run_worker_slot(execute_once) -> dict:
@@ -112,7 +146,13 @@ def requested_slot_count(*, ready_jobs: int, active_slots: int, concurrency: int
     return min(max(0, ready_jobs), available_slots)
 
 
-def run_worker_loop(args: argparse.Namespace, concurrency: int, worker_id: str) -> None:
+def run_worker_loop(
+    args: argparse.Namespace,
+    concurrency: int,
+    worker_id: str,
+    *,
+    stop_event: Event | None = None,
+) -> None:
     def execute_once() -> dict:
         return run_once(
             args.workspace_id,
@@ -138,7 +178,42 @@ def run_worker_loop(args: argparse.Namespace, concurrency: int, worker_id: str) 
     # Demand-aware refill preserves the 125-job ceiling without idle DB churn.
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = set()
-        while True:
+        last_maintenance_probe = 0.0
+        while stop_event is None or not stop_event.is_set():
+            monotonic_now = time.monotonic()
+            if monotonic_now - last_maintenance_probe >= WORKER_MAINTENANCE_INTERVAL_SECONDS:
+                try:
+                    maintenance = run_worker_maintenance(args.workspace_id)
+                    recovery = maintenance["recovery"]
+                    schedule_result = maintenance["schedules"]
+                    if recovery["recovered"] or recovery["failed"]:
+                        print(
+                            json.dumps(
+                                {"event": "worker_recovery", **recovery},
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
+                    if schedule_result["dispatched"] or schedule_result["failed"]:
+                        print(
+                            json.dumps(
+                                {"event": "observation_schedule_tick", **schedule_result},
+                                ensure_ascii=False,
+                            ),
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(
+                        json.dumps(
+                            {
+                                "event": "observation_schedule_tick_failed",
+                                "error_type": type(exc).__name__,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        flush=True,
+                    )
+                last_maintenance_probe = monotonic_now
             try:
                 with SessionLocal() as db:
                     ready_jobs = count_ready_jobs(
@@ -157,7 +232,10 @@ def run_worker_loop(args: argparse.Namespace, concurrency: int, worker_id: str) 
                     ),
                     flush=True,
                 )
-                time.sleep(max(args.interval_seconds, 0.1))
+                if stop_event is None:
+                    time.sleep(max(args.interval_seconds, 0.1))
+                else:
+                    stop_event.wait(max(args.interval_seconds, 0.1))
                 continue
 
             for _ in range(
@@ -170,7 +248,10 @@ def run_worker_loop(args: argparse.Namespace, concurrency: int, worker_id: str) 
                 futures.add(executor.submit(run_worker_slot, execute_once))
 
             if not futures:
-                time.sleep(max(args.interval_seconds, 0.1))
+                if stop_event is None:
+                    time.sleep(max(args.interval_seconds, 0.1))
+                else:
+                    stop_event.wait(max(args.interval_seconds, 0.1))
                 continue
 
             done, _pending = wait(
@@ -185,7 +266,7 @@ def run_worker_loop(args: argparse.Namespace, concurrency: int, worker_id: str) 
                     print(json.dumps(result, ensure_ascii=False), flush=True)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Run GEO background queue worker.")
     parser.add_argument("--once", action="store_true", help="Process at most one queued job and exit.")
     parser.add_argument(
@@ -221,28 +302,31 @@ def main() -> None:
     worker_id = args.worker_id or (
         f"queue:{socket.gethostname()}:{os.getpid()}:{secrets.token_hex(4)}"
     )
+    registration = WorkerRegistration(
+        worker_id=worker_id,
+        mode="once" if args.once else "continuous",
+        hostname=socket.gethostname(),
+        process_id=os.getpid(),
+        concurrency=concurrency,
+        workspace_id=args.workspace_id,
+        observation_batch_id=args.observation_batch_id,
+    )
     with SessionLocal() as db:
-        if not args.once:
-            recovery = recover_orphaned_jobs(db, workspace_id=args.workspace_id)
-            if recovery["recovered"] or recovery["failed"]:
-                print(
-                    json.dumps({"event": "worker_recovery", **recovery}, ensure_ascii=False),
-                    flush=True,
-                )
         register_worker(
             db,
-            worker_id=worker_id,
-            mode="once" if args.once else "continuous",
-            hostname=socket.gethostname(),
-            process_id=os.getpid(),
-            concurrency=concurrency,
-            workspace_id=args.workspace_id,
-            observation_batch_id=args.observation_batch_id,
+            worker_id=registration.worker_id,
+            mode=registration.mode,
+            hostname=registration.hostname,
+            process_id=registration.process_id,
+            concurrency=registration.concurrency,
+            workspace_id=registration.workspace_id,
+            observation_batch_id=registration.observation_batch_id,
         )
     heartbeat_stop = Event()
+    heartbeat_unhealthy = Event()
     heartbeat_thread = Thread(
         target=worker_heartbeat_loop,
-        args=(heartbeat_stop, worker_id),
+        args=(heartbeat_stop, heartbeat_unhealthy, registration),
         name="queue-worker-heartbeat",
         daemon=True,
     )
@@ -253,8 +337,23 @@ def main() -> None:
         raise KeyboardInterrupt
 
     signal.signal(signal.SIGTERM, request_graceful_stop)
+    exit_code = 0
     try:
-        run_worker_loop(args, concurrency, worker_id)
+        run_worker_loop(
+            args,
+            concurrency,
+            worker_id,
+            stop_event=heartbeat_unhealthy,
+        )
+        if heartbeat_unhealthy.is_set():
+            exit_code = 75
+            print(
+                json.dumps(
+                    {"event": "worker_stopping", "reason": "heartbeat_unhealthy"},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
     except KeyboardInterrupt:
         print(
             json.dumps({"event": "worker_stopping", "reason": "operator_interrupt"}),
@@ -275,7 +374,8 @@ def main() -> None:
                 ),
                 flush=True,
             )
+    return exit_code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

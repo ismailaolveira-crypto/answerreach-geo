@@ -10,13 +10,14 @@ import {
 import { CompetitorAiInsight } from "./competitor-ai-insight";
 import { CompetitorRanking } from "./competitor-ranking";
 import styles from "./competitor-comparison.module.css";
+import { GeoGlobalScopeBar } from "@/components/geo-global-scope-bar";
 
 type Props = {
   params: Promise<{ workspaceId: string }>;
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const PERIODS = new Set(["7", "30", "90", "3650"]);
+const PERIODS = new Set(["7", "30", "90", "365", "3650"]);
 const VIEWS = new Set(["overall", "model", "question"]);
 
 function first(value: string | string[] | undefined) {
@@ -45,17 +46,24 @@ function BreakdownSections({
 export default async function CompetitorComparisonPage({ params, searchParams }: Props) {
   const { workspaceId } = await params;
   const query = await searchParams;
-  const period = PERIODS.has(first(query.period) ?? "") ? first(query.period)! : "90";
+  const rangeDays = first(query.range)?.replace("d", "");
+  const period = PERIODS.has(rangeDays ?? "") ? rangeDays! : PERIODS.has(first(query.period) ?? "") ? first(query.period)! : "90";
   const model = first(query.model) || "all";
   const question = Number(first(query.question) || 0);
+  const selectedModels = (Array.isArray(query.model) ? query.model : query.model ? [query.model] : []).filter((value) => value && value !== "all");
+  const selectedQuestions = (Array.isArray(query.question) ? query.question : query.question ? [query.question] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0);
+  const selectedBatches = (Array.isArray(query.batch) ? query.batch : query.batch ? [query.batch] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0);
   const view = VIEWS.has(first(query.view) ?? "") ? first(query.view)! : "overall";
 
   let comparison: CleanroomCompetitorComparison;
   try {
     comparison = await getCleanroomCompetitorComparison(workspaceId, {
       periodDays: Number(period),
-      modelKey: model,
-      questionPlanId: question > 0 ? question : undefined,
+      dateFrom: first(query.range) === "custom" && first(query.from) ? `${first(query.from)}T00:00:00Z` : undefined,
+      dateTo: first(query.range) === "custom" && first(query.to) ? `${first(query.to)}T23:59:59Z` : undefined,
+      modelKeys: selectedModels,
+      questionPlanIds: selectedQuestions,
+      batchIds: selectedBatches,
       evidenceLimit: 50,
     });
   } catch (error) {
@@ -75,17 +83,19 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
     ? "当前范围没有已归档真实回答"
     : `${baseline.canonical_name} 在 ${baseline.hit_answer_count}/${baseline.sample_answer_count} 条回答中出现`;
   const scopeLabel = period === "3650" ? "全部归档" : `近 ${period} 天`;
-  const selectedModel = model === "all"
+	const selectedModel = selectedModels.length > 1 ? `已选 ${selectedModels.length} 个模型` : model === "all"
     ? "全部已测模型"
     : comparison.available_models.find((item) => item.key === model)?.label ?? model;
-  const selectedQuestion = question > 0
+	const selectedQuestion = selectedQuestions.length > 1 ? `已选 ${selectedQuestions.length} 个问题` : question > 0
     ? comparison.available_questions.find((item) => item.id === question)?.question_text ?? `问题 #${question}`
     : "全部已选问题";
 
   function viewHref(nextView: string) {
-    const next = new URLSearchParams({ period, view: nextView });
-    if (model !== "all") next.set("model", model);
-    if (question > 0) next.set("question", String(question));
+		const next = new URLSearchParams();
+		for (const [key, raw] of Object.entries(query)) {
+			for (const value of Array.isArray(raw) ? raw : raw ? [raw] : []) next.append(key, value);
+		}
+		next.set("view", nextView);
     return `/geo/${workspaceId}/competitors?${next.toString()}`;
   }
 
@@ -103,24 +113,8 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
     <main className={styles.main}>
       <section className={styles.heading}>
         <div><span>竞争情报</span><h1>竞品对比</h1><p>看清真实 AI 采购回答里，各品牌被提到的频率与对比信号。</p></div>
-        <form method="get" className={styles.filters} aria-label="筛选竞品对比">
-          <input type="hidden" name="view" value={view} />
-          <select name="period" defaultValue={period} aria-label="统计范围">
-            <option value="7">近 7 天</option><option value="30">近 30 天</option>
-            <option value="90">近 90 天</option><option value="3650">全部归档</option>
-          </select>
-          <select name="model" defaultValue={model} aria-label="模型">
-            <option value="all">全部模型</option>
-            {comparison.available_models.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-          </select>
-          <select name="question" defaultValue={question || "all"} aria-label="问题">
-            <option value="all">全部问题</option>
-            {comparison.available_questions.map((item) => <option key={item.id} value={item.id}>{item.question_text}</option>)}
-          </select>
-          <button type="submit">应用</button>
-        </form>
       </section>
-
+      <GeoGlobalScopeBar workspaceId={workspaceId} />
       <section className={styles.summary} aria-labelledby="comparison-headline">
         <div className={styles.conclusion}><small>本轮结论</small><h2 id="comparison-headline">{headline}</h2><p>{comparison.summary.answer_count} 条真实回答 · {comparison.by_model.filter((item) => item.answer_count > 0).length} 个模型</p></div>
         <dl>

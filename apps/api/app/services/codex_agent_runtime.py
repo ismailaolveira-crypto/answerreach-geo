@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import shutil
 import threading
 from time import monotonic
 from typing import Callable
@@ -135,6 +136,17 @@ class CodexTurnResult:
     final_response: str
     usage: dict = field(default_factory=dict)
     runtime_events: list[dict] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class CodexImageResult:
+    """One real image produced by the local Codex imagegen skill."""
+
+    thread_id: str
+    turn_id: str
+    saved_path: Path
+    revised_prompt: str | None = None
+    usage: dict = field(default_factory=dict)
 
 
 def _payload_dict(payload: object) -> dict:
@@ -402,4 +414,127 @@ class LocalCodexRuntime:
                 final_response=final_response,
                 usage=usage,
                 runtime_events=compact_events,
+            )
+
+    def run_image_generation(
+        self,
+        *,
+        task_directory: Path,
+        prompt: str,
+        model: str | None = None,
+        timeout_seconds: float = 900.0,
+        on_started: Callable[[str, str], None] | None = None,
+        on_event: Callable[[str, dict], None] | None = None,
+    ) -> CodexImageResult:
+        """Generate one image through Codex's installed ``imagegen`` skill.
+
+        The image is copied into the caller-owned task directory before this
+        method returns.  A successful text response without a real readable
+        image artifact is treated as a failure.
+        """
+
+        from openai_codex import ApprovalMode, Sandbox, SkillInput, TextInput
+
+        task_directory = task_directory.resolve()
+        task_directory.mkdir(parents=True, exist_ok=True)
+        skill_path = Path.home() / ".codex" / "skills" / ".system" / "imagegen" / "SKILL.md"
+        if not skill_path.is_file():
+            raise CodexRuntimeUnavailable("Codex imagegen skill is not installed")
+
+        generated_path: Path | None = None
+        revised_prompt: str | None = None
+        usage: dict = {}
+        completed_status = ""
+        with _warm_codex_client.use() as codex:
+            thread = codex.thread_start(
+                cwd=str(task_directory),
+                developer_instructions=(
+                    "Generate exactly one image for an article. Do not publish or contact anyone. "
+                    "Use the imagegen skill and return only after the image artifact is saved."
+                ),
+                model=model,
+                sandbox=Sandbox.workspace_write,
+                approval_mode=ApprovalMode.deny_all,
+                config={"web_search": "disabled"},
+                ephemeral=True,
+            )
+            handle = thread.turn(
+                [
+                    SkillInput(name="imagegen", path=str(skill_path)),
+                    TextInput(text=prompt),
+                ],
+                sandbox=Sandbox.workspace_write,
+                approval_mode=ApprovalMode.deny_all,
+            )
+            if on_started:
+                on_started(thread.id, handle.id)
+
+            turn_finished = threading.Event()
+            timeout_reached = threading.Event()
+
+            def interrupt_after_timeout() -> None:
+                if turn_finished.wait(float(timeout_seconds)):
+                    return
+                timeout_reached.set()
+                try:
+                    handle.interrupt()
+                except Exception:
+                    return
+
+            timeout_thread = threading.Thread(
+                target=interrupt_after_timeout,
+                name=f"codex-image-timeout-{handle.id}",
+                daemon=True,
+            )
+            timeout_thread.start()
+            try:
+                for notification in handle.stream():
+                    detail = _payload_dict(notification.payload)
+                    if on_event:
+                        on_event(notification.method, detail)
+                    if notification.method == "item/completed":
+                        item = detail.get("item") or {}
+                        if str(item.get("type") or "") in {
+                            "imageGeneration",
+                            "image_generation_call",
+                        }:
+                            path_value = item.get("savedPath") or item.get("saved_path")
+                            if path_value:
+                                generated_path = Path(str(path_value)).expanduser().resolve()
+                            revised_prompt = str(
+                                item.get("revisedPrompt") or item.get("revised_prompt") or ""
+                            ).strip() or None
+                    elif notification.method == "thread/tokenUsage/updated":
+                        usage = detail.get("tokenUsage") or {}
+                    elif notification.method == "turn/completed":
+                        completed_status = str((detail.get("turn") or {}).get("status") or "")
+            finally:
+                turn_finished.set()
+                timeout_thread.join(timeout=1)
+
+            if timeout_reached.is_set():
+                raise CodexRunTimedOut(
+                    f"Codex image generation exceeded {float(timeout_seconds):g} seconds"
+                )
+            if completed_status != "completed":
+                raise CodexRuntimeUnavailable(
+                    f"Codex image generation ended with status: {completed_status or 'unknown'}"
+                )
+            if generated_path is None or not generated_path.is_file():
+                raise CodexRuntimeUnavailable("Codex returned no readable generated image artifact")
+
+            suffix = generated_path.suffix.lower()
+            if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+                raise CodexRuntimeUnavailable("Codex generated an unsupported image format")
+            destination = task_directory / f"generated-image{suffix}"
+            if generated_path != destination:
+                shutil.copy2(generated_path, destination)
+            if destination.stat().st_size <= 0:
+                raise CodexRuntimeUnavailable("Codex generated an empty image artifact")
+            return CodexImageResult(
+                thread_id=thread.id,
+                turn_id=handle.id,
+                saved_path=destination,
+                revised_prompt=revised_prompt,
+                usage=usage,
             )

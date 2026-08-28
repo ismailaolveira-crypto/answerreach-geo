@@ -1,5 +1,6 @@
 import { InteractionFeedback } from "@/app/(app)/interaction-feedback";
 import { GeoFloatingSidebar } from "@/components/geo-floating-sidebar";
+import { GeoShareLauncher } from "@/components/geo-share-launcher";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/session";
 import { getCleanroomWorkspaces } from "@/lib/cleanroom-v1-api";
@@ -18,6 +19,7 @@ export default async function AppLayout({ children }: Readonly<{ children: React
     <div className="cq-app-shell">
       <InteractionFeedback />
       <GeoFloatingSidebar workspaces={workspaces.map(({ id, brand_name }) => ({ id, name: brand_name }))} />
+      <GeoShareLauncher />
       <div className="cq-app-main">{children}</div>
     </div>
   );

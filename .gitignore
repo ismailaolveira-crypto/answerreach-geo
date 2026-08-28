@@ -3,6 +3,13 @@
 .npm-cache/
 .npm-logs/
 .ai-change/
+.acceptance-gate/
+.acceptance-gate*.json
+.cursor/
+.vscode/
+private_artifacts/
+apps/web/public/downloads/geo-article-assistant-0.1*.zip
+apps/web/public/downloads/geo-article-assistant-0.2.0.zip
 *.log
 tools/.codegraph-bundle/
 tools/bin/

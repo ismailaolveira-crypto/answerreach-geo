@@ -262,6 +262,51 @@ def test_completed_turns_reuse_one_warm_codex_client(
     assert snapshot["reuse_count"] == 2
 
 
+def test_image_generation_requires_and_copies_a_real_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sdk-output.png"
+    source.write_bytes(b"\x89PNG\r\n\x1a\nreal-image-payload")
+
+    class ImageHandle:
+        id = "turn-image"
+
+        def stream(self):
+            yield SimpleNamespace(
+                method="item/completed",
+                payload=Payload(
+                    {
+                        "item": {
+                            "type": "imageGeneration",
+                            "savedPath": str(source),
+                            "revisedPrompt": "revised visual prompt",
+                        }
+                    }
+                ),
+            )
+            yield SimpleNamespace(
+                method="turn/completed",
+                payload=Payload({"turn": {"status": "completed"}}),
+            )
+
+        def interrupt(self) -> None:
+            return None
+
+    install_fake_codex(monkeypatch, ImageHandle())
+    destination = tmp_path / "task"
+
+    result = LocalCodexRuntime().run_image_generation(
+        task_directory=destination,
+        prompt="Create one diagram",
+        timeout_seconds=0.1,
+    )
+
+    assert result.saved_path == destination / "generated-image.png"
+    assert result.saved_path.read_bytes() == source.read_bytes()
+    assert result.revised_prompt == "revised visual prompt"
+
+
 def test_two_codex_turns_overlap_on_independent_warm_clients(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
