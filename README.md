@@ -22,7 +22,8 @@
 </p>
 
 <p align="center">
-  <a href="#product">产品能力</a> ·
+  <a href="#gallery">产品全景</a> ·
+  <a href="#product">能力与边界</a> ·
   <a href="#workflow">工作闭环</a> ·
   <a href="#quick-start">快速开始</a> ·
   <a href="#deployment">部署方式</a> ·
@@ -46,6 +47,68 @@
 4. 完成后是否真的变好，投入和回报能否追溯？
 
 入答把这四个问题放在同一条证据链上，但不会把“请求成功”写成“结果已发生”。
+
+## <a id="gallery"></a>产品全景
+
+### 观测与决策
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/observation-workbench.jpg" alt="入答真实观测工作台" /></td>
+    <td width="50%"><img src="docs/screenshots/decision-map.jpg" alt="入答决策地图" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>真实观测</strong><br />按模型、问题和次数创建独立批次</td>
+    <td align="center"><strong>决策地图</strong><br />统一查看提及、候选、推荐、引用和位置</td>
+  </tr>
+</table>
+
+### 信源与竞品
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/source-map.jpg" alt="入答信源地图" /></td>
+    <td width="50%"><img src="docs/screenshots/competitor-comparison.jpg" alt="入答竞品对比" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>信源地图</strong><br />从域名和页面回到原始回答与引用证据</td>
+    <td align="center"><strong>竞品对比</strong><br />在同一数据范围中对比品牌表现</td>
+  </tr>
+</table>
+
+### 执行与内容
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/operations.jpg" alt="入答执行与运营状态" /></td>
+    <td width="50%"><img src="docs/screenshots/content-library.jpg" alt="入答内容库" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>执行状态</strong><br />区分队列、Agent、审核、交付与复测进度</td>
+    <td align="center"><strong>内容库</strong><br />保留事实依据、版本、平台稿和审核状态</td>
+  </tr>
+</table>
+
+### 协作与治理
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/maturity-collaboration-contacts.jpg" alt="入答协作中心通讯录和办公平台入口" /></td>
+    <td width="50%"><img src="docs/screenshots/maturity-observation-limits.jpg" alt="入答真实观测范围和费用提示" /></td>
+  </tr>
+  <tr>
+    <td align="center"><strong>通讯录与办公入口</strong><br />独立连接企业微信、飞书和钉钉</td>
+    <td align="center"><strong>观测范围</strong><br />提交前显示任务量、上限和真实费用风险</td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/maturity-security-settings.jpg" width="100%" alt="入答安全设置与真实状态边界" />
+</p>
+
+<p align="center"><strong>安全设置</strong><br />凭证不回显，连接、登录、草稿、发布和 GEO 改善分别记录。</p>
+
+> 上述图片均来自本仓库的真实产品验收页面。部分历史截图保留了采集时的“春秋元泉 GEO”旧品牌字样；它们展示的是功能和数据状态，不是外部平台已连接或 GEO 效果承诺。
 
 ## <a id="product"></a>产品能力
 
