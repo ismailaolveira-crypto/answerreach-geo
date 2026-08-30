@@ -1,155 +1,99 @@
 <p align="center">
-  <img src="apps/web/app/icon.svg" width="88" height="88" alt="春秋元泉 GEO" />
+  <img src="apps/web/app/icon.svg" width="88" height="88" alt="入答 AnswerReach" />
 </p>
 
-<h1 align="center">春秋元泉 GEO</h1>
+<h1 align="center">入答 AnswerReach</h1>
 
 <p align="center">
-  <strong>从真实联网观测到可审计内容行动的本地优先 GEO 工作台</strong>
-</p>
-
-<p align="center">
-  让团队按自己选择的模型、问题与轮次发起观测，保留原始回答和来源，<br />
-  再把证据转化为可审核、可交付、可复测的优化行动。
+  <strong>企业 GEO 观测、决策与执行工作台</strong>
 </p>
 
 <p align="center">
-  <img alt="Local first" src="https://img.shields.io/badge/Local--first-127.0.0.1-246BFE?style=flat-square" />
-  <img alt="Docker ready" src="https://img.shields.io/badge/Docker-Desktop-2496ED?logo=docker&logoColor=white&style=flat-square" />
+  用真实模型回答发现品牌问题，把证据变成有负责人、审批、交付与复测的优化行动。<br />
+  数据默认留在自己的电脑或企业环境中。
+</p>
+
+<p align="center">
+  <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-2665E8?style=flat-square" />
+  <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-2D8C68?style=flat-square" />
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-15-111111?logo=nextdotjs&logoColor=white&style=flat-square" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&logoColor=white&style=flat-square" />
-  <img alt="Data" src="https://img.shields.io/badge/Data-SQLite%20%7C%20PostgreSQL-5965E0?style=flat-square" />
+  <img alt="Database" src="https://img.shields.io/badge/SQLite%20%7C%20PostgreSQL-5965E0?style=flat-square" />
 </p>
 
 <p align="center">
-  <a href="#product-tour">产品全景</a> ·
+  <a href="#product">产品能力</a> ·
+  <a href="#workflow">工作闭环</a> ·
   <a href="#quick-start">快速开始</a> ·
-  <a href="#how-it-works">工作原理</a> ·
-  <a href="#deployment">部署模式</a> ·
-  <a href="#security">安全边界</a> ·
-  <a href="#development">开发指南</a>
+  <a href="#deployment">部署方式</a> ·
+  <a href="#truth">真实状态</a> ·
+  <a href="#development">开发验证</a>
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/observation-workbench.jpg" width="100%" alt="春秋元泉 GEO 决策地图与真实观测工作台" />
+  <img src="docs/screenshots/agent-workspace.png" width="100%" alt="入答 AnswerReach Agent 工作台" />
 </p>
 
-> 截图来自当前本地产品的真实页面。批次、指标、Worker 和 Provider 状态会随各自部署的数据与配置变化；截图不代表持续在线承诺，也不代表 GEO 效果已经改善。
+> 上图来自当前产品的真实页面；“春秋元泉”是示例工作区，不是产品名。页面中的模型、批次和状态会随部署数据变化，不代表持续在线或 GEO 效果已改善。
 
-## 为什么做春秋元泉 GEO
+## 入答解决什么
 
-普通模型调用只能得到一段答案，难以回答更重要的问题：**模型为什么这样回答、引用了哪里、品牌在哪些采购问题中出现、改完之后是否真的发生变化？**
+企业真正需要的不是又一张 AI 仪表盘，而是四个能被验证的答案：
 
-春秋元泉 GEO 把这条链路拆成可验证的产品流程：
+1. 用户问目标问题时，模型如何提及我的品牌？
+2. 回答依赖了哪些信源，竞品为什么排在前面？
+3. 团队下一步应该改什么，由谁负责，如何审核和交付？
+4. 完成后是否真的变好，投入和回报能否追溯？
 
-- 观测范围由用户当下选择的 **模型 × 问题 × 轮次** 唯一决定。
-- Queue Worker 只消费新提交且允许执行的任务，历史批次只读保留、不会自动重跑。
-- 每条合格结果归档原始回答、搜索来源、原始响应和采样环境。
-- 决策地图、信源地图与竞品对比都从同一份持久化证据计算。
-- Codex Agent 只在用户选择真实机会后研究和起草，产物必须进入人工审核。
-- 平台写入、最终发布与复测结论彼此分离；最终发布始终由用户在目标平台确认。
+入答把这四个问题放在同一条证据链上，但不会把“请求成功”写成“结果已发生”。
 
-## <a id="product-tour"></a>产品全景
+## <a id="product"></a>产品能力
 
-### 登录与工作区建立
-
-账号、企业、工作区和成员角色独立隔离。个人版可在本机创建管理员和独立工作区；团队版支持邀请链接与角色权限。
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/login.jpg" alt="春秋元泉 GEO 登录页" /></td>
-    <td width="50%"><img src="docs/screenshots/register.jpg" alt="春秋元泉 GEO 注册页" /></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>登录工作台</strong><br />授权成员进入对应工作区</td>
-    <td align="center"><strong>建立观测空间</strong><br />创建管理员并定义品牌边界</td>
-  </tr>
-</table>
-
-### 真实观测与决策地图
-
-页面按所选模型、问题和重复次数实时计算任务量。任务只有在 Worker 实际领取后才进入运行中；完成后可逐条回看证据。
-
-<p align="center">
-  <img src="docs/screenshots/decision-map.jpg" width="100%" alt="春秋元泉 GEO 决策地图指标与采购问题矩阵" />
-</p>
-
-### 信源、竞品与内容闭环
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/source-map.jpg" alt="春秋元泉 GEO 信源地图" /></td>
-    <td width="50%"><img src="docs/screenshots/competitor-comparison.jpg" alt="春秋元泉 GEO 竞品对比" /></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>信源地图</strong><br />按域名、页面、模型和问题回到原始证据</td>
-    <td align="center"><strong>竞品对比</strong><br />在同一批次口径下比较出现率与位置</td>
-  </tr>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/content-library.jpg" alt="春秋元泉 GEO 内容库" /></td>
-    <td width="50%"><img src="docs/screenshots/operations.jpg" alt="春秋元泉 GEO 运营状态" /></td>
-  </tr>
-  <tr>
-    <td align="center"><strong>内容库</strong><br />保留 Agent 版本、事实依据、平台稿与审核状态</td>
-    <td align="center"><strong>运营状态</strong><br />区分连接、队列、观测和证据闭环</td>
-  </tr>
-</table>
-
-## 核心能力
-
-| 能力 | 产品行为 | 真实性边界 |
+| 板块 | 能做什么 | 关键边界 |
 |---|---|---|
-| 多模型真实观测 | 按模型 × 问题 × 轮次生成独立任务 | 创建队列任务不等于模型调用完成 |
-| 统一证据台账 | 保存原始回答、来源 URL、原始响应和采样环境 | 缺少必要证据的结果不进入指标 |
-| 决策地图 | 展示自然提及、候选、推荐、引用与事实核验状态 | 事实准确率不由模型自行猜测 |
-| 信源地图 | 聚合来源域名与具体页面，并回链原回答 | URL 被引用不等于页面已经被核验 |
-| 竞品对比 | 在相同筛选范围内计算品牌出现率、位置与对比信号 | 真实 0 会保留，不用模拟数据补位 |
-| 问题与行动 | 从已完成批次中选择有证据的优先机会 | 未运行 Codex 分析时不会伪造机会卡 |
-| 内容研究与起草 | 生成母稿、Claim 清单与平台差异稿 | Agent 输出只到待审核，不自动发布 |
-| 工作区协作 | owner / admin / operator / reviewer / viewer 角色隔离 | 非成员不能访问其他工作区 |
-| 运行状态 | 展示 Worker 心跳、可执行队列、失败原因和证据闭环 | Worker 在线只代表队列可被消费 |
+| Agent 工作台 | 持续对话，动态加入批次、问题、模型和行动上下文；支持 Codex、Claude Code、Hermes 和 OpenClaw 运行时 | 只返回可核验的判断依据，不展示隐藏思维链，不自动发布 |
+| 经营驾驶舱 | 把业务目标、当前观测、行动和结果放在同一个范围中 | 不用不同批次的历史数据伪造趋势 |
+| 决策、信源、竞品和问题洞察 | 回看原始回答、引用 URL、品牌位置与同范围对比 | 真实 0 会保留，证据不足时明确标记 |
+| 优化行动 | 从洞察建立行动，设置负责人、截止时间、审批、交付证据和局部复测 | 没有人工确认和回读证据不推进完成状态 |
+| 协作中心 | 工作讨论、@ 成员、附件、工作对象分享和通讯录 | 讨论始终对应洞察、行动或内容，不另造聊天软件 |
+| 企业微信、飞书、钉钉 | 连接企业自建应用或群机器人，验证成员身份，推送进度摘要 | 每个平台独立配置、测试和回读；“已保存”不等于“已连接” |
+| 内容与草稿交付 | 事实核验、母稿、平台适配、智能配图、人工审核和浏览器草稿写入 | 只写草稿；最终发布必须由用户在目标平台确认 |
+| 效果与 ROI | 记录可追溯投入、收入、CSV 导入与同范围复测 | 只使用真实成本和可归因收入 |
+| 运营与治理 | Worker 心跳、队列恢复、失败补跑、观测告警、权限和审计 | 在线、已登录、已执行是三个不同状态 |
 
-## <a id="how-it-works"></a>工作原理
+### 真实观测上限
+
+单个官方 API 观测批次最多可选 **5 个模型 × 10 个问题 × 每题 100 次**。页面在提交前显示计划任务量；高重复次数会产生真实 Provider 费用，不应把上限当作默认值。
+
+## <a id="workflow"></a>从观测到结果
 
 ```mermaid
 flowchart LR
-    A["用户选择模型、问题和轮次"] --> B["创建本次新批次"]
-    B --> C["Queue Worker 领取可执行任务"]
-    C --> D["Provider API 与联网搜索"]
-    D --> E["真实性门禁"]
-    E --> F["原始回答、来源与工件归档"]
-    F --> G["决策地图 / 信源地图 / 竞品对比"]
-    G --> H["用户启动 Codex 机会分析"]
-    H --> I["研究、母稿与平台适配稿"]
-    I --> J["人工逐稿审核"]
-    J --> K["用户在目标平台确认草稿与发布"]
-    K --> L["同范围复测"]
+    A["选择模型、问题和次数"] --> B["创建独立批次"]
+    B --> C["Worker 执行真实请求"]
+    C --> D["原回答、信源和环境归档"]
+    D --> E["洞察与 Agent 研究"]
+    E --> F["负责人、审批与交付"]
+    F --> G["人工确认草稿或上线"]
+    G --> H["同范围复测"]
+    H --> I["效果与 ROI"]
 ```
 
-系统刻意不合并以下状态：
+观测、Agent、行动、内容和 ROI 共享同一个工作区与全局数据范围，但各自保留独立的真实状态。
 
-```text
-连接测试通过 ≠ 真实观测完成
-Agent 已连接 ≠ 内容已经生成
-草稿生成完成 ≠ 草稿已写入平台
-平台返回候选链接 ≠ 用户已确认草稿可见
-草稿可见 ≠ 已发布
-已发布 ≠ GEO 效果已改善
-```
+## <a id="quick-start"></a>快速开始
 
-## <a id="quick-start"></a>同事下载后直接使用
-
-个人电脑版只要求 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，不需要本机安装 Node.js、Python、pnpm 或 uv。
+个人电脑版只要求 [Docker Desktop](https://www.docker.com/products/docker-desktop/)，无需额外安装 Node.js、Python、pnpm 或 uv。
 
 ### Windows
 
-1. 从 GitHub 下载 ZIP 并完整解压。
+1. 下载仓库 ZIP 并完整解压。
 2. 双击 `Start-GEO-Windows.cmd`。
 3. 等待浏览器自动打开注册页。
 
 ### macOS
 
-1. 从 GitHub 下载 ZIP 并解压。
+1. 下载仓库 ZIP 并解压。
 2. 第一次右键打开 `Start-GEO.command`，选择“打开”。
 3. 等待浏览器自动打开注册页。
 
@@ -159,83 +103,66 @@ Agent 已连接 ≠ 内容已经生成
 ./scripts/geo-personal.sh start
 ```
 
-默认入口：
+默认访问 `http://127.0.0.1:3000`。3000 被占用时，启动器会在 3001–3010 中选择空闲端口，不会结束其他程序。
+
+首次进入后：
+
+1. 创建本机管理员和工作区。
+2. 在“模型与渠道”中配置自己有权使用的 Provider，先运行连接测试。
+3. 先用小范围观测确认费用、速度和证据完整性。
+
+完整安装、停止、诊断、备份和更新说明见 [`START_HERE.md`](START_HERE.md)。
+
+## <a id="deployment"></a>部署方式
+
+| 模式 | 数据库 | 访问范围 | 适用场景 |
+|---|---|---|---|
+| 个人 Docker 版 | SQLite | 本机 `127.0.0.1` | 个人试用、独立项目 |
+| macOS 原生常驻版 | SQLite | 本机 | 开发机长期运行 |
+| 局域网团队版 | PostgreSQL | 可信内网 | 同一办公网共享工作区 |
+| 云端正式版 | PostgreSQL | HTTPS 域名 | 跨地点团队与正式客户 |
+
+详见 [`docs/local-deployment-modes.md`](docs/local-deployment-modes.md) 和 [`docs/production-deployment.md`](docs/production-deployment.md)。局域网与云端部署必须使用真实终端、权限、备份和恢复流程做上线验收。
+
+## <a id="truth"></a>真实状态原则
 
 ```text
-http://127.0.0.1:3000
+Agent 已连接 ≠ 平台账号已登录
+某个平台已登录 ≠ 其他平台已登录
+草稿写入请求成功 ≠ 草稿真实可见
+草稿可见 ≠ 文章已发布
+文章已发布 ≠ GEO 效果已改善
 ```
 
-如果 3000 被占用，启动器会在 3001–3010 中选择空闲端口，不会结束其他程序。首次进入后：
+只有存在数据库记录和可回读证据时，状态才能推进。公开 URL、人工确认、页面回读和可比较复测数据分别证明不同事实，不互相替代。
 
-1. 注册本机管理员账号和工作区。
-2. 在“模型与渠道”中配置自己有权使用的 Provider，并先做连接测试。
-3. 回到决策地图，只提交当前页面选定的模型、问题与轮次。
+## 安全与数据
 
-完整安装、停止、状态检查、备份和更新说明见 [`START_HERE.md`](START_HERE.md)。
+- 不要把 `.env`、数据库、WAL/SHM、备份、Provider Token、私有证据、日志或浏览器会话提交到 Git。
+- 个人版数据和证据保存在 Docker 数据卷；停止容器不会删除它们。
+- 不要运行 `docker compose down -v`，`-v` 会删除数据卷。
+- 办公平台凭证仅用于对应平台的官方 API；界面不会回显完整密钥。
+- 系统可以写入已审核草稿，不会自动点击外部平台的最终发布按钮。
 
-## <a id="deployment"></a>部署模式
-
-| 模式 | 数据库 | 访问范围 | Worker | 适用场景 |
-|---|---|---|---|---|
-| 个人 Docker 版 | SQLite | 仅 `127.0.0.1` | 默认 8，并受 Provider QPS 与 SQLite 写入限制 | 同事各自在电脑独立使用 |
-| macOS 原生常驻版 | SQLite | 仅本机 | 由 LaunchAgent 保持 Web / API / Worker，同样受实际资源限制 | 开发机长期本地使用 |
-| 局域网团队版 | PostgreSQL | 可信内网 | 中央 Worker 最多 125 个并发槽 | 同一办公室共享账号与证据 |
-| 云端正式单机版 | PostgreSQL | 指定 HTTPS 域名 | 默认 32，可按服务器和 Provider 限额调整 | 跨地点团队与早期正式客户 |
-
-局域网模式的代码和配置已经提供，但仍应在正式内部投用前完成两台真实电脑的端到端验收。不要把端口直接映射到公网；跨办公地点优先使用公司 VPN、Tailscale 或正式 HTTPS 反向代理。
-
-本机与内网边界详见 [`docs/local-deployment-modes.md`](docs/local-deployment-modes.md)；云端一键部署、备份和扩容边界详见 [`docs/production-deployment.md`](docs/production-deployment.md)。
-
-## Provider 与联网能力
-
-平台为 DeepSeek、豆包、通义千问、智谱 GLM、Kimi 与腾讯混元提供配置入口和对应协议适配。每一家是否可用于真实观测，取决于当前部署中的：
-
-- 官方账号与 API Key 是否有效；
-- 模型名、API 地址和搜索增强参数是否匹配官方协议；
-- Provider QPS、额度与 429 限流；
-- 最近一次联网测试及完整证据门禁是否通过。
-
-“配置入口存在”或“普通 API 能回答”都不能证明官方搜索工具已经工作。运营状态页会把未配置、连接通过、待完成观测和产品闭环通过分开显示。
-
-## <a id="security"></a>密钥、隐私与数据边界
-
-- GitHub 仓库不应包含任何真实 `.env`、数据库、WAL、备份、Provider Token、私有证据、日志、登录态、`node_modules` 或 `.next`。
-- 个人版配置保存在稳定的本机用户目录；已有配置不会在更新或重新解压时被覆盖。
-- 数据库和证据保存在 Docker 数据卷；停止容器或更换代码目录不会自动删除数据。
-- 不要运行 `docker compose down -v`，它会删除个人数据卷。
-- 备份会将数据库、证据和本机配置整体认证加密；加密文件和独立 `backup.key` 必须分开保管，不得上传 GitHub 或转发。
-- Local Agent V1 只上报设备、EgoLite 与 Codex 的非敏感健康状态，不提供远程 Shell。
-- 最终发布仍需用户在目标平台确认；系统不会把同步请求接受写成“已经发布”。
-
-常用本机入口：
-
-| 目的 | Windows | macOS |
-|---|---|---|
-| 启动 | `Start-GEO-Windows.cmd` | `Start-GEO.command` |
-| 状态检查 | `Status-GEO-Windows.cmd` | `Status-GEO.command` |
-| 停止并保留数据 | `Stop-GEO-Windows.cmd` | `Stop-GEO.command` |
-| 备份 | `Backup-GEO-Windows.cmd` | `Backup-GEO.command` |
-
-## 项目结构
+## 技术结构
 
 ```text
 .
 ├── apps/
 │   ├── web/                  # Next.js 产品界面
-│   └── api/                  # FastAPI、SQLAlchemy、Worker 与迁移
-├── infra/                    # Docker Compose、Nginx 与 LaunchAgent
-├── scripts/                  # 部署、诊断、采集与验收脚本
-├── docs/                     # 产品、设计、Agent 与部署文档
-├── START_HERE.md             # 同事安装的唯一入口
-└── Start-GEO.*               # Windows / macOS 一键启动器
+│   ├── api/                  # FastAPI、SQLAlchemy、Worker 与迁移
+│   └── geo-article-assistant-extension/ # 草稿写入浏览器扩展
+├── infra/                    # Docker Compose、Nginx 与本机服务
+├── scripts/                  # 部署、诊断、审计与验收
+├── docs/                     # 产品、Agent、设计与部署文档
+├── START_HERE.md             # 使用者安装入口
+└── Start-GEO.*               # Windows / macOS 一键启动
 ```
 
 ## <a id="development"></a>开发与验证
 
-开发者先阅读：
+开发者先阅读 [`AGENTS.md`](AGENTS.md) 和 [`docs/DEVELOPER_HANDOFF.md`](docs/DEVELOPER_HANDOFF.md)。修改 Agent、优化行动、内容生成、平台适配、草稿同步或复测前，还必须阅读：
 
-- [`AGENTS.md`](AGENTS.md)
-- [`docs/DEVELOPER_HANDOFF.md`](docs/DEVELOPER_HANDOFF.md)
 - [`docs/agent/CODEX_AGENT_EXECUTION_RUNBOOK.md`](docs/agent/CODEX_AGENT_EXECUTION_RUNBOOK.md)
 - [`docs/product/CODEX_AGENT_INTEGRATION_IMPLEMENTATION.md`](docs/product/CODEX_AGENT_INTEGRATION_IMPLEMENTATION.md)
 - [`docs/design/codex-agent-priority-actions-ui-spec.md`](docs/design/codex-agent-priority-actions-ui-spec.md)
@@ -247,28 +174,31 @@ pnpm run dev:api
 pnpm run dev:web
 ```
 
-打开 `http://127.0.0.1:39003`。提交前运行：
+打开 `http://127.0.0.1:39003`。提交前至少运行：
 
 ```bash
 pnpm run check:api
-pnpm run check:web
+cd apps/api && PYTHONPATH=. uv run pytest -q
+cd ../..
 pnpm run build:web
-pnpm run verify:local
+pnpm run check:web
+python3 scripts/acceptance_privacy_audit.py
+python3 scripts/acceptance_db_audit.py
+git diff --check
 ```
 
-更多开发说明见 [`docs/development.md`](docs/development.md)。
+`build:web` 和 `check:web` 应顺序执行，避免争抢 `.next/types`。更多说明见 [`docs/development.md`](docs/development.md)。
 
-## 当前产品边界
+## 当前边界
 
-- Docker 个人版可独立运行 Web、API、SQLite 和采集 Worker。
-- 本机 Codex、EgoLite 或其他桌面登录态不会自动进入 Docker 容器；相关功能必须单独配置并通过真实诊断。
-- 局域网团队版尚未完成两台真实电脑的正式验收，不能宣称已经完成生产部署。
-- Agent 只生成和保存可审核产物；最终平台发布与可比复测需要人工完成。
-- 任何“已完成”状态都必须能够回读数据库记录和对应证据。
+- Provider、Agent 运行时和办公平台需要各自的真实账号与凭证，仓库不附带。
+- Docker 容器不会自动继承宿主机上 Codex、Claude、Hermes、OpenClaw 或浏览器的登录态。
+- 个人版默认 Worker 并发为 8；实际速度受电脑性能、数据库写入、Provider QPS、额度和限流影响。
+- 局域网和云端部署在对外使用前，仍需要针对真实网络、用户和恢复流程验收。
 
 ---
 
 <p align="center">
-  <strong>春秋元泉 GEO</strong><br />
-  让每一次观测、判断与行动都能回到证据。
+  <strong>入答 AnswerReach</strong><br />
+  让每一次观测、判断、行动和结果都能回到证据。
 </p>
