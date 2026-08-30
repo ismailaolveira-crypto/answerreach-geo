@@ -23,7 +23,9 @@ ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
 
-RUN addgroup --system --gid 10001 geo \
+RUN apk upgrade --no-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx \
+    && addgroup --system --gid 10001 geo \
     && adduser --system --uid 10001 --ingroup geo geo
 
 COPY --from=builder --chown=geo:geo /app/apps/web/.next/standalone ./

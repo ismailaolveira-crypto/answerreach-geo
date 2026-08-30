@@ -54,6 +54,16 @@ require(
     "API image must install available Debian security upgrades",
 )
 
+web_dockerfile = (ROOT / "apps/web/Dockerfile").read_text(encoding="utf-8")
+require(
+    "apk upgrade --no-cache" in web_dockerfile,
+    "Web runtime image must install available Alpine security upgrades",
+)
+require(
+    "rm -rf /usr/local/lib/node_modules/npm" in web_dockerfile,
+    "Web runtime image must not retain build-only npm packages",
+)
+
 require(
     not (ROOT / "infra/docker-compose.yml").exists(),
     "obsolete insecure infra/docker-compose.yml must not be restored",
