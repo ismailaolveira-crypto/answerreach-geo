@@ -48,6 +48,12 @@ for path in image_files:
             f"container image must be pinned by digest: {path.relative_to(ROOT)} -> {image}",
         )
 
+api_dockerfile = (ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
+require(
+    "apt-get upgrade -y" in api_dockerfile,
+    "API image must install available Debian security upgrades",
+)
+
 require(
     not (ROOT / "infra/docker-compose.yml").exists(),
     "obsolete insecure infra/docker-compose.yml must not be restored",

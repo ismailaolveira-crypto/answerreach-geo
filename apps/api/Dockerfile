@@ -7,7 +7,10 @@ ENV UV_CACHE_DIR=/tmp/uv-cache
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir uv==0.8.15
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir uv==0.8.15
 
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
 RUN uv sync --frozen --no-dev \
