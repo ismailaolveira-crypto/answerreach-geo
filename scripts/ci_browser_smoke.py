@@ -69,11 +69,22 @@ def main() -> None:
             page.wait_for_url("**/geo/*", timeout=30_000)
             expect(page.get_by_role("heading", name="经营驾驶舱")).to_be_visible()
             expect(page.get_by_role("combobox", name="当前工作区")).to_have_value(workspace_id)
+
+            page.goto(f"/geo/{workspace_id}/agent", wait_until="domcontentloaded")
+            expect(page.get_by_role("button", name="收起会话")).to_be_visible()
+            expect(page.get_by_role("button", name="＋ 新建对话")).to_be_visible()
+            page.get_by_role("button", name="收起会话").click()
+            expect(page.get_by_role("button", name="展开会话")).to_be_visible()
+            expect(page.get_by_role("button", name="＋ 新建对话")).to_be_hidden()
+            page.reload(wait_until="domcontentloaded")
+            expect(page.get_by_role("button", name="展开会话")).to_be_visible()
+            page.get_by_role("button", name="展开会话").click()
+            expect(page.get_by_role("button", name="＋ 新建对话")).to_be_visible()
         finally:
             context.close()
             browser.close()
 
-    print("CI browser smoke passed: registration, contacts, CSRF rejection, logout, and re-login.")
+    print("CI browser smoke passed: registration, contacts, CSRF rejection, re-login, and Agent sidebar persistence.")
 
 
 if __name__ == "__main__":

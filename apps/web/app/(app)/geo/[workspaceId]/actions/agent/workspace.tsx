@@ -26,6 +26,7 @@ import styles from "./workspace.module.css";
 
 type Props = {
 	workspaceId: number;
+	initialSidebarCollapsed: boolean;
 	initialConversations: AgentWorkspaceConversation[];
 	initialSelected: AgentWorkspaceConversation | null;
 	contextOptions: AgentWorkspaceContextOptions;
@@ -41,6 +42,8 @@ const CAPABILITIES = [
 	["检查进度", "检查当前优化行动进度、阻塞点和下一步。"],
 ] as const;
 
+const SIDEBAR_PREFERENCE_COOKIE = "answerreach_agent_sidebar_collapsed";
+
 function hasActiveMessage(conversation: AgentWorkspaceConversation | null) {
 	return Boolean(conversation?.messages.some((message) => message.status === "queued" || message.status === "running"));
 }
@@ -50,7 +53,7 @@ function timeLabel(value?: string | null) {
 	return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 
-export function AgentWorkspace({ workspaceId, initialConversations, initialSelected, contextOptions, runtimes, defaultContext, members }: Props) {
+export function AgentWorkspace({ workspaceId, initialSidebarCollapsed, initialConversations, initialSelected, contextOptions, runtimes, defaultContext, members }: Props) {
 	const [conversations, setConversations] = useState(initialConversations);
 	const [runtimeCatalog, setRuntimeCatalog] = useState(runtimes);
 	const [selected, setSelected] = useState(initialSelected);
@@ -61,6 +64,7 @@ export function AgentWorkspace({ workspaceId, initialConversations, initialSelec
 	const [effort, setEffort] = useState<CodexReasoningEffort | null>(null);
 	const [contextOpen, setContextOpen] = useState(false);
 	const [processMessage, setProcessMessage] = useState<AgentWorkspaceMessage | null>(null);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
 	const [error, setError] = useState("");
 	const [isPending, startTransition] = useTransition();
 	const activeRuntime = runtimeKey === "auto" ? null : runtimeCatalog.find((item) => item.runtime_key === runtimeKey) ?? null;
@@ -150,17 +154,26 @@ export function AgentWorkspace({ workspaceId, initialConversations, initialSelec
 		setDraftContext((current) => ({ ...current, [key]: value ? Number(value) : null }));
 	};
 
-	return <main className={styles.page}>
+	const toggleSidebar = () => setSidebarCollapsed((current) => {
+		const next = !current;
+		document.cookie = `${SIDEBAR_PREFERENCE_COOKIE}=${next ? "1" : "0"}; Path=/; Max-Age=31536000; SameSite=Lax`;
+		return next;
+	});
+
+	return <main className={`${styles.page} ${sidebarCollapsed ? styles.sidebarCollapsed : ""}`}>
 		<aside className={styles.rail} aria-label="Agent 对话">
 			<div className={styles.railTitle}><span>✦</span><b>Agent 工作台</b></div>
-			<button className={styles.newButton} type="button" onClick={() => { setSelected(null); setDraftContext(defaultContext); setContent(""); }}>＋ 新建对话</button>
-			{([["正在推进", grouped.running], ["需要我", grouped.needsUser], ["最近", grouped.recent]] as const).map(([label, items]) => items.length ? <section className={styles.conversationGroup} key={label}>
-				<h2>{label}<span>{items.length}</span></h2>
-				{items.map((item) => <button key={item.id} type="button" className={selected?.id === item.id ? styles.activeConversation : ""} onClick={() => selectConversation(item.id)}>
-					<strong>{item.title}</strong><small>{timeLabel(item.last_message_at ?? item.updated_at)}</small>
-				</button>)}
-			</section> : null)}
-			<div className={styles.railFooter}>分析和方案可以自由推进；正式执行仍进入优化行动审批链。</div>
+			<button className={styles.railToggle} type="button" aria-label={sidebarCollapsed ? "展开会话" : "收起会话"} aria-expanded={!sidebarCollapsed} aria-controls="agent-conversation-history" title={sidebarCollapsed ? "展开会话" : "收起会话"} onClick={toggleSidebar}><span aria-hidden="true">{sidebarCollapsed ? "›" : "‹"}</span></button>
+			<div id="agent-conversation-history" className={styles.railContent} aria-hidden={sidebarCollapsed}>
+				<button className={styles.newButton} type="button" onClick={() => { setSelected(null); setDraftContext(defaultContext); setContent(""); }}>＋ 新建对话</button>
+				{([["正在推进", grouped.running], ["需要我", grouped.needsUser], ["最近", grouped.recent]] as const).map(([label, items]) => items.length ? <section className={styles.conversationGroup} key={label}>
+					<h2>{label}<span>{items.length}</span></h2>
+					{items.map((item) => <button key={item.id} type="button" className={selected?.id === item.id ? styles.activeConversation : ""} onClick={() => selectConversation(item.id)}>
+						<strong>{item.title}</strong><small>{timeLabel(item.last_message_at ?? item.updated_at)}</small>
+					</button>)}
+				</section> : null)}
+				<div className={styles.railFooter}>分析和方案可以自由推进；正式执行仍进入优化行动审批链。</div>
+			</div>
 		</aside>
 
 		<section className={styles.workArea}>

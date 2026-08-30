@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { cookies } from "next/headers";
 
 import {
 	getAgentWorkspaceContextOptions,
@@ -19,7 +20,7 @@ function first(value: string | string[] | undefined) {
 }
 
 export default async function AgentWorkspacePage({ params, searchParams }: PageProps) {
-	const [{ workspaceId }, query] = await Promise.all([params, searchParams]);
+	const [{ workspaceId }, query, cookieStore] = await Promise.all([params, searchParams, cookies()]);
 	const numericWorkspaceId = Number(workspaceId);
 	if (!Number.isInteger(numericWorkspaceId) || numericWorkspaceId < 1) notFound();
 	const [conversations, contextOptions, members] = await Promise.all([
@@ -45,6 +46,7 @@ export default async function AgentWorkspacePage({ params, searchParams }: PageP
 	return (
 		<AgentWorkspace
 			workspaceId={numericWorkspaceId}
+			initialSidebarCollapsed={cookieStore.get("answerreach_agent_sidebar_collapsed")?.value === "1"}
 			initialConversations={conversations}
 			initialSelected={selectedConversation}
 			contextOptions={contextOptions}
