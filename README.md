@@ -16,6 +16,7 @@
 <p align="center">
   <img alt="Version" src="https://img.shields.io/badge/version-0.2.0-2665E8?style=flat-square" />
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-2D8C68?style=flat-square" />
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-111111?style=flat-square" />
   <img alt="Next.js" src="https://img.shields.io/badge/Next.js-15-111111?logo=nextdotjs&logoColor=white&style=flat-square" />
   <img alt="FastAPI" src="https://img.shields.io/badge/FastAPI-Python-009688?logo=fastapi&logoColor=white&style=flat-square" />
   <img alt="Database" src="https://img.shields.io/badge/SQLite%20%7C%20PostgreSQL-5965E0?style=flat-square" />
@@ -28,7 +29,8 @@
   <a href="#quick-start">快速开始</a> ·
   <a href="#deployment">部署方式</a> ·
   <a href="#truth">真实状态</a> ·
-  <a href="#development">开发验证</a>
+  <a href="#development">开发验证</a> ·
+  <a href="#license">开源许可</a>
 </p>
 
 <p align="center">
@@ -251,6 +253,18 @@ git diff --check
 ```
 
 `build:web` 和 `check:web` 应顺序执行，避免争抢 `.next/types`。更多说明见 [`docs/development.md`](docs/development.md)。
+
+## <a id="license"></a>开源许可
+
+主平台除 `apps/geo-article-assistant-extension/` 外采用 [MIT License](LICENSE)。
+
+GEO 文章助手是与主平台隔离的 GPL-3.0 独立浏览器扩展，许可与上游修改说明见：
+
+- [`apps/geo-article-assistant-extension/LICENSE`](apps/geo-article-assistant-extension/LICENSE)
+- [`apps/geo-article-assistant-extension/NOTICE.md`](apps/geo-article-assistant-extension/NOTICE.md)
+- [`apps/geo-article-assistant-extension/vendor/UPSTREAM.md`](apps/geo-article-assistant-extension/vendor/UPSTREAM.md)
+
+第三方依赖和上游代码继续适用各自的许可证与版权声明。
 
 ## 当前边界
 
