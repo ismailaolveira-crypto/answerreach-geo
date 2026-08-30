@@ -11,9 +11,10 @@ ActionType = Literal[
     "official_site",
     "structured_data",
     "third_party_source",
+    "analysis",
     "legacy_unclassified",
 ]
-TargetType = Literal["platform", "official_page", "schema", "external_source"]
+TargetType = Literal["platform", "official_page", "schema", "external_source", "analysis_deliverable"]
 
 
 class ActionTargetCreate(BaseModel):
@@ -129,7 +130,7 @@ class ActionDetailRead(BaseModel):
 
 
 class ActionClassifyRequest(BaseModel):
-    action_type: Literal["article", "official_site", "structured_data", "third_party_source"]
+    action_type: Literal["article", "official_site", "structured_data", "third_party_source", "analysis"]
     deliverable_type: str = Field(min_length=1, max_length=60)
     targets: list[ActionTargetCreate] = Field(min_length=1, max_length=50)
 
@@ -178,6 +179,7 @@ class ActionEvidenceCreate(BaseModel):
         "source_code",
         "schema_validation",
         "external_publication",
+        "analysis_report",
     ]
     source_url: str | None = Field(default=None, max_length=1500)
     artifact_uri: str | None = Field(default=None, max_length=1500)
@@ -203,6 +205,7 @@ class ActionApprovalCreate(BaseModel):
         "brand_legal",
         "technical",
         "external_content",
+        "analysis",
     ]
     reviewer_user_id: int = Field(ge=1)
     due_at: datetime

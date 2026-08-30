@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requestPublicUrl } from "@/lib/request-url";
 import { isTrustedFormOrigin, SESSION_COOKIE, sessionCookieOptions } from "@/lib/session-security";
+import { internalApiClientHeaders } from "@/lib/internal-api-security";
 
 const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 export async function POST(request: NextRequest) {
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
   try {
     registration = await fetch(`${API_BASE_URL}/api/auth/register-tenant`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...internalApiClientHeaders(request) },
       body: JSON.stringify(payload),
       cache: "no-store",
     });
@@ -23,7 +24,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.redirect(requestPublicUrl(request, "/register?error=unavailable"), 303);
   }
   if (!registration.ok) {
-    const error = registration.status === 409 ? "exists" : "invalid";
+    const error = registration.status === 409
+      ? "exists"
+      : registration.status === 429
+        ? "throttled"
+        : registration.status === 403
+          ? "disabled"
+          : registration.status >= 500
+            ? "unavailable"
+            : "invalid";
     return NextResponse.redirect(requestPublicUrl(request, `/register?error=${error}`), 303);
   }
   const result = await registration.json() as { access_token: string };

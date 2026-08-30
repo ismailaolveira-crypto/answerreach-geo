@@ -113,6 +113,99 @@ button {
   font-size: 11px;
 }
 
+.approval-card {
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.24);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 30px rgba(32, 72, 145, 0.1);
+}
+
+.approval-card[hidden] {
+  display: none;
+}
+
+.approval-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.approval-head strong {
+  font-size: 14px;
+}
+
+.approval-head p,
+.approval-note {
+  margin: 4px 0 0;
+  color: #718096;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.approval-head > span {
+  color: #376cd8;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.approval-card ul {
+  max-height: 120px;
+  margin: 10px 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.approval-card li {
+  display: grid;
+  gap: 3px;
+  padding: 7px 0;
+  border-top: 1px solid #e9eef7;
+}
+
+.approval-card li strong,
+.approval-card li small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-card li strong {
+  font-size: 12px;
+}
+
+.approval-card li small {
+  color: #8491a5;
+  font-size: 10.5px;
+}
+
+.approval-actions {
+  display: grid;
+  grid-template-columns: 0.7fr 1.3fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.approval-actions button {
+  min-height: 38px;
+  border: 1px solid #d7dfed;
+  border-radius: 10px;
+  background: #fff;
+  color: #526176;
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.approval-actions button:last-child {
+  border-color: #2769e8;
+  background: #2769e8;
+  color: #fff;
+}
+
 .platform-card {
   max-height: 392px;
   overflow: hidden;

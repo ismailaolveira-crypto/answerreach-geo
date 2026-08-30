@@ -123,7 +123,7 @@ def main() -> None:
             GeoQuestionPlan,
             GeoWorkspace,
         )
-        from app.services.auth import create_access_token, hash_password
+        from app.services.auth import hash_password, issue_access_token
         from app.v1 import routes
         from app.v1.agent_orchestration import execute_agent_run
 
@@ -334,7 +334,10 @@ def main() -> None:
                 "evidence": evidence.id,
                 "user": user.id,
                 "other_user": other_user.id,
+                "access_token": issue_access_token(db, user),
+                "other_access_token": issue_access_token(db, other_user),
             }
+            db.commit()
 
         routes.diagnose_local_codex = lambda: {
             "runtime_key": "local_codex",
@@ -348,8 +351,8 @@ def main() -> None:
             "error": None,
         }
         client = TestClient(create_app())
-        headers = {"Authorization": f"Bearer {create_access_token(ids['user'])}"}
-        other_headers = {"Authorization": f"Bearer {create_access_token(ids['other_user'])}"}
+        headers = {"Authorization": f"Bearer {ids['access_token']}"}
+        other_headers = {"Authorization": f"Bearer {ids['other_access_token']}"}
         blocked = client.post(
             f"/api/v1/workspaces/{ids['workspace']}/actions/{ids['blocked_action']}/agent-runs",
             headers=headers,

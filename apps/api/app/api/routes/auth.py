@@ -1,4 +1,7 @@
 import secrets
+import ipaddress
+
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import SQLAlchemyError
@@ -6,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import Company, User
 from app.models.cleanroom_v1 import GeoWorkspace
@@ -21,18 +25,36 @@ from app.schemas.user import (
 from app.services.auth import (
     canonicalize_email,
     clear_login_failures,
-    create_access_token,
+    consume_security_rate_limit,
     DUMMY_PASSWORD_HASH,
     hash_password,
+    issue_access_token,
     login_retry_after,
     login_throttle_key,
     password_needs_rehash,
     record_login_failure,
+    revoke_session,
+    security_rate_limit_retry_after,
     utcnow,
     verify_password,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _rate_limit_identity(request: Request) -> str:
+    """Use a BFF-forwarded client IP only when the internal shared secret proves it."""
+
+    settings = get_settings()
+    expected = settings.internal_proxy_secret
+    supplied = request.headers.get("x-geo-proxy-secret")
+    claimed = request.headers.get("x-geo-client-ip", "").strip()
+    if expected and supplied and secrets.compare_digest(expected, supplied):
+        try:
+            return str(ipaddress.ip_address(claimed))
+        except ValueError:
+            pass
+    return request.client.host if request.client else "unknown"
 
 
 @router.post("/register", response_model=UserRead, status_code=201)
@@ -77,9 +99,29 @@ def _workspace_slug(db: Session, company_name: str) -> str:
 
 @router.post("/register-tenant", response_model=TenantRegistrationResponse, status_code=201)
 def register_tenant(
-    payload: TenantRegistrationRequest, db: Session = Depends(get_db)
+    payload: TenantRegistrationRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> TenantRegistrationResponse:
     """Create a company, first workspace and company admin atomically."""
+    settings = get_settings()
+    if not settings.public_registration_enabled:
+        raise HTTPException(status_code=403, detail="Public registration is disabled")
+    client_host = _rate_limit_identity(request)
+    retry_after = consume_security_rate_limit(
+        db,
+        scope="tenant-registration-ip",
+        identity=client_host,
+        limit=settings.registration_rate_limit_per_hour,
+        window=timedelta(hours=1),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many registration attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
     email = canonicalize_email(str(payload.email))
     if db.scalar(select(User.id).where(func.lower(User.email) == email)):
         raise HTTPException(status_code=409, detail="Email already exists")
@@ -120,6 +162,7 @@ def register_tenant(
             user_id=new_user.id,
             role="owner",
         )
+        access_token = issue_access_token(db, new_user)
         db.commit()
     except SQLAlchemyError:
         db.rollback()
@@ -127,7 +170,7 @@ def register_tenant(
     db.refresh(new_user)
     db.refresh(workspace)
     return TenantRegistrationResponse(
-        access_token=create_access_token(new_user.id), user=new_user, workspace_id=workspace.id
+        access_token=access_token, user=new_user, workspace_id=workspace.id
     )
 
 
@@ -138,19 +181,43 @@ def login(
     db: Session = Depends(get_db),
 ) -> LoginResponse:
     email = canonicalize_email(str(payload.email))
-    throttle_key = login_throttle_key(email, request.client.host if request.client else "unknown")
+    client_host = _rate_limit_identity(request)
+    settings = get_settings()
+    retry_after = security_rate_limit_retry_after(
+        db,
+        scope="login-ip",
+        identity=client_host,
+        limit=settings.login_rate_limit_per_15_minutes,
+        window=timedelta(minutes=15),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    throttle_key = login_throttle_key(email, client_host)
     user = db.scalar(select(User).where(func.lower(User.email) == email))
     password_valid = verify_password(
         payload.password,
         user.password_hash if user is not None else DUMMY_PASSWORD_HASH,
     )
     if user is None or not password_valid:
+        ip_retry_after = consume_security_rate_limit(
+            db,
+            scope="login-ip",
+            identity=client_host,
+            limit=settings.login_rate_limit_per_15_minutes,
+            window=timedelta(minutes=15),
+        )
         retry_after = login_retry_after(db, throttle_key)
-        if retry_after:
+        if retry_after or ip_retry_after:
+            db.commit()
             raise HTTPException(
                 status_code=429,
                 detail="Too many login attempts. Try again later.",
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(max(retry_after, ip_retry_after))},
             )
         record_login_failure(db, throttle_key)
         db.commit()
@@ -161,14 +228,28 @@ def login(
         user.password_hash = hash_password(payload.password)
     clear_login_failures(db, throttle_key)
     user.last_login_at = utcnow()
+    access_token = issue_access_token(db, user)
     try:
         db.commit()
         db.refresh(user)
     except SQLAlchemyError:
         db.rollback()
-    return LoginResponse(access_token=create_access_token(user.id), user=user)
+        raise HTTPException(status_code=503, detail="Unable to complete login") from None
+    return LoginResponse(access_token=access_token, user=user)
 
 
 @router.get("/me", response_model=UserRead)
 def get_me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+@router.post("/logout", status_code=204)
+def logout(
+    request: Request,
+    db: Session = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> None:
+    session = getattr(request.state, "auth_session", None)
+    if session is not None:
+        revoke_session(db, session)
+        db.commit()

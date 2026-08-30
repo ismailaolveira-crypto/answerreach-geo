@@ -42,7 +42,7 @@ http://127.0.0.1:3000
 - 运营状态页按工作区显示 Queue Worker 心跳、真实可执行等待任务和运行任务；Worker 在线只表示队列可被消费，不代表观测已经完成。
 - 数据位于固定的 `chunqiu_yuanquan_geo_personal_data` Docker 卷，证据位于 `chunqiu_yuanquan_geo_personal_artifacts`；停止容器或换目录解压新版本都不会删除数据。
 - 不要运行 `docker compose down -v`，`-v` 会删除个人数据卷。
-- 备份时使用 `Backup-GEO-Windows.cmd` / `Backup-GEO.command` / `./scripts/geo-personal.sh backup`；备份会暂停全部写入服务并校验归档，同时保留 `.env.personal`，因为丢失该密钥后无法解密已保存的 Provider 凭据。macOS/Linux 备份位于 `~/.local/share/chunqiu-yuanquan-geo/backups`，Windows 备份位于 `%LOCALAPPDATA%\ChunqiuYuanquanGEO\backups`。
+- 备份时使用 `Backup-GEO-Windows.cmd` / `Backup-GEO.command` / `./scripts/geo-personal.sh backup`；备份会暂停全部写入服务，校验归档，再将数据、证据和 `.env.personal` 整体加密为 AES-256-GCM 密文。macOS/Linux 备份位于 `~/.local/share/chunqiu-yuanquan-geo/backups`，Windows 备份位于 `%LOCALAPPDATA%\ChunqiuYuanquanGEO\backups`；独立 `backup.key` 必须与密文分开保管。
 
 ### macOS 原生常驻本地栈
 

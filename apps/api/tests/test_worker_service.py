@@ -67,3 +67,12 @@ def test_repair_uses_only_the_fixed_install_script(tmp_path, monkeypatch) -> Non
     assert result.action == "installed"
     assert result.status.running is True
     assert calls[1] == ("/bin/bash", str(worker_service.WORKER_INSTALL_SCRIPT))
+
+
+def test_worker_service_layout_supports_flattened_api_container(tmp_path) -> None:
+    source_file = tmp_path / "app" / "services" / "worker_service.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.touch()
+    project_root, api_directory = worker_service._resolve_project_layout(source_file)
+    assert project_root == tmp_path
+    assert api_directory == tmp_path

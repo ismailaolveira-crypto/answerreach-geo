@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -120,6 +120,7 @@ from app.v1.schemas import (
     QuestionReviewRead,
     QueueWorkerRepairRead,
     QueueWorkerStatusRead,
+    MAX_OFFICIAL_OBSERVATION_QUESTIONS,
     OfficialApiObservationBatchCreate,
     OfficialApiObservationBatchListRead,
     OfficialApiObservationBatchRead,
@@ -214,9 +215,9 @@ from app.v1.website_audit import (
 )
 from app.services.article_sync_adapter import get_article_sync_adapter
 from app.services.agent_runtime import (
-    RUNTIME_KEYS,
     diagnose_agent_runtime,
     get_agent_runtime,
+    list_agent_runtimes,
     sanitize_agent_error,
 )
 from app.services.codex_agent_runtime import (
@@ -232,7 +233,6 @@ from app.v1.agent_orchestration import (
 )
 from app.services.workspace_secrets import (
     ARTICLE_SYNC_MCP_TOKEN,
-    ARTICLE_SYNC_MCP_SERVER_PATH,
     DEEPSEEK_API_KEY,
     get_workspace_secret,
     resolve_article_sync_credentials,
@@ -244,6 +244,7 @@ from app.services.workspace_access import (
     require_workspace_access,
     require_workspace_manager,
 )
+from app.services.auth import consume_security_rate_limit
 from app.services.job_queue import recover_orphaned_jobs
 from app.services.worker_heartbeat import (
     get_workspace_worker_status,
@@ -1403,7 +1404,6 @@ def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found")
     deepseek_row = secret_status(db, workspace_id, DEEPSEEK_API_KEY)
-    mcp_server_path_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH)
     mcp_token_row = secret_status(db, workspace_id, ARTICLE_SYNC_MCP_TOKEN)
     settings = get_settings()
     deepseek_provider = db.scalar(
@@ -1415,10 +1415,10 @@ def _workspace_integration_read(db: Session, workspace_id: int) -> dict:
     return {
         "workspace_id": workspace_id,
         "deepseek_api_key_configured": deepseek_configured,
-        "article_sync_mcp_server_path": get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH) or settings.article_sync_mcp_server_path,
+        "article_sync_mcp_server_configured": bool(settings.article_sync_mcp_server_path),
         "article_sync_mcp_token_configured": bool(mcp_token_row["configured"] or settings.article_sync_mcp_token),
         "deepseek_updated_at": deepseek_row["updated_at"],
-        "article_sync_mcp_updated_at": mcp_token_row["updated_at"] or mcp_server_path_row["updated_at"],
+        "article_sync_mcp_updated_at": mcp_token_row["updated_at"],
     }
 
 
@@ -1437,42 +1437,14 @@ def update_workspace_integrations(
     workspace_id: int,
     payload: WorkspaceIntegrationUpdate,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(*WRITE_ROLES)),
+    user: User = Depends(get_current_user),
 ) -> dict:
-    workspace_or_404(db, user, workspace_id)
+    require_workspace_manager(db, user, workspace_id)
     changed: list[str] = []
     if payload.deepseek_api_key and payload.deepseek_api_key.strip():
         value = payload.deepseek_api_key.strip()
         set_workspace_secret(db, workspace_id=workspace_id, key=DEEPSEEK_API_KEY, value=value, user_id=user.id)
-        provider = db.scalar(
-            select(LLMProvider)
-            .where(LLMProvider.provider_type == "deepseek_web_search")
-            .order_by(LLMProvider.status.desc(), LLMProvider.id.desc())
-        )
-        if provider is None:
-            provider = LLMProvider(
-                name="DeepSeek 官方内容生成",
-                provider_type="deepseek_web_search",
-                api_base_url="https://api.deepseek.com/anthropic",
-                model_name="deepseek-v4-flash",
-                auth_config={},
-                cost_rule={"channel_role": "official", "platform_key": "deepseek"},
-                status="active",
-            )
-            db.add(provider)
-            db.flush()
-        from app.services.workspace_secrets import encrypt_secret
-
-        provider.auth_config = {
-            **(provider.auth_config or {}),
-            "api_key_encrypted": encrypt_secret(value),
-            "api_key_configured": True,
-        }
-        provider.auth_config.pop("api_key", None)
         changed.append("deepseek_api_key")
-    if payload.article_sync_mcp_server_path and payload.article_sync_mcp_server_path.strip():
-        set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_SERVER_PATH, value=payload.article_sync_mcp_server_path.strip(), user_id=user.id)
-        changed.append("article_sync_mcp_server_path")
     if payload.article_sync_mcp_token and payload.article_sync_mcp_token.strip():
         set_workspace_secret(db, workspace_id=workspace_id, key=ARTICLE_SYNC_MCP_TOKEN, value=payload.article_sync_mcp_token.strip(), user_id=user.id)
         changed.append("article_sync_mcp_token")
@@ -1494,9 +1466,9 @@ def test_workspace_integration(
     workspace_id: int,
     payload: WorkspaceIntegrationTestRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(*WRITE_ROLES)),
+    user: User = Depends(get_current_user),
 ) -> dict:
-    workspace = workspace_or_404(db, user, workspace_id)
+    workspace, _membership = require_workspace_manager(db, user, workspace_id)
     started_at = perf_counter()
     if payload.integration == "article_sync_mcp":
         server_path, token = resolve_article_sync_credentials(db, workspace_id)
@@ -1527,13 +1499,14 @@ def test_workspace_integration(
     )
     if provider is None:
         return {"integration": payload.integration, "ok": False, "message": "尚未配置 DeepSeek 内容生成渠道。"}
-    diagnostic = diagnose_provider(provider)
+    workspace_api_key = get_workspace_secret(db, workspace_id, DEEPSEEK_API_KEY)
+    diagnostic = diagnose_provider(provider, api_key_override=workspace_api_key)
     if not diagnostic["auth_ready"]:
         return {"integration": payload.integration, "ok": False, "message": "DeepSeek API Key 尚未配置。"}
     company = db.get(Company, workspace.company_id) or Company(name=workspace.brand_name, industry="", website_url=workspace.website_url, brand_aliases=workspace.brand_aliases)
     project = db.scalar(select(Project).where(Project.company_id == workspace.company_id).order_by(Project.id.desc())) or Project(company_id=workspace.company_id, name="内容生成连通性测试", target_industry=company.industry, target_audience="企业读者")
     try:
-        answer = get_search_provider(provider).answer("请返回一句‘DeepSeek 内容生成连通性测试通过’，不要扩展。", company, project, [])
+        answer = get_search_provider(provider, api_key_override=workspace_api_key).answer("请返回一句‘DeepSeek 内容生成连通性测试通过’，不要扩展。", company, project, [])
     except Exception as exc:
         return {"integration": payload.integration, "ok": False, "message": f"DeepSeek 请求失败：{str(exc)[:180]}", "latency_ms": int((perf_counter() - started_at) * 1000)}
     return {"integration": payload.integration, "ok": bool(answer.raw_answer.strip()), "message": "DeepSeek 内容生成请求已返回；未写入草稿。", "latency_ms": int((perf_counter() - started_at) * 1000)}
@@ -1966,7 +1939,12 @@ def create_provider_web_search_batch(
             raise HTTPException(
                 status_code=422, detail=f"{provider.name} 未启用或不支持可审计联网搜索"
             )
-        diagnostic = diagnose_provider(provider)
+        workspace_api_key = (
+            get_workspace_secret(db, workspace_id, DEEPSEEK_API_KEY)
+            if provider.provider_type == "deepseek_web_search"
+            else None
+        )
+        diagnostic = diagnose_provider(provider, api_key_override=workspace_api_key)
         if not diagnostic["ready"] or not diagnostic["supports_web_search"]:
             raise HTTPException(
                 status_code=422, detail=f"{provider.name} 配置不完整或尚未启用联网搜索"
@@ -2013,6 +1991,64 @@ def create_provider_web_search_batch(
         for question_id in payload.question_plan_ids
     ]
     total = len(payload.provider_ids) * len(payload.question_plan_ids) * payload.repeat_count
+    settings = get_settings()
+    retry_after = consume_security_rate_limit(
+        db,
+        scope="observation-batch-create",
+        identity=f"{workspace_id}:{user.id}",
+        limit=settings.observation_batch_rate_limit_per_hour,
+        window=timedelta(hours=1),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="观测批次创建过于频繁，请等待现有任务推进后再试",
+            headers={"Retry-After": str(retry_after)},
+        )
+    # PostgreSQL serializes capacity reservations per workspace. Personal mode
+    # uses a single SQLite API process and receives the same transactional check.
+    db.scalar(
+        select(GeoWorkspace.id)
+        .where(GeoWorkspace.id == workspace_id)
+        .with_for_update()
+    )
+    active_batches = int(
+        db.scalar(
+            select(func.count(GeoObservationBatch.id)).where(
+                GeoObservationBatch.workspace_id == workspace_id,
+                GeoObservationBatch.status.in_(("pending", "running")),
+            )
+        )
+        or 0
+    )
+    pending_tasks = int(
+        db.scalar(
+            select(func.count(GeoObservationTask.id)).where(
+                GeoObservationTask.workspace_id == workspace_id,
+                GeoObservationTask.status.in_(("pending", "running")),
+            )
+        )
+        or 0
+    )
+    day_started_at = datetime.now(timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    daily_tasks = int(
+        db.scalar(
+            select(func.count(GeoObservationTask.id)).where(
+                GeoObservationTask.workspace_id == workspace_id,
+                GeoObservationTask.created_at >= day_started_at,
+            )
+        )
+        or 0
+    )
+    if active_batches >= settings.observation_active_batch_limit:
+        raise HTTPException(status_code=409, detail="当前运行中的观测批次已达到上限")
+    if pending_tasks + total > settings.observation_pending_task_limit:
+        raise HTTPException(status_code=409, detail="当前待处理观测任务已达到工作区容量上限")
+    if daily_tasks + total > settings.observation_daily_task_limit:
+        raise HTTPException(status_code=429, detail="今日观测任务量已达到工作区上限")
     now = datetime.now(timezone.utc)
     ledger_batch = GeoObservationBatch(
         workspace_id=workspace_id,
@@ -2076,6 +2112,7 @@ def create_provider_web_search_batch(
         for provider in provider_snapshots
         for question in question_snapshots
     }
+    pending_rows: list[tuple[QueueJob, dict, dict, dict, int]] = []
     for repeat_index in range(1, payload.repeat_count + 1):
         for question in question_snapshots:
             for provider in provider_snapshots:
@@ -2107,29 +2144,38 @@ def create_provider_web_search_batch(
                     payload_json=child_payload,
                 )
                 db.add(child)
-                db.flush()
-                task = GeoObservationTask(
-                    batch_id=ledger_batch.id,
-                    workspace_id=workspace_id,
-                    queue_job_id=child.id,
-                    provider_id=provider["id"],
-                    provider_key=str(provider["channel_key"]),
-                    provider_label=str(provider["label"]),
-                    model_key=str(provider["key"]),
-                    model_label=str(provider["label"]),
-                    question_plan_id=question["id"],
-                    question_text_snapshot=str(question["label"]),
-                    sample_key=f"provider:{provider['id']}:question:{question['id']}:repeat:{repeat_index}",
-                    repeat_index=repeat_index,
-                    repeat_count=payload.repeat_count,
-                    observation_group_id=observation_group_id,
-                    status="pending",
+                pending_rows.append(
+                    (child, child_payload, provider, question, repeat_index)
                 )
-                db.add(task)
-                db.flush()
-                child.payload_json = {**child_payload, "observation_task_id": task.id}
-                db.add(child)
-                child_job_ids.append(child.id)
+    # A maximum batch contains 5,000 rows. Flush the jobs and tasks in two
+    # bounded waves instead of issuing two flushes for every individual sample.
+    db.flush()
+    pending_tasks: list[tuple[QueueJob, dict, GeoObservationTask]] = []
+    for child, child_payload, provider, question, repeat_index in pending_rows:
+        task = GeoObservationTask(
+            batch_id=ledger_batch.id,
+            workspace_id=workspace_id,
+            queue_job_id=child.id,
+            provider_id=provider["id"],
+            provider_key=str(provider["channel_key"]),
+            provider_label=str(provider["label"]),
+            model_key=str(provider["key"]),
+            model_label=str(provider["label"]),
+            question_plan_id=question["id"],
+            question_text_snapshot=str(question["label"]),
+            sample_key=f"provider:{provider['id']}:question:{question['id']}:repeat:{repeat_index}",
+            repeat_index=repeat_index,
+            repeat_count=payload.repeat_count,
+            observation_group_id=str(child_payload["observation_group_id"]),
+            status="pending",
+        )
+        db.add(task)
+        pending_tasks.append((child, child_payload, task))
+    db.flush()
+    for child, child_payload, task in pending_tasks:
+        child.payload_json = {**child_payload, "observation_task_id": task.id}
+        db.add(child)
+        child_job_ids.append(child.id)
     batch.payload_json = {**batch.payload_json, "child_job_ids": child_job_ids}
     db.commit()
     db.refresh(ledger_batch)
@@ -2140,33 +2186,50 @@ def _observation_task_status(status: str) -> str:
     return "success" if status in {"completed", "succeeded", "success"} else status
 
 
-def _official_api_batch_tasks(db: Session, batch: GeoObservationBatch) -> list[GeoObservationTask]:
-    return list(
-        db.scalars(
-            select(GeoObservationTask)
-            .where(
-                GeoObservationTask.workspace_id == batch.workspace_id,
-                GeoObservationTask.batch_id == batch.id,
-            )
-            .order_by(GeoObservationTask.id)
-        )
+def _observation_status_bucket():
+    return case(
+        (GeoObservationTask.status.in_(("completed", "succeeded", "success")), "success"),
+        (GeoObservationTask.status == "running", "running"),
+        (GeoObservationTask.status == "failed", "failed"),
+        else_="pending",
     )
+
+
+def _official_api_batch_counts(
+    db: Session, batch_ids: list[int]
+) -> dict[int, dict[str, int]]:
+    counts = {
+        batch_id: {"pending": 0, "running": 0, "success": 0, "failed": 0}
+        for batch_id in batch_ids
+    }
+    if not batch_ids:
+        return counts
+    bucket = _observation_status_bucket()
+    rows = db.execute(
+        select(
+            GeoObservationTask.batch_id,
+            bucket.label("status_bucket"),
+            func.count(GeoObservationTask.id),
+        )
+        .where(GeoObservationTask.batch_id.in_(batch_ids))
+        .group_by(GeoObservationTask.batch_id, bucket)
+    )
+    for batch_id, status, count in rows:
+        counts[int(batch_id)][str(status)] = int(count)
+    return counts
 
 
 def _official_api_batch_summary(
     db: Session,
     batch: GeoObservationBatch,
     *,
-    tasks: list[GeoObservationTask] | None = None,
+    counts: dict[str, int] | None = None,
+    receipt: QueueJob | None = None,
 ) -> dict:
-    task_rows = tasks if tasks is not None else _official_api_batch_tasks(db, batch)
-    normalized_statuses = [_observation_task_status(task.status) for task in task_rows]
-    counts = {
-        status: normalized_statuses.count(status)
-        for status in ("pending", "running", "success", "failed")
-    }
+    if counts is None:
+        counts = _official_api_batch_counts(db, [batch.id])[batch.id]
     settled = counts["success"] + counts["failed"]
-    total = len(task_rows) or int(batch.total_tasks or 0)
+    total = sum(counts.values()) or int(batch.total_tasks or 0)
     if total and settled >= total:
         status = (
             "success"
@@ -2183,7 +2246,8 @@ def _official_api_batch_summary(
         status = batch.status
     else:
         status = "pending"
-    receipt = db.get(QueueJob, batch.queue_job_id) if batch.queue_job_id else None
+    if receipt is None and batch.queue_job_id:
+        receipt = db.get(QueueJob, batch.queue_job_id)
     dispatch_enabled = bool(
         receipt is not None
         and dict(receipt.payload_json or {}).get("dispatch_enabled") is True
@@ -2221,56 +2285,60 @@ def _official_api_batch_read(
     task_page: int = 1,
     task_page_size: int = 125,
 ) -> dict:
-    task_rows = _official_api_batch_tasks(db, batch)
+    batch_counts = _official_api_batch_counts(db, [batch.id])[batch.id]
+    bucket = _observation_status_bucket()
 
-    def group_counts(matching: list[GeoObservationTask]) -> dict[str, int]:
-        statuses = [_observation_task_status(task.status) for task in matching]
-        return {item: statuses.count(item) for item in ("pending", "running", "success", "failed")}
-
-    provider_groups: list[dict] = []
-    provider_keys: list[tuple[int | None, str, str]] = []
-    for task in task_rows:
-        identity = (task.provider_id, task.model_key, task.model_label)
-        if identity not in provider_keys:
-            provider_keys.append(identity)
-    for index, (provider_id, model_key, model_label) in enumerate(provider_keys):
-        matching = [
-            task
-            for task in task_rows
-            if (task.provider_id, task.model_key, task.model_label)
-            == (provider_id, model_key, model_label)
-        ]
-        counts = group_counts(matching)
-        provider_groups.append(
-            {
-                "id": provider_id if provider_id is not None else -(index + 1),
-                "key": model_key,
-                "label": model_label,
-                "total": len(matching),
-                "pending": counts["pending"],
-                "running": counts["running"],
-                "succeeded": counts["success"],
-                "failed": counts["failed"],
-            }
+    def grouped_rows(*columns):
+        rows = db.execute(
+            select(*columns, bucket.label("status_bucket"), func.count(GeoObservationTask.id))
+            .where(GeoObservationTask.batch_id == batch.id)
+            .group_by(*columns, bucket)
+            .order_by(*columns)
         )
+        grouped: dict[tuple, dict[str, int]] = {}
+        for *identity, status, count in rows:
+            grouped.setdefault(tuple(identity), {"pending": 0, "running": 0, "success": 0, "failed": 0})[
+                str(status)
+            ] = int(count)
+        return grouped
 
-    question_groups: list[dict] = []
-    question_ids = list(dict.fromkeys(task.question_plan_id for task in task_rows))
-    for question_id in question_ids:
-        matching = [task for task in task_rows if task.question_plan_id == question_id]
-        counts = group_counts(matching)
-        question_groups.append(
-            {
-                "id": question_id,
-                "key": str(question_id),
-                "label": matching[0].question_text_snapshot,
-                "total": len(matching),
-                "pending": counts["pending"],
-                "running": counts["running"],
-                "succeeded": counts["success"],
-                "failed": counts["failed"],
-            }
+    provider_group_rows = grouped_rows(
+        GeoObservationTask.provider_id,
+        GeoObservationTask.model_key,
+        GeoObservationTask.model_label,
+    )
+    provider_groups = [
+        {
+            "id": provider_id if provider_id is not None else -(index + 1),
+            "key": model_key,
+            "label": model_label,
+            "total": sum(counts.values()),
+            "pending": counts["pending"],
+            "running": counts["running"],
+            "succeeded": counts["success"],
+            "failed": counts["failed"],
+        }
+        for index, ((provider_id, model_key, model_label), counts) in enumerate(
+            provider_group_rows.items()
         )
+    ]
+    question_group_rows = grouped_rows(
+        GeoObservationTask.question_plan_id,
+        GeoObservationTask.question_text_snapshot,
+    )
+    question_groups = [
+        {
+            "id": question_id,
+            "key": str(question_id),
+            "label": label,
+            "total": sum(counts.values()),
+            "pending": counts["pending"],
+            "running": counts["running"],
+            "succeeded": counts["success"],
+            "failed": counts["failed"],
+        }
+        for (question_id, label), counts in question_group_rows.items()
+    ]
 
     def duration_seconds(task: GeoObservationTask) -> int | None:
         if task.started_at is None:
@@ -2284,9 +2352,17 @@ def _official_api_batch_read(
         finished_at = _as_utc(endpoint)
         return max(0, round((finished_at - started_at).total_seconds()))
 
-    task_total = len(task_rows)
+    task_total = sum(batch_counts.values())
     task_start = (task_page - 1) * task_page_size
-    selected_tasks = task_rows[task_start : task_start + task_page_size]
+    selected_tasks = list(
+        db.scalars(
+            select(GeoObservationTask)
+            .where(GeoObservationTask.batch_id == batch.id)
+            .order_by(GeoObservationTask.id)
+            .offset(task_start)
+            .limit(task_page_size)
+        )
+    )
     tasks = []
     for task in selected_tasks:
         tasks.append(
@@ -2307,16 +2383,27 @@ def _official_api_batch_read(
             }
         )
 
-    evidence_ids = [task.evidence_id for task in task_rows if task.evidence_id is not None]
+    evidence_ids = list(
+        db.scalars(
+            select(GeoObservationTask.evidence_id)
+            .where(
+                GeoObservationTask.batch_id == batch.id,
+                GeoObservationTask.evidence_id.is_not(None),
+            )
+            .order_by(GeoObservationTask.evidence_id)
+        )
+    )
+    error_value = func.coalesce(GeoObservationTask.error_detail, GeoObservationTask.error_code)
     errors = list(
-        dict.fromkeys(
-            task.error_detail or task.error_code
-            for task in task_rows
-            if task.error_detail or task.error_code
+        db.scalars(
+            select(error_value)
+            .where(GeoObservationTask.batch_id == batch.id, error_value.is_not(None))
+            .distinct()
+            .limit(100)
         )
     )
     return {
-        **_official_api_batch_summary(db, batch, tasks=task_rows),
+        **_official_api_batch_summary(db, batch, counts=batch_counts),
         "provider_groups": provider_groups,
         "question_groups": question_groups,
         "evidence_ids": evidence_ids,
@@ -2354,8 +2441,22 @@ def list_provider_web_search_batches(
             .limit(page_size)
         )
     )
+    batch_counts = _official_api_batch_counts(db, [batch.id for batch in batches])
+    receipt_ids = [batch.queue_job_id for batch in batches if batch.queue_job_id is not None]
+    receipts = {
+        receipt.id: receipt
+        for receipt in db.scalars(select(QueueJob).where(QueueJob.id.in_(receipt_ids)))
+    }
     return {
-        "items": [_official_api_batch_summary(db, batch) for batch in batches],
+        "items": [
+            _official_api_batch_summary(
+                db,
+                batch,
+                counts=batch_counts[batch.id],
+                receipt=receipts.get(batch.queue_job_id),
+            )
+            for batch in batches
+        ],
         "pagination": {
             "page": page,
             "page_size": page_size,
@@ -2796,7 +2897,14 @@ def observe_provider_web_search(
         target_audience="企业采购决策者",
     )
     try:
-        answer = get_search_provider(provider).answer(prompt_text, company, project, [])
+        workspace_api_key = (
+            get_workspace_secret(db, workspace_id, DEEPSEEK_API_KEY)
+            if provider.provider_type == "deepseek_web_search"
+            else None
+        )
+        answer = get_search_provider(provider, api_key_override=workspace_api_key).answer(
+            prompt_text, company, project, []
+        )
         if answer.collection_method not in {"official_api_web_search", "aggregate_api_web_search"}:
             raise ValueError("Provider did not return eligible API web-search evidence")
         if not answer.search_verified or answer.search_event_count < 1:
@@ -7036,7 +7144,12 @@ def enqueue_content_generation(
     provider = db.get(LLMProvider, payload.provider_id)
     if provider is None:
         raise HTTPException(status_code=404, detail="LLM provider not found")
-    diagnostic = diagnose_provider(provider)
+    workspace_api_key = (
+        get_workspace_secret(db, workspace_id, DEEPSEEK_API_KEY)
+        if provider.provider_type == "deepseek_web_search"
+        else None
+    )
+    diagnostic = diagnose_provider(provider, api_key_override=workspace_api_key)
     if not diagnostic.get("auth_ready"):
         raise HTTPException(status_code=400, detail="请先配置并验证内容生成 Provider 的 API Key")
     existing = next(
@@ -7257,11 +7370,14 @@ def read_agent_runtimes(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    capacity = {
-        runtime_key: _agent_runtime_diagnostic(db, workspace_id, runtime_key)
-        for runtime_key in RUNTIME_KEYS
+    limit, active_runs = _agent_capacity(db, workspace_id)
+    shared = {
+        "active_run_count": len(active_runs),
+        "max_concurrent_runs": limit,
+        "capacity_available": len(active_runs) < limit,
+        "run_timeout_seconds": max(60, min(int(get_settings().agent_run_timeout_seconds), 3600)),
     }
-    return [capacity[runtime_key] for runtime_key in RUNTIME_KEYS]
+    return [{**diagnostic, **shared} for diagnostic in list_agent_runtimes()]
 
 
 @router.post(
@@ -8874,8 +8990,14 @@ def _create_action_retest_impl(
         question_plan_ids.sort()
     if not question_plan_ids:
         raise HTTPException(status_code=409, detail="行动未关联原始问题，不能创建同口径复测")
-    if len(question_plan_ids) > 5:
-        raise HTTPException(status_code=409, detail="单轮复测最多支持 5 个问题，请分批执行")
+    if len(question_plan_ids) > MAX_OFFICIAL_OBSERVATION_QUESTIONS:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"单轮复测最多支持 {MAX_OFFICIAL_OBSERVATION_QUESTIONS} 个问题，"
+                "请分批执行"
+            ),
+        )
     configuration = baseline_batch.configuration or {}
     selected_model_keys = list(
         dict.fromkeys(

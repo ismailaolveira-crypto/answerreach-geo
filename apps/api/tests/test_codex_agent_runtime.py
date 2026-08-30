@@ -266,6 +266,12 @@ def test_image_generation_requires_and_copies_a_real_artifact(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    home = tmp_path / "home"
+    skill_path = home / ".codex" / "skills" / ".system" / "imagegen" / "SKILL.md"
+    skill_path.parent.mkdir(parents=True)
+    skill_path.write_text("# test imagegen skill\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
     source = tmp_path / "sdk-output.png"
     source.write_bytes(b"\x89PNG\r\n\x1a\nreal-image-payload")
 

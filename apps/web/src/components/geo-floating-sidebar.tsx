@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type SVGProps } from "react";
 import { preserveGeoScopeInHref } from "@/lib/geo-global-scope";
 
 type IconName =
+	| "agent"
 	| "home"
 	| "insights"
 	| "sources"
@@ -37,6 +38,7 @@ const INSIGHT_LINKS: SidebarLink[] = [
 ];
 
 const PRIMARY_LINKS: SidebarLink[] = [
+	{ key: "agent", label: "Agent 工作台", icon: "agent", href: (id) => id ? `/geo/${id}/agent` : "/" },
 	{ key: "dashboard", label: "经营驾驶舱", icon: "home", href: (id) => id ? `/geo/${id}` : "/" },
 	{ key: "actions", label: "优化行动", icon: "actions", href: (id) => id ? `/geo/${id}/actions` : "/" },
 	{ key: "collaboration", label: "协作", icon: "collaboration", href: (id) => id ? `/geo/${id}/collaboration` : "/" },
@@ -52,7 +54,7 @@ const MANAGEMENT_LINKS: SidebarLink[] = [
 ];
 
 type ActiveNavigation = {
-	section: "dashboard" | "insights" | "actions" | "collaboration" | "content" | "results" | "management";
+	section: "agent" | "dashboard" | "insights" | "actions" | "collaboration" | "content" | "results" | "management";
 	child: string | null;
 };
 
@@ -65,6 +67,7 @@ export function resolveGeoNavigation(pathname: string): ActiveNavigation {
 	if (pathname.includes("/sources")) return { section: "insights", child: "sources" };
 	if (pathname.includes("/competitors")) return { section: "insights", child: "competitors" };
 	if (pathname.includes("/questions")) return { section: "insights", child: "questions" };
+	if (pathname.includes("/actions/agent") || /^\/geo\/[^/]+\/agent(?:\/|$)/.test(pathname)) return { section: "agent", child: null };
 	if (pathname.includes("/actions")) return { section: "actions", child: null };
 	if (pathname.includes("/collaboration")) return { section: "collaboration", child: null };
 	if (pathname.includes("/content")) return { section: "content", child: null };
@@ -75,6 +78,7 @@ export function resolveGeoNavigation(pathname: string): ActiveNavigation {
 function NavIcon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {
 	const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.85, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
 	return <svg viewBox="0 0 24 24" aria-hidden="true" {...props}>
+		{name === "agent" && <><path {...common} d="M12 3.5c.7 4.1 2.4 5.8 6.5 6.5-4.1.7-5.8 2.4-6.5 6.5-.7-4.1-2.4-5.8-6.5-6.5 4.1-.7 5.8-2.4 6.5-6.5Z" /><path {...common} d="M18.2 15.8c.25 1.45.85 2.05 2.3 2.3-1.45.25-2.05.85-2.3 2.3-.25-1.45-.85-2.05-2.3-2.3 1.45-.25 2.05-.85 2.3-2.3Z" /></>}
 		{name === "home" && <><path {...common} d="m4 11.2 8-6.5 8 6.5v8.1a1.7 1.7 0 0 1-1.7 1.7H5.7A1.7 1.7 0 0 1 4 19.3z" /><path {...common} d="M9.2 21v-5.6h5.6V21" /></>}
 		{name === "insights" && <><circle {...common} cx="10.8" cy="10.8" r="6.3" /><path {...common} d="m15.5 15.5 4.2 4.2" /></>}
 		{name === "sources" && <><circle {...common} cx="12" cy="12" r="4.4" /><path {...common} d="M12 3.5v2M12 18.5v2M20.5 12h-2M5.5 12h-2M18 6l-1.4 1.4M7.4 16.6 6 18M18 18l-1.4-1.4M7.4 7.4 6 6" /></>}
@@ -166,22 +170,23 @@ export function GeoFloatingSidebar({ workspaces = [] }: { workspaces?: Array<{ i
 
 	return <>
 		{expanded ? <button type="button" className="geo-floating-mobile-scrim" onClick={() => setSidebarExpanded(false)} aria-label="关闭导航面板" tabIndex={-1} /> : null}
-		<aside id="geo-primary-navigation" className={`geo-floating-sidebar${expanded ? " is-expanded" : ""}`} aria-label="春秋元泉 GEO 功能导航">
+		<aside id="geo-primary-navigation" className={`geo-floating-sidebar${expanded ? " is-expanded" : ""}`} aria-label="入答 AnswerReach 功能导航">
 			<div className="geo-floating-head">
 				{expanded ? <>
 					<Link className="geo-floating-brand" href={scopedHref(workspaceHome)} aria-label={workspaceId ? "返回经营驾驶舱" : "返回工作区"}>
-						<span className="geo-floating-mark">◇</span><b>春秋元泉 GEO</b>
+						<img className="geo-floating-mark" alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 <small>AnswerReach</small></b>
 					</Link>
 					<button ref={closeButtonRef} type="button" className="geo-floating-toggle" onClick={() => setSidebarExpanded(false)} aria-expanded="true" aria-controls="geo-primary-navigation" aria-label="收起功能栏">
 						<span className="geo-floating-toggle-desktop"><NavIcon name="chevron" /></span><span className="geo-floating-toggle-mobile"><NavIcon name="close" /></span>
 					</button>
 				</> : <button type="button" className="geo-floating-collapsed-toggle" onClick={() => setSidebarExpanded(true)} aria-expanded="false" aria-controls="geo-primary-navigation" aria-label="展开功能栏">
-					<span className="geo-floating-mark">◇</span><span className="geo-floating-collapsed-chevron"><NavIcon name="chevron" /></span>
+					<img className="geo-floating-mark" alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><span className="geo-floating-collapsed-chevron"><NavIcon name="chevron" /></span>
 				</button>}
 			</div>
 			{expanded && workspaces.length ? <label className="geo-floating-workspace-switcher"><span>当前工作区</span><select value={workspaceId || String(workspaces[0].id)} onChange={(event) => router.push(`/geo/${event.target.value}` as Route)}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}{(workspaceNameCounts.get(workspace.name) ?? 0) > 1 ? ` · #${workspace.id}` : ""}</option>)}</select></label> : null}
 			<nav className="geo-floating-nav" aria-label="主导航">
 				{renderPrimaryLink(PRIMARY_LINKS[0])}
+				{renderPrimaryLink(PRIMARY_LINKS[1])}
 				<div className={`geo-floating-nav-group${active.section === "insights" ? " is-active-group" : ""}`}>
 					<button type="button" className={`geo-floating-parent${active.section === "insights" ? " is-active" : ""}`} onClick={() => toggleGroup("insights")} aria-expanded={insightsOpen} aria-controls="geo-insight-navigation" title={!expanded ? "洞察" : undefined}>
 						<span className="geo-floating-icon"><NavIcon name="insights" /></span><span className="geo-floating-label">洞察</span><span className={`geo-floating-group-chevron${insightsOpen ? " is-open" : ""}`}><NavIcon name="chevron" /></span>
@@ -198,7 +203,7 @@ export function GeoFloatingSidebar({ workspaces = [] }: { workspaces?: Array<{ i
 						})}
 					</div> : null}
 				</div>
-				{PRIMARY_LINKS.slice(1).map(renderPrimaryLink)}
+				{PRIMARY_LINKS.slice(2).map(renderPrimaryLink)}
 				<div className={`geo-floating-nav-group${active.section === "management" ? " is-active-group" : ""}`}>
 					<button type="button" className={`geo-floating-parent${active.section === "management" ? " is-active" : ""}`} onClick={() => toggleGroup("management")} aria-expanded={managementOpen} aria-controls="geo-management-navigation" title={!expanded ? "管理" : undefined}>
 						<span className="geo-floating-icon"><NavIcon name="settings" /></span><span className="geo-floating-label">管理</span><span className={`geo-floating-group-chevron${managementOpen ? " is-open" : ""}`}><NavIcon name="chevron" /></span>

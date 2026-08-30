@@ -1,120 +1,73 @@
-# Development Guide
+# 开发者指南
 
-## Runtime Shape
+## 一句话理解
 
-- Backend: FastAPI + SQLAlchemy, default local database `apps/api/geo_platform.db`.
-- Frontend: Next.js app in `apps/web`.
-- Local API: `http://127.0.0.1:8000`.
-- Local Web: `http://127.0.0.1:39003`.
+春秋元泉 GEO 是一个“用真实模型回答发现问题→用证据生成行动→人工审核和发布→同口径复测”的工作台。它不是聊天软件，也不是自动发布机器。
 
-PostgreSQL/Redis compose files remain in `infra/`, but the current MVP acceptance flow uses the local SQLite database.
+```mermaid
+flowchart LR
+    Web[Next.js Web] -->|HttpOnly 会话 / BFF| API[FastAPI API]
+    API --> DB[(SQLite 或 PostgreSQL)]
+    Worker[Queue Worker] --> DB
+    Worker --> Provider[官方模型 Provider]
+    API --> Agent[Codex / Claude / Hermes / OpenClaw]
+    Web --> Extension[GEO 文章助手]
+    Extension --> Drafts[外部平台草稿箱]
+    API --> Office[企业微信 / 飞书 / 钉钉]
+```
 
-## Start Locally
+## 运行边界
 
-From the repository root, start the API:
+- Web 只保存 HttpOnly 会话 Cookie，通过 BFF 转发 API；浏览器拿不到内部代理密钥。
+- API 负责权限、工作流、审计和真实状态；前端本地状态不能把任务伪装成已完成。
+- Worker 只领取数据库中可执行的队列任务。开发验证默认不创建付费模型调用。
+- 文章助手只写草稿。每次外部写入必须在扩展弹窗中人工核对平台、账号和标题；绝不点击最终发布。
+- 企业微信、飞书、钉钉连接成功只说明官方接口接受了请求，不代表成员已读。
+
+## 代码地图
+
+| 位置 | 责任 | 修改前要注意 |
+|---|---|---|
+| `apps/web` | Next.js 页面、BFF 和会话 | 不在客户端伪造完成状态；写请求必须同源 |
+| `apps/api/app/api` | 传统项目、内容、交付等 API | 所有项目路由都要做企业隔离 |
+| `apps/api/app/v1` | GEO 工作区、观测、行动、协作与 Agent | 所有工作区路由都要做成员权限 |
+| `apps/api/app/services` | Provider、Agent、安全和外部集成 | 子进程不继承整个 API 环境；路径由部署者决定 |
+| `apps/api/migrations` | Alembic 前向迁移 | 不删库、不自动重建；先在隔离 SQLite/PostgreSQL 测试 |
+| `apps/geo-article-assistant-extension` | 登录检测和草稿写入 | 修改后必须重新打包、工件审计和 smoke |
+| `infra` / `scripts` | 个人、局域网、云端部署与备份 | 镜像必须锁定 digest；备份只留认证加密密文 |
+
+## 本地开发
+
+在仓库根目录分别运行：
 
 ```bash
 pnpm run dev:api
-```
-
-Start the web app in another terminal:
-
-```bash
 pnpm run dev:web
 ```
 
-Open:
+- Web：`http://127.0.0.1:39003`
+- API：`http://127.0.0.1:8000`
+- 真实数据库：`apps/api/geo_platform.db`
 
-```text
-http://127.0.0.1:39003
-```
+不要复制、删除、初始化或提交真实数据库。修改表结构时：新建迁移→隔离 SQLite 测试→隔离 PostgreSQL 测试→为真库加密备份→`alembic upgrade head`→完整性审计。
 
-If the Codex desktop approval reviewer is misconfigured, privileged port-start commands may be blocked. In that case, use the no-port verification suite below until the approval configuration is fixed.
-
-## Verify
-
-Run the whole local gate:
-
-```bash
-pnpm run verify
-```
-
-Or run individual gates:
+## 必跑验证
 
 ```bash
 pnpm run check:api
+cd apps/api && PYTHONPATH=. uv run pytest -q
+cd ../.. && pnpm run build:web
 pnpm run check:web
-pnpm run build:web
-pnpm run verify:local
+python3 scripts/acceptance_architecture_audit.py
+python3 scripts/acceptance_privacy_audit.py
+python3 scripts/acceptance_db_audit.py
+python3 scripts/acceptance_extension_artifact.py
+node apps/geo-article-assistant-extension/tests/smoke.mjs
+git diff --check
 ```
 
-`verify:local` runs the FastAPI TestClient suite without binding local ports. It verifies the current MVP chain:
+`build:web` 和 `check:web` 必须串行，否则可能争抢 `.next/types`。最后还要用 EgoLite 检查受影响页面、登录态、加载、保存回读和错误提示。
 
-- project/MVP status
-- search crawl and schedule queue
-- one-click diagnostic report
-- maturity report evidence
-- real-provider preflight safety
-- report action goals
-- article drafting and review context
-- content delivery loop
-- placement impact goals
-- public delivery package
-- provider collection summaries
+## 当前维护债务
 
-## Real Provider Notes
-
-Provider keys can be stored in Provider `auth_config` or environment variables:
-
-```text
-OPENAI_API_KEY=
-KIMI_API_KEY=
-ARK_API_KEY=
-QWEN_API_KEY=
-```
-
-Use Provider admin pages to test real channels before using them for collection. Non-Mock providers are blocked by preflight if they are missing key/base URL/model config or have no successful latest test run.
-
-For low-cost smoke validation, prefer:
-
-```bash
-UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_real_provider_smoke.py --project-id 9 --provider-ids 9,12 --question-limit 1 --keyword-limit 0 --dry-run
-```
-
-Remove `--dry-run` only when network access and API-token consumption are intended.
-
-## Data And Handoff Safety
-
-Do not share this live DB:
-
-```text
-apps/api/geo_platform.db
-```
-
-It may contain real API keys.
-
-Use the sanitized database and handoff package instead:
-
-```text
-outputs/geo_platform.sanitized.db
-outputs/geo-platform-handoff-2026-07-06.tar.gz
-```
-
-Before refreshing the handoff package, sanitize the copied DB:
-
-```bash
-cp apps/api/geo_platform.db outputs/geo_platform.sanitized.db
-sqlite3 outputs/geo_platform.sanitized.db "UPDATE llm_providers SET auth_config = json_remove(json_set(COALESCE(auth_config, '{}'), '$.api_key_configured', 1, '$.api_key_redacted', 1), '$.api_key') WHERE json_extract(COALESCE(auth_config, '{}'), '$.api_key') IS NOT NULL; VACUUM; SELECT COUNT(*) FROM llm_providers WHERE json_extract(COALESCE(auth_config, '{}'), '$.api_key') IS NOT NULL;"
-```
-
-The final count must be `0`.
-
-## Useful Pages
-
-- `/demo`: demo overview and real-provider evidence.
-- `/projects/9`: current demo project.
-- `/projects/9/dashboard`: delivery dashboard.
-- `/admin/providers`: Provider setup and testing.
-- `/admin/queue`: crawl queue operations.
-- `/admin/usage`: usage accounting.
-- `/reviews`: review queue.
+产品主链已可运行，但代码中仍有几个超大聚合文件，特别是 `apps/api/app/v1/routes.py`、`apps/web/src/lib/cleanroom-v1-api.ts` 和部分项目详情页。后续功能应按“观测 / 行动 / 内容 / 协作 / 运营”拆分，不再向大文件继续堆入新业务。拆分时先保持路由、响应和数据不变，再做界面优化。

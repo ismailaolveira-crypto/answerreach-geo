@@ -7,10 +7,12 @@ CONFIG_ROOT="${XDG_CONFIG_HOME:-${HOME}/.config}/chunqiu-yuanquan-geo"
 DATA_ROOT="${XDG_DATA_HOME:-${HOME}/.local/share}/chunqiu-yuanquan-geo"
 CONFIG_FILE="${CONFIG_ROOT}/.env.personal"
 BACKUP_ROOT="${DATA_ROOT}/backups"
+BACKUP_KEY_FILE="${CONFIG_ROOT}/backup.key"
 COMPOSE_FILE="${ROOT_DIR}/infra/docker-compose.personal.yml"
 DATA_VOLUME="${GEO_DATA_VOLUME_NAME:-chunqiu_yuanquan_geo_personal_data}"
 ARTIFACT_VOLUME="${GEO_ARTIFACT_VOLUME_NAME:-chunqiu_yuanquan_geo_personal_artifacts}"
 ACTION="${1:-start}"
+REQUESTED_BACKUP="${2:-}"
 
 compose() {
   docker compose --env-file "$CONFIG_FILE" -f "$COMPOSE_FILE" "$@"
@@ -76,19 +78,23 @@ generate_config() {
   done
   port_is_busy "$port" && fail "3000-3010 端口均已被占用，本程序不会结束其他应用。"
 
-  local secret worker_instance_id
+  local secret proxy_secret worker_instance_id
   secret="$(random_hex 48)"
+  proxy_secret="$(random_hex 48)"
   worker_instance_id="$(random_hex 16)"
-  [[ ${#secret} -ge 64 ]] || fail "无法生成安全的本机密钥。"
+  [[ ${#secret} -ge 64 && ${#proxy_secret} -ge 64 ]] || fail "无法生成安全的本机密钥。"
 
   umask 077
-  printf 'GEO_AUTH_SECRET=%s\nGEO_HTTP_PORT=%s\nGEO_WORKER_CONCURRENCY=8\nGEO_WORKER_INSTANCE_ID=%s\n' \
-    "$secret" "$port" "$worker_instance_id" >"$CONFIG_FILE"
+  printf 'GEO_AUTH_SECRET=%s\nGEO_INTERNAL_PROXY_SECRET=%s\nGEO_HTTP_PORT=%s\nGEO_WORKER_CONCURRENCY=8\nGEO_WORKER_INSTANCE_ID=%s\n' \
+    "$secret" "$proxy_secret" "$port" "$worker_instance_id" >"$CONFIG_FILE"
   chmod 600 "$CONFIG_FILE" 2>/dev/null || true
   printf '已创建本机私密配置（端口 %s，Worker 并发 8）。\n' "$port"
 }
 
 ensure_config_keys() {
+  if ! grep -q '^GEO_INTERNAL_PROXY_SECRET=' "$CONFIG_FILE"; then
+    printf 'GEO_INTERNAL_PROXY_SECRET=%s\n' "$(random_hex 48)" >>"$CONFIG_FILE"
+  fi
   if ! grep -q '^GEO_WORKER_CONCURRENCY=' "$CONFIG_FILE"; then
     printf 'GEO_WORKER_CONCURRENCY=8\n' >>"$CONFIG_FILE"
   fi
@@ -96,6 +102,40 @@ ensure_config_keys() {
     printf 'GEO_WORKER_INSTANCE_ID=%s\n' "$(random_hex 16)" >>"$CONFIG_FILE"
   fi
   chmod 600 "$CONFIG_FILE" 2>/dev/null || true
+}
+
+ensure_backup_key() {
+  if [[ ! -f "$BACKUP_KEY_FILE" ]]; then
+    umask 077
+    random_hex 32 >"$BACKUP_KEY_FILE"
+  fi
+  [[ $(wc -c <"$BACKUP_KEY_FILE" | tr -d ' ') -ge 64 ]] \
+    || fail "备份密钥无效。请从安全副本恢复 ${BACKUP_KEY_FILE}。"
+  chmod 600 "$BACKUP_KEY_FILE" 2>/dev/null || true
+}
+
+secure_backup() {
+  local mode="$1" input="$2" output="${3:-}"
+  local args=(run --rm --no-deps -T
+    -v "${BACKUP_KEY_FILE}:/run/secrets/geo-backup-key:ro"
+    -v "$(dirname "$input"):/secure-backup"
+    api uv run --no-sync python scripts/secure_backup_bundle.py "$mode"
+    --key-file /run/secrets/geo-backup-key
+    --input "/secure-backup/$(basename "$input")")
+  if [[ -n "$output" ]]; then
+    args+=(--output "/secure-backup/$(basename "$output")")
+  fi
+  compose "${args[@]}"
+}
+
+verify_encrypted_backup() {
+  local requested="$1" file
+  [[ -n "$requested" ]] || fail "请提供 .gcm 备份文件路径。"
+  [[ -f "$requested" ]] || fail "备份文件不存在。"
+  file="$(cd "$(dirname "$requested")" && pwd -P)/$(basename "$requested")"
+  ensure_backup_key
+  secure_backup verify "$file"
+  printf 'OK  备份已通过 AES-256-GCM 完整性和解密验证。\n'
 }
 
 read_setting() {
@@ -182,7 +222,8 @@ backup_data() {
   [[ -f "$CONFIG_FILE" ]] || fail "尚未安装，无需备份。"
   volume_exists "$DATA_VOLUME" || fail "未找到个人数据卷，备份已停止。"
   volume_exists "$ARTIFACT_VOLUME" || fail "未找到证据卷，备份已停止。"
-  local stamp backup_dir running_services
+  local stamp backup_dir running_services bundle encrypted
+  ensure_backup_key
   stamp="$(date +%Y%m%d-%H%M%S)"
   backup_dir="${BACKUP_ROOT}/${stamp}"
   mkdir -p "$backup_dir"
@@ -197,36 +238,44 @@ backup_data() {
   if ! docker run --rm \
     --mount type=volume,src="$DATA_VOLUME",dst=/source,readonly \
     --mount type=bind,src="$backup_dir",dst=/backup \
-    alpine:3.21 sh -c 'test -f /source/geo_platform.db && cd /source && tar -czf /backup/data.tar.gz .'; then
+    alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d sh -c 'test -f /source/geo_platform.db && cd /source && tar -czf /backup/data.tar.gz .'; then
     restore_running_services "$running_services"
     fail "数据库备份失败，原服务状态已尝试恢复。"
   fi
   if ! docker run --rm \
     --mount type=volume,src="$ARTIFACT_VOLUME",dst=/source,readonly \
     --mount type=bind,src="$backup_dir",dst=/backup \
-    alpine:3.21 sh -c 'cd /source && tar -czf /backup/artifacts.tar.gz .'; then
+    alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d sh -c 'cd /source && tar -czf /backup/artifacts.tar.gz .'; then
     restore_running_services "$running_services"
     fail "证据备份失败，原服务状态已尝试恢复。"
   fi
   if ! docker run --rm --mount type=bind,src="$backup_dir",dst=/backup,readonly \
-    alpine:3.21 sh -c 'tar -tzf /backup/data.tar.gz >/dev/null && tar -tzf /backup/artifacts.tar.gz >/dev/null'; then
+    alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d sh -c 'tar -tzf /backup/data.tar.gz >/dev/null && tar -tzf /backup/artifacts.tar.gz >/dev/null'; then
     restore_running_services "$running_services"
     fail "备份完整性校验失败，不会继续升级。"
   fi
   if command -v shasum >/dev/null 2>&1; then
-    (cd "$backup_dir" && shasum -a 256 data.tar.gz artifacts.tar.gz >SHA256SUMS)
+    (cd "$backup_dir" && shasum -a 256 data.tar.gz artifacts.tar.gz env.personal >SHA256SUMS)
   else
-    (cd "$backup_dir" && sha256sum data.tar.gz artifacts.tar.gz >SHA256SUMS)
+    (cd "$backup_dir" && sha256sum data.tar.gz artifacts.tar.gz env.personal >SHA256SUMS)
   fi
   printf 'complete\n' >"${backup_dir}/BACKUP_COMPLETE"
+  bundle="${backup_dir}/geo-backup.tar.gz"
+  encrypted="${backup_dir}/geo-backup-${stamp}.gcm"
+  tar -czf "$bundle" -C "$backup_dir" data.tar.gz artifacts.tar.gz env.personal SHA256SUMS BACKUP_COMPLETE
+  secure_backup encrypt "$bundle" "$encrypted"
+  secure_backup verify "$encrypted"
+  rm -f "${backup_dir}/data.tar.gz" "${backup_dir}/artifacts.tar.gz" \
+    "${backup_dir}/env.personal" "${backup_dir}/SHA256SUMS" \
+    "${backup_dir}/BACKUP_COMPLETE" "$bundle"
   if [[ "$restore_after" == "true" ]]; then
     restore_running_services "$running_services"
     if all_core_services_were_running "$running_services"; then
       wait_until_ready "$(app_url)"
     fi
   fi
-  printf '备份已保存到：%s\n' "$backup_dir"
-  printf '备份包含本机密钥和可能的 Provider 配置，请勿上传或转发。\n'
+  printf '加密备份已保存到：%s\n' "$encrypted"
+  printf '请另行安全保存备份密钥 %s；丢失后无法恢复。\n' "$BACKUP_KEY_FILE"
 }
 
 cd "$ROOT_DIR"
@@ -242,8 +291,9 @@ case "$ACTION" in
     url="$(app_url)"
     if volume_exists "$DATA_VOLUME" \
       && docker run --rm --mount type=volume,src="$DATA_VOLUME",dst=/source,readonly \
-        alpine:3.21 test -f /source/geo_platform.db; then
+        alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d test -f /source/geo_platform.db; then
       printf '检测到已有数据，启动前先创建一致性备份。\n'
+      compose build api
       backup_data false
     fi
     printf '正在构建并启动春秋元泉 GEO。首次启动需要下载镜像，可能需要数分钟。\n'
@@ -276,7 +326,12 @@ case "$ACTION" in
     require_docker
     backup_data
     ;;
+  verify-backup)
+    require_docker
+    [[ -f "$CONFIG_FILE" ]] || fail "尚未安装。"
+    verify_encrypted_backup "$REQUESTED_BACKUP"
+    ;;
   *)
-    fail "未知操作：${ACTION}。可用操作：start | stop | status | logs | backup"
+    fail "未知操作：${ACTION}。可用操作：start | stop | status | logs | backup | verify-backup"
     ;;
 esac

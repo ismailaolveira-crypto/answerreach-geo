@@ -9,6 +9,10 @@ import { BrandLogo } from "@/components/brand-logo";
 import type { CleanroomEvidence, CleanroomQuestion, QueueWorkerStatus } from "@/lib/cleanroom-v1-api";
 import styles from "./sampling-batch-panel.module.css";
 
+const MAX_MODELS = 5;
+const MAX_QUESTIONS = 10;
+const MAX_REPEATS = 100;
+
 export type ObservationProvider = {
   key: string;
   label: string;
@@ -57,7 +61,7 @@ export default function SamplingBatchPanel({
       "企业选择 AI 安全治理平台要看哪些能力？",
     ];
     for (const text of fallbacks) {
-      if (items.length >= 5) break;
+      if (items.length >= MAX_QUESTIONS) break;
       if (!items.some((item) => item.text === text)) {
         items.push({ value: `suggested:${items.length + 1}`, text, editable: false });
       }
@@ -67,20 +71,20 @@ export default function SamplingBatchPanel({
   const readyProviders = providers.filter((item) => item.status === "ready" && item.providerId);
   const [selectedProviderIds, setSelectedProviderIds] = useState<number[]>(() => [
     ...new Set((initialSelection?.providerIds ?? []).filter((id) => id > 0)),
-  ].slice(0, 5));
+  ].slice(0, MAX_MODELS));
   const [selectedQuestionValues, setSelectedQuestionValues] = useState<string[]>(() => [
     ...new Set((initialSelection?.questions ?? []).map((question) => String(question.id))),
-  ].slice(0, 5));
+  ].slice(0, MAX_QUESTIONS));
   const [customQuestion, setCustomQuestion] = useState("");
   const [customQuestionOpen, setCustomQuestionOpen] = useState(false);
-  const [repeatCount, setRepeatCount] = useState(() => Math.min(5, Math.max(1, initialSelection?.repeatCount ?? 5)));
+  const [repeatCount, setRepeatCount] = useState(() => Math.min(MAX_REPEATS, Math.max(1, initialSelection?.repeatCount ?? 5)));
   const [editingQuestion, setEditingQuestion] = useState<QuestionOption | null>(null);
   const [editingText, setEditingText] = useState("");
   const [editError, setEditError] = useState("");
   const selectedQuestions = recommendedQuestions.filter((item) => selectedQuestionValues.includes(item.value));
   const customCandidate = customQuestion.trim().length >= 4;
-  const customIncluded = customCandidate && selectedQuestions.length < 5;
-  const questionCount = Math.min(5, selectedQuestions.length + (customIncluded ? 1 : 0));
+  const customIncluded = customCandidate && selectedQuestions.length < MAX_QUESTIONS;
+  const questionCount = Math.min(MAX_QUESTIONS, selectedQuestions.length + (customIncluded ? 1 : 0));
   const totalTasks = selectedProviderIds.length * questionCount * repeatCount;
   const sourceCount = lastEvidence?.source_items.length ?? 0;
   const selectedProviders = providers.filter((item) => item.providerId && selectedProviderIds.includes(item.providerId));
@@ -95,7 +99,7 @@ export default function SamplingBatchPanel({
     if (!provider.providerId) return;
     setSelectedProviderIds((current) => {
       if (current.includes(provider.providerId!)) return current.filter((id) => id !== provider.providerId);
-      if (provider.status !== "ready" || current.length >= 5) return current;
+      if (provider.status !== "ready" || current.length >= MAX_MODELS) return current;
       return [...current, provider.providerId!];
     });
   }
@@ -103,7 +107,7 @@ export default function SamplingBatchPanel({
   function toggleQuestion(value: string) {
     setSelectedQuestionValues((current) => current.includes(value)
       ? current.filter((item) => item !== value)
-      : current.length + (customIncluded ? 1 : 0) < 5 ? [...current, value] : current);
+      : current.length + (customIncluded ? 1 : 0) < MAX_QUESTIONS ? [...current, value] : current);
   }
 
   function saveQuestion() {
@@ -145,7 +149,7 @@ export default function SamplingBatchPanel({
             <header className={styles.stepHeading}>
               <span className={styles.stepNumber}>1</span>
               <h3>选择观测模型</h3>
-              <small>已选 {selectedProviderIds.length} / 5</small>
+              <small>已选 {selectedProviderIds.length} / {MAX_MODELS}</small>
             </header>
             <div className={styles.modelSelection}>
               {selectedProviders.map((provider) => <div className={styles.modelChip} key={provider.key}>
@@ -156,7 +160,7 @@ export default function SamplingBatchPanel({
               <details className={styles.picker}>
                 <summary><span aria-hidden="true">＋</span> 选择模型</summary>
                 <div className={styles.pickerMenu}>
-                  <header><span>{readyProviders.length} 个模型当前可用</span><button type="button" onClick={() => setSelectedProviderIds(readyProviders.slice(0, 5).map((item) => item.providerId!))}>全选可用</button></header>
+                  <header><span>{readyProviders.length} 个模型当前可用</span><button type="button" onClick={() => setSelectedProviderIds(readyProviders.slice(0, MAX_MODELS).map((item) => item.providerId!))}>全选可用</button></header>
                   {providers.map((provider) => {
                     const selected = Boolean(provider.providerId && selectedProviderIds.includes(provider.providerId));
                     const selectable = provider.status === "ready" && Boolean(provider.providerId);
@@ -169,14 +173,14 @@ export default function SamplingBatchPanel({
                 </div>
               </details>
             </div>
-            <p className={styles.helpText}>最多可选 5 个模型，任务会对每个已选模型分别观测。</p>
+            <p className={styles.helpText}>最多可选 {MAX_MODELS} 个模型，任务会对每个已选模型分别观测。</p>
           </section>
 
           <section className={styles.step}>
             <header className={styles.stepHeading}>
               <span className={styles.stepNumber}>2</span>
               <h3>选择观测问题</h3>
-              <small>已选 {questionCount} / 5</small>
+              <small>已选 {questionCount} / {MAX_QUESTIONS}</small>
             </header>
             <div className={styles.selectedQuestions}>
               {selectedQuestions.length ? selectedQuestions.map((question) => <div className={styles.selectedQuestion} key={question.value}>
@@ -189,14 +193,14 @@ export default function SamplingBatchPanel({
               <label htmlFor="observation-custom-question">临时问题 <small>可选</small></label>
               <div><input id="observation-custom-question" name="custom_question" value={customQuestion} placeholder="输入本次临时观测的问题" onChange={(event) => setCustomQuestion(event.target.value)} autoFocus /><button type="button" aria-label="移除临时问题" onClick={() => { setCustomQuestion(""); setCustomQuestionOpen(false); }}>×</button></div>
               {customQuestion && !customCandidate ? <p>临时问题至少输入 4 个字</p> : null}
-              {customCandidate && !customIncluded ? <p>本批次最多 5 个问题，请先取消一个常用问题</p> : null}
+              {customCandidate && !customIncluded ? <p>本批次最多 {MAX_QUESTIONS} 个问题，请先取消一个常用问题</p> : null}
             </div> : <input type="hidden" name="custom_question" value="" />}
 
             <div className={styles.questionActions}>
               <details className={`${styles.picker} ${styles.questionPicker}`}>
                 <summary><span aria-hidden="true">＋</span> 选择常用问题</summary>
                 <div className={`${styles.pickerMenu} ${styles.questionMenu}`}>
-                  <header><span>常用问题库</span><button type="button" onClick={() => setSelectedQuestionValues(recommendedQuestions.slice(0, customIncluded ? 4 : 5).map((item) => item.value))}>全选</button></header>
+                  <header><span>常用问题库</span><button type="button" onClick={() => setSelectedQuestionValues(recommendedQuestions.slice(0, customIncluded ? MAX_QUESTIONS - 1 : MAX_QUESTIONS).map((item) => item.value))}>全选</button></header>
                   {recommendedQuestions.map((question) => {
                     const selected = selectedQuestionValues.includes(question.value);
                     return <div className={`${styles.questionOption} ${selected ? styles.selectedOption : ""}`} key={question.value}>
@@ -218,8 +222,8 @@ export default function SamplingBatchPanel({
             <div className={styles.repeatRow}>
               <div className={styles.stepper} aria-label="每题运行次数">
                 <button type="button" aria-label="减少运行次数" onClick={() => setRepeatCount((value) => Math.max(1, value - 1))} disabled={repeatCount === 1}>−</button>
-                <b key={repeatCount}>{repeatCount} <small>次</small></b>
-                <button type="button" aria-label="增加运行次数" onClick={() => setRepeatCount((value) => Math.min(5, value + 1))} disabled={repeatCount === 5}>＋</button>
+                <label><input aria-label="每题运行次数" type="number" min={1} max={MAX_REPEATS} value={repeatCount} onChange={(event) => setRepeatCount(Math.min(MAX_REPEATS, Math.max(1, Number(event.target.value) || 1)))} /><small>次</small></label>
+                <button type="button" aria-label="增加运行次数" onClick={() => setRepeatCount((value) => Math.min(MAX_REPEATS, value + 1))} disabled={repeatCount === MAX_REPEATS}>＋</button>
               </div>
               <p>每个模型对每个问题独立运行指定次数。</p>
             </div>
@@ -242,7 +246,7 @@ export default function SamplingBatchPanel({
           <SubmitButton className={styles.submit} pendingText="正在提交真实任务…" disabled={!selectedProviderIds.length || !questionCount || !workerStatus?.online}>
             {!workerStatus?.online ? "等待采集服务上线" : totalTasks ? `提交 ${totalTasks} 条真实观测` : "请先选择模型和问题"}
           </SubmitButton>
-          <p className={styles.backgroundNote}>{workerStatus?.online ? "提交后先进入队列；采集服务领取后才显示运行中" : "任务不会丢失或假装运行；请先恢复当前仓库采集服务"}</p>
+          <p className={styles.backgroundNote}>{workerStatus?.online ? totalTasks > 125 ? `大批量任务会按当前 ${workerStatus.concurrency} 条并发分批执行，不会同时请求 ${totalTasks} 次` : "提交后先进入队列；采集服务领取后才显示运行中" : "任务不会丢失或假装运行；请先恢复当前仓库采集服务"}</p>
           <div className={styles.lastEvidence} data-has-evidence={Boolean(lastEvidence)}><span aria-hidden="true">{lastEvidence ? "✓" : "·"}</span><p>{lastEvidence ? `上次观测成功 · ${lastEvidence.model_label} · ${sourceCount} 个来源` : "等待第一条通过联网门禁的真实证据"}</p></div>
         </aside>
       </div>

@@ -1,0 +1,156 @@
+name: ${GEO_COMPOSE_PROJECT_NAME:-chunqiu-yuanquan-geo-cloud}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  postgres:
+    image: postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+    environment:
+      POSTGRES_DB: geo_platform
+      POSTGRES_USER: geo_platform
+      POSTGRES_PASSWORD: ${GEO_POSTGRES_PASSWORD:?Run the cloud launcher first}
+    volumes:
+      - geo_cloud_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geo_platform -d geo_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+    restart: unless-stopped
+
+  api:
+    image: ${GEO_API_IMAGE:-chunqiu-yuanquan-geo-api:local}
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ["sh", "-c", "uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips='*' --no-access-log"]
+    environment:
+      DEPLOYMENT_MODE: cloud
+      ENVIRONMENT: production
+      AUTO_CREATE_TABLES: "false"
+      DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
+      AUTH_SECRET: ${GEO_AUTH_SECRET:?Run the cloud launcher first}
+      INTERNAL_PROXY_SECRET: ${GEO_INTERNAL_PROXY_SECRET:?Run the cloud launcher first}
+      PUBLIC_REGISTRATION_ENABLED: "false"
+      CORS_ORIGINS: https://${GEO_DOMAIN:?Run the cloud launcher with a domain}
+      ALLOWED_HOSTS: api,localhost,127.0.0.1,${GEO_DOMAIN}
+    volumes:
+      - geo_cloud_artifacts:/app/private_artifacts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    logging: *default-logging
+    restart: unless-stopped
+
+  worker:
+    image: ${GEO_API_IMAGE:-chunqiu-yuanquan-geo-api:local}
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: ["uv", "run", "--no-sync", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "${GEO_WORKER_CONCURRENCY:-32}", "--worker-id", "cloud:${GEO_WORKER_INSTANCE_ID:?Run the cloud launcher first}"]
+    environment:
+      DEPLOYMENT_MODE: cloud
+      ENVIRONMENT: production
+      AUTO_CREATE_TABLES: "false"
+      DATABASE_URL: postgresql+psycopg://geo_platform:${GEO_POSTGRES_PASSWORD}@postgres:5432/geo_platform
+      AUTH_SECRET: ${GEO_AUTH_SECRET:?Run the cloud launcher first}
+      INTERNAL_PROXY_SECRET: ${GEO_INTERNAL_PROXY_SECRET:?Run the cloud launcher first}
+      PUBLIC_REGISTRATION_ENABLED: "false"
+      CORS_ORIGINS: https://${GEO_DOMAIN}
+      ALLOWED_HOSTS: api,localhost,127.0.0.1,${GEO_DOMAIN}
+    volumes:
+      - geo_cloud_artifacts:/app/private_artifacts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "uv", "run", "--no-sync", "python", "scripts/check_worker_heartbeat.py", "--worker-id", "cloud:${GEO_WORKER_INSTANCE_ID}", "--quiet"]
+      interval: 15s
+      timeout: 8s
+      retries: 20
+    stop_grace_period: 30s
+    logging: *default-logging
+    restart: unless-stopped
+
+  web:
+    image: ${GEO_WEB_IMAGE:-chunqiu-yuanquan-geo-web:local}
+    build:
+      context: ..
+      dockerfile: apps/web/Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ""
+    environment:
+      INTERNAL_API_BASE_URL: http://api:8000
+      INTERNAL_PROXY_SECRET: ${GEO_INTERNAL_PROXY_SECRET:?Run the cloud launcher first}
+      SESSION_COOKIE_SECURE: "true"
+      GEO_PUBLIC_REGISTRATION_ENABLED: "false"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *default-logging
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    volumes:
+      - ./nginx.cloud.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - api
+    logging: *default-logging
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.10-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    environment:
+      GEO_DOMAIN: ${GEO_DOMAIN:?Run the cloud launcher with a domain}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - geo_cloud_caddy_data:/data
+      - geo_cloud_caddy_config:/config
+    depends_on:
+      - gateway
+    logging: *default-logging
+    restart: unless-stopped
+
+volumes:
+  geo_cloud_postgres:
+    name: ${GEO_POSTGRES_VOLUME_NAME:-chunqiu_yuanquan_geo_cloud_postgres}
+  geo_cloud_artifacts:
+    name: ${GEO_ARTIFACT_VOLUME_NAME:-chunqiu_yuanquan_geo_cloud_artifacts}
+  geo_cloud_caddy_data:
+    name: ${GEO_CADDY_DATA_VOLUME_NAME:-chunqiu_yuanquan_geo_cloud_caddy_data}
+  geo_cloud_caddy_config:
+    name: ${GEO_CADDY_CONFIG_VOLUME_NAME:-chunqiu_yuanquan_geo_cloud_caddy_config}

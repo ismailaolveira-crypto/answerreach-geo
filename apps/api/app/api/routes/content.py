@@ -1,10 +1,11 @@
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from hashlib import sha256
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import PlainTextResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.api.deps import (
@@ -15,6 +16,7 @@ from app.api.deps import (
     require_roles,
 )
 from app.db.session import get_db
+from app.core.config import get_settings
 from app.models import (
     AnswerAnalysis,
     ArticleDraft,
@@ -67,9 +69,11 @@ from app.services.article_workflow import (
     review_content_asset,
 )
 from app.services.audit import record_audit_log
+from app.services.auth import consume_security_rate_limit
 from app.services.content_remediation import create_content_asset_remediation_goals
 from app.services.placement_impact_goals import create_placement_impact_goals
 from app.services.project_goals import goal_suggested_actions
+from app.services.workspace_secrets import decrypt_secret, encrypt_secret
 
 router = APIRouter(
     prefix="/projects/{project_id}",
@@ -170,7 +174,21 @@ def _record_delivery_access(
     comment: str | None = None,
     detail: dict | None = None,
 ) -> DeliveryPackageAccessLog:
-    share.last_accessed_at = _now_utc()
+    now = _now_utc()
+    share.last_accessed_at = now
+    if event_type in {"view_package", "export_markdown", "export_pdf"}:
+        existing = db.scalar(
+            select(DeliveryPackageAccessLog)
+            .where(
+                DeliveryPackageAccessLog.share_id == share.id,
+                DeliveryPackageAccessLog.placement_id == placement_id,
+                DeliveryPackageAccessLog.event_type == event_type,
+                DeliveryPackageAccessLog.created_at >= now - timedelta(minutes=5),
+            )
+            .order_by(DeliveryPackageAccessLog.created_at.desc())
+        )
+        if existing is not None:
+            return existing
     access_log = DeliveryPackageAccessLog(
         share_id=share.id,
         project_id=share.project_id,
@@ -182,6 +200,38 @@ def _record_delivery_access(
     )
     db.add(access_log)
     return access_log
+
+
+def _consume_public_delivery_rate(
+    db: Session,
+    *,
+    share_id: int,
+    scope: str,
+    limit: int,
+) -> None:
+    retry_after = consume_security_rate_limit(
+        db,
+        scope=scope,
+        identity=str(share_id),
+        limit=limit,
+        window=timedelta(hours=1),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="公开交付访问过于频繁，请稍后重试",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _share_read(share: DeliveryPackageShare, *, reveal_confirmation: bool = False) -> DeliveryPackageShareRead:
+    confirmation_token = None
+    if reveal_confirmation and share.confirmation_token_encrypted:
+        confirmation_token = decrypt_secret(share.confirmation_token_encrypted)
+    return DeliveryPackageShareRead.model_validate(share).model_copy(
+        update={"confirmation_token": confirmation_token}
+    )
 
 
 def _public_deliverable_item(project_id: int, token: str, placement: PlacementRecord, db: Session) -> dict:
@@ -509,16 +559,19 @@ def delete_placement_record(
 
 @router.get("/delivery-shares", response_model=list[DeliveryPackageShareRead])
 def list_delivery_package_shares(
-    project_id: int, db: Session = Depends(get_db)
-) -> list[DeliveryPackageShare]:
+    project_id: int,
+    db: Session = Depends(get_db),
+    _user: User = Depends(require_roles(*CONTENT_ROLES)),
+) -> list[DeliveryPackageShareRead]:
     get_project_or_404(db, project_id)
-    return list(
+    shares = list(
         db.scalars(
             select(DeliveryPackageShare)
             .where(DeliveryPackageShare.project_id == project_id)
             .order_by(DeliveryPackageShare.created_at.desc())
         )
     )
+    return [_share_read(share, reveal_confirmation=True) for share in shares]
 
 
 @router.post("/delivery-shares", response_model=DeliveryPackageShareRead, status_code=201)
@@ -527,14 +580,16 @@ def create_delivery_package_share(
     payload: DeliveryPackageShareCreate,
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*CONTENT_ROLES)),
-) -> DeliveryPackageShare:
+) -> DeliveryPackageShareRead:
     project = get_project_or_404(db, project_id)
+    confirmation_token = secrets.token_urlsafe(24)
     share = DeliveryPackageShare(
         project_id=project_id,
         token=secrets.token_urlsafe(24),
         name=payload.name,
         expires_at=payload.expires_at,
         created_by_user_id=user.id,
+        confirmation_token_encrypted=encrypt_secret(confirmation_token),
     )
     db.add(share)
     db.flush()
@@ -550,7 +605,7 @@ def create_delivery_package_share(
     )
     db.commit()
     db.refresh(share)
-    return share
+    return _share_read(share, reveal_confirmation=True)
 
 
 @router.patch("/delivery-shares/{share_id}/revoke", response_model=DeliveryPackageShareRead)
@@ -573,11 +628,42 @@ def revoke_delivery_package_share(
         resource_id=share.id,
         project_id=project.id,
         company_id=project.company_id,
-        detail={"token": share.token},
+        detail={"share_id": share.id, "token_fingerprint": sha256(share.token.encode()).hexdigest()[:12]},
     )
     db.commit()
     db.refresh(share)
     return share
+
+
+@router.post(
+    "/delivery-shares/{share_id}/confirmation-token",
+    response_model=DeliveryPackageShareRead,
+)
+def rotate_delivery_confirmation_token(
+    project_id: int,
+    share_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(*CONTENT_ROLES)),
+) -> DeliveryPackageShareRead:
+    project = get_project_or_404(db, project_id)
+    share = db.get(DeliveryPackageShare, share_id)
+    if share is None or share.project_id != project_id:
+        raise HTTPException(status_code=404, detail="Delivery share not found")
+    confirmation_token = secrets.token_urlsafe(24)
+    share.confirmation_token_encrypted = encrypt_secret(confirmation_token)
+    record_audit_log(
+        db,
+        user=user,
+        action="delivery_share.confirmation_rotated",
+        resource_type="delivery_package_share",
+        resource_id=share.id,
+        project_id=project.id,
+        company_id=project.company_id,
+        detail={"share_id": share.id, "secret_values_omitted": True},
+    )
+    db.commit()
+    db.refresh(share)
+    return _share_read(share, reveal_confirmation=True)
 
 
 @router.get("/delivery-shares/access-logs", response_model=list[DeliveryPackageAccessLogRead])
@@ -1158,6 +1244,12 @@ def get_public_delivery_package(
     user_agent: str | None = Header(default=None),
 ) -> PublicDeliveryPackageRead:
     share = _get_share_or_404(db, token)
+    _consume_public_delivery_rate(
+        db,
+        share_id=share.id,
+        scope="public-delivery-read",
+        limit=get_settings().public_delivery_read_rate_limit_per_hour,
+    )
     _record_delivery_access(
         db,
         share,
@@ -1177,6 +1269,12 @@ def export_public_delivery_markdown(
     user_agent: str | None = Header(default=None),
 ) -> str:
     share = _get_share_or_404(db, token)
+    _consume_public_delivery_rate(
+        db,
+        share_id=share.id,
+        scope="public-delivery-read",
+        limit=get_settings().public_delivery_read_rate_limit_per_hour,
+    )
     placement = get_placement_or_404(db, share.project_id, placement_id)
     if not _is_customer_deliverable(placement):
         raise HTTPException(status_code=404, detail="Delivery report not found")
@@ -1200,6 +1298,12 @@ def export_public_delivery_pdf(
     user_agent: str | None = Header(default=None),
 ) -> Response:
     share = _get_share_or_404(db, token)
+    _consume_public_delivery_rate(
+        db,
+        share_id=share.id,
+        scope="public-delivery-read",
+        limit=get_settings().public_delivery_read_rate_limit_per_hour,
+    )
     placement = get_placement_or_404(db, share.project_id, placement_id)
     if not _is_customer_deliverable(placement):
         raise HTTPException(status_code=404, detail="Delivery report not found")
@@ -1230,10 +1334,55 @@ def confirm_public_delivery_report(
     user_agent: str | None = Header(default=None),
 ) -> DeliveryPackageAccessLog:
     share = _get_share_or_404(db, token)
+    _consume_public_delivery_rate(
+        db,
+        share_id=share.id,
+        scope="public-delivery-confirm",
+        limit=get_settings().public_delivery_confirm_rate_limit_per_hour,
+    )
+    if not share.confirmation_token_encrypted:
+        raise HTTPException(status_code=409, detail="该分享尚未生成专用验收码")
+    expected_confirmation = decrypt_secret(share.confirmation_token_encrypted)
+    if not secrets.compare_digest(payload.confirmation_token, expected_confirmation):
+        raise HTTPException(status_code=403, detail="验收码无效")
     placement = get_placement_or_404(db, share.project_id, placement_id)
     if not _is_customer_deliverable(placement):
         raise HTTPException(status_code=404, detail="Delivery report not found")
-    placement.delivery_status = "accepted"
+    existing_confirmation = db.scalar(
+        select(DeliveryPackageAccessLog)
+        .where(
+            DeliveryPackageAccessLog.share_id == share.id,
+            DeliveryPackageAccessLog.placement_id == placement_id,
+            DeliveryPackageAccessLog.event_type == "confirm_report",
+        )
+        .order_by(DeliveryPackageAccessLog.created_at.desc())
+    )
+    if placement.delivery_status == "accepted":
+        if existing_confirmation is not None:
+            return existing_confirmation
+        raise HTTPException(status_code=409, detail="该报告已经验收")
+    consumed = db.execute(
+        update(PlacementRecord)
+        .where(
+            PlacementRecord.id == placement.id,
+            PlacementRecord.delivery_status.in_(("ready", "delivered")),
+        )
+        .values(delivery_status="accepted")
+    )
+    if consumed.rowcount != 1:
+        db.rollback()
+        existing_confirmation = db.scalar(
+            select(DeliveryPackageAccessLog)
+            .where(
+                DeliveryPackageAccessLog.share_id == share.id,
+                DeliveryPackageAccessLog.placement_id == placement_id,
+                DeliveryPackageAccessLog.event_type == "confirm_report",
+            )
+            .order_by(DeliveryPackageAccessLog.created_at.desc())
+        )
+        if existing_confirmation is not None:
+            return existing_confirmation
+        raise HTTPException(status_code=409, detail="该报告已经验收")
     access_log = _record_delivery_access(
         db,
         share,
@@ -1261,9 +1410,9 @@ def confirm_public_delivery_report(
                 "placement_id": placement.id,
                 "access_log_id": access_log.id,
                 "share_id": share.id,
-                "share_token": share.token,
                 "actor_name": payload.actor_name,
                 "comment": payload.comment,
+                "confirmation_method": "separate_confirmation_code",
             },
         )
     alert = SystemAlert(
@@ -1279,12 +1428,12 @@ def confirm_public_delivery_report(
         ),
         detail_json={
             "share_id": share.id,
-            "share_token": share.token,
             "placement_id": placement.id,
             "access_log_id": access_log.id,
             "stage_goal_id": stage_goal.id if stage_goal is not None else None,
             "actor_name": payload.actor_name,
             "comment": payload.comment,
+            "confirmation_method": "separate_confirmation_code",
         },
     )
     db.add(alert)

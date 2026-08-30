@@ -1,15 +1,27 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { timingSafeEqual } from "node:crypto";
 import { requestPublicUrl } from "@/lib/request-url";
 import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/session-security";
 
 const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export async function GET(request: NextRequest) {
-  if (process.env.GEO_DEMO_AUTO_LOGIN !== "true") {
+  const email = process.env.GEO_DEMO_EMAIL?.trim();
+  const password = process.env.GEO_DEMO_PASSWORD;
+  const accessKey = process.env.GEO_DEMO_AUTO_LOGIN_ACCESS_KEY;
+  const suppliedKey = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
+  const enabled =
+    process.env.NODE_ENV !== "production" &&
+    process.env.GEO_DEMO_AUTO_LOGIN === "true" &&
+    Boolean(email && password && accessKey && suppliedKey);
+  if (!enabled) {
     return NextResponse.json({ detail: "Auto login is disabled" }, { status: 403 });
   }
-  const email = process.env.GEO_DEMO_EMAIL ?? "geo-demo-e2e@example.com";
-  const password = process.env.GEO_DEMO_PASSWORD ?? "geo-demo-123";
+  const expected = Buffer.from(accessKey!);
+  const supplied = Buffer.from(suppliedKey!);
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+    return NextResponse.json({ detail: "Auto login is disabled" }, { status: 403 });
+  }
   let login: Response;
   try {
     login = await fetch(`${API_BASE_URL}/api/auth/login`, {

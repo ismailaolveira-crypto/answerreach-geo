@@ -127,14 +127,14 @@ export function LoginShowcaseCarousel() {
 
   return (
     <section
-      aria-label="春秋元泉 GEO 工作台能力预览"
+      aria-label="入答 AnswerReach 工作台能力预览"
       className={`cq-auth-showcase${isReady ? " is-ready" : ""}${isWrapping ? " is-wrapping" : ""}`}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPaused(false);
       }}
       onFocusCapture={() => setPaused(true)}
     >
-      <h1 className="cq-auth-sr-only">春秋元泉 GEO 工作台能力预览</h1>
+      <h1 className="cq-auth-sr-only">入答 AnswerReach 工作台能力预览</h1>
       <div className="cq-auth-showcase-viewport" ref={viewportRef}>
         <div
           className="cq-auth-showcase-track"
@@ -150,6 +150,7 @@ export function LoginShowcaseCarousel() {
               return (
                 <div aria-hidden="true" className={`cq-auth-showcase-card is-clone${isVisuallyActive ? " is-active" : ""}`} key={key}>
                   <img alt="" src={card.src} />
+                  <span className="cq-auth-showcase-brand"><img alt="" src="/brand/answerreach-mark.svg" /><b>入答 <small>AnswerReach</small></b></span>
                 </div>
               );
             }
@@ -164,6 +165,7 @@ export function LoginShowcaseCarousel() {
                 type="button"
               >
                 <img alt={card.alt} src={card.src} />
+                <span aria-hidden="true" className="cq-auth-showcase-brand"><img alt="" src="/brand/answerreach-mark.svg" /><b>入答 <small>AnswerReach</small></b></span>
               </button>
             );
           })}

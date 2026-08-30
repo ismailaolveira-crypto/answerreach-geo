@@ -70,6 +70,54 @@ def test_publication_verification_returns_compact_response_evidence() -> None:
     assert "body" not in result
 
 
+def test_publication_request_pins_validated_ip_and_preserves_origin_identity() -> None:
+    observed: dict[str, object] = {}
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        observed["host"] = request.url.host
+        observed["host_header"] = request.headers.get("host")
+        observed["sni_hostname"] = request.extensions.get("sni_hostname")
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html; charset=utf-8"},
+            text="<html><body>" + ("可公开验证的文章内容" * 20) + "</body></html>",
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        verify_publication_page(
+            "https://brand.example/article/1",
+            resolver=lambda _host, _port: ["93.184.216.34", "93.184.216.35"],
+            client=client,
+        )
+
+    assert observed == {
+        "host": "93.184.216.34",
+        "host_header": "brand.example",
+        "sni_hostname": "brand.example",
+    }
+
+
+def test_publication_redirect_revalidates_and_blocks_private_destination() -> None:
+    requested_paths: list[str] = []
+
+    def resolver(host: str, _port: int) -> list[str]:
+        return ["127.0.0.1"] if host == "internal.example" else ["93.184.216.34"]
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        requested_paths.append(str(request.url))
+        return httpx.Response(302, headers={"location": "http://internal.example/admin"})
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(WebsiteAuditTargetError, match="private_network"):
+            verify_publication_page(
+                "https://brand.example/article/1",
+                resolver=resolver,
+                client=client,
+            )
+
+    assert len(requested_paths) == 1
+
+
 def test_publication_verification_rejects_non_html_response() -> None:
     transport = httpx.MockTransport(
         lambda _request: httpx.Response(

@@ -34,8 +34,8 @@ from app.schemas.workspace_access import (
 from app.services.audit import record_audit_log
 from app.services.auth import (
     canonicalize_email,
-    create_access_token,
     hash_password,
+    issue_access_token,
     verify_password,
 )
 from app.services.workspace_access import (
@@ -51,15 +51,6 @@ from app.services.workspace_access import (
 workspace_router = APIRouter(prefix="/v1", tags=["workspace-access"])
 invite_router = APIRouter(prefix="/auth/invitations", tags=["workspace-invitations"])
 agent_router = APIRouter(prefix="/v1/local-agent", tags=["local-agent"])
-
-ROLE_TO_USER_ROLE = {
-    "owner": "content_operator",
-    "admin": "content_operator",
-    "operator": "content_operator",
-    "reviewer": "reviewer",
-    "viewer": "viewer",
-}
-
 
 def _as_utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
@@ -370,18 +361,20 @@ def accept_workspace_invitation(
         select(User).where(func.lower(User.email) == canonicalize_email(invitation.email))
     )
     if user is None:
+        # A workspace invitation grants only membership in that workspace.
+        # Do not infer company-wide legacy authorization from a scoped invite.
         user = User(
-            company_id=workspace.company_id,
+            company_id=None,
             name=payload.name.strip(),
             email=invitation.email,
             password_hash=hash_password(payload.password),
-            role=ROLE_TO_USER_ROLE[invitation.role],
+            role="viewer",
             status="active",
         )
         db.add(user)
         db.flush()
     else:
-        if user.company_id != workspace.company_id:
+        if user.company_id is not None and user.company_id != workspace.company_id:
             raise HTTPException(status_code=409, detail="Account belongs to another organization")
         if not verify_password(payload.password, user.password_hash):
             raise HTTPException(status_code=401, detail="Invalid account password")
@@ -406,10 +399,11 @@ def accept_workspace_invitation(
         company_id=workspace.company_id,
         detail={"workspace_id": workspace.id, "role": invitation.role},
     )
+    access_token = issue_access_token(db, user)
     db.commit()
     db.refresh(user)
     return WorkspaceInvitationAcceptResponse(
-        access_token=create_access_token(user.id), user=user, workspace_id=workspace.id
+        access_token=access_token, user=user, workspace_id=workspace.id
     )
 
 

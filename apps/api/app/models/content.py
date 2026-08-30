@@ -116,6 +116,7 @@ class DeliveryPackageShare(TimestampMixin, Base):
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmation_token_encrypted: Mapped[str | None] = mapped_column(Text)
 
 
 class DeliveryPackageAccessLog(TimestampMixin, Base):

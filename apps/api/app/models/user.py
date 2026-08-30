@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -22,3 +22,4 @@ class User(TimestampMixin, Base):
     role: Mapped[str] = mapped_column(String(100), default="company_admin", index=True)
     status: Mapped[str] = mapped_column(String(50), default="active", index=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    credentials_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

@@ -20,8 +20,21 @@ import subprocess
 
 WORKER_SERVICE_LABEL = "com.chunqiu-yuanquan.geo.worker"
 FULL_STACK_SERVICE_LABEL = "com.chunqiu-yuanquan.geo.stack"
-PROJECT_ROOT = Path(__file__).resolve().parents[4]
-EXPECTED_API_DIR = PROJECT_ROOT / "apps" / "api"
+
+
+def _resolve_project_layout(source_file: Path) -> tuple[Path, Path]:
+    """Resolve both the source checkout and the flattened API container layout."""
+
+    resolved = source_file.resolve()
+    for candidate in resolved.parents:
+        api_directory = candidate / "apps" / "api"
+        if (candidate / "package.json").is_file() and api_directory.is_dir():
+            return candidate, api_directory
+    api_directory = resolved.parents[2]
+    return api_directory, api_directory
+
+
+PROJECT_ROOT, EXPECTED_API_DIR = _resolve_project_layout(Path(__file__))
 WORKER_INSTALL_SCRIPT = PROJECT_ROOT / "scripts" / "install-macos-worker-service.sh"
 WORKER_REPAIR_SCRIPT = PROJECT_ROOT / "scripts" / "repair-macos-worker-service.sh"
 

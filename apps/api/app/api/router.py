@@ -28,6 +28,7 @@ from app.v1.observation_alert_routes import router as observation_alert_router
 from app.v1.roi_import_routes import router as roi_import_router
 from app.v1.business_goal_routes import router as business_goal_router
 from app.v1.collaboration_routes import router as collaboration_router
+from app.v1.agent_workspace_routes import router as agent_workspace_router
 
 api_router = APIRouter(prefix="/api")
 api_router.include_router(health.router)
@@ -51,6 +52,7 @@ api_router.include_router(observation_alert_router)
 api_router.include_router(roi_import_router)
 api_router.include_router(business_goal_router)
 api_router.include_router(collaboration_router)
+api_router.include_router(agent_workspace_router)
 api_router.include_router(providers.router)
 api_router.include_router(queue.router)
 api_router.include_router(crawl.router)

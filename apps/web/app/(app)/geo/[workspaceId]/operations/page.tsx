@@ -150,7 +150,7 @@ export default async function OperationsPage({ params }: Props) {
   const readyReviewCount = pendingReviewPackages.length - regenerationCount;
 
   return <div className="sy-page">
-    <header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header>
+    <header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 AnswerReach</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header>
     <main className="sy-work-main sy-api-settings">
       <header><p>运营总览</p><h1>运营状态</h1><span>同时查看模型连接、真实观测批次和证据闭环；连接测试不会被误认为已完成观测。</span></header>
 

@@ -177,8 +177,8 @@ export default async function QuestionLibraryPage({
 		<div className="sy-page">
 			<header className="sy-topbar">
 				<Link className="sy-brand" href={`/geo/${workspaceId}`}>
-					<span>◈</span>
-					<b>春秋元泉 GEO</b>
+					<img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" />
+					<b>入答 AnswerReach</b>
 				</Link>
 				<nav className="sy-toplinks">
 					<Link href={`/geo/${workspaceId}/sources`}>信源地图</Link>

@@ -20,7 +20,7 @@ if integrity != [("ok",)]:
     raise SystemExit(f"database integrity failed: {integrity!r}")
 if foreign_keys:
     raise SystemExit(f"foreign key violations: {len(foreign_keys)}")
-if version != ("20260827_0037",):
+if version != ("20260830_0041",):
     raise SystemExit(f"unexpected migration version: {version!r}")
 
-print("database audit: ok · 20260827_0037")
+print("database audit: ok · 20260830_0041")

@@ -40,8 +40,14 @@ const chrome = {
   },
   storage: {
     local: {
-      async get(key) { return { [key]: extensionStorage[key] }; },
+      async get(keys) {
+        const requested = Array.isArray(keys) ? keys : [keys];
+        return Object.fromEntries(requested.map((key) => [key, extensionStorage[key]]));
+      },
       async set(values) { Object.assign(extensionStorage, values); },
+      async remove(keys) {
+        for (const key of (Array.isArray(keys) ? keys : [keys])) delete extensionStorage[key];
+      },
     },
   },
 };
@@ -58,6 +64,7 @@ const backgroundContext = {
   Promise,
   Response,
   Set,
+  URL,
   URLSearchParams,
 };
 vm.runInNewContext(source, backgroundContext, { filename: "background.js" });
@@ -93,11 +100,20 @@ assert.match(preparedMediaTarget.body_markdown, /\*图注：从内容到复测�
 assert.match(preparedMediaTarget.body_html, /<figcaption>图注：从内容到复测的闭环<\/figcaption>/);
 assert.doesNotMatch(preparedMediaTarget.body_html, /assistant-media\/10/);
 
-function send(method, payload = {}) {
+function send(method, payload = {}, sender = { url: "http://localhost:39003/geo/1/content" }) {
   return new Promise((resolve) => {
-    const keepAlive = messageListener({ protocolVersion: "geo-article-assistant.v1", method, payload }, {}, resolve);
+    const keepAlive = messageListener({ protocolVersion: "geo-article-assistant.v1", method, payload }, sender, resolve);
     assert.equal(keepAlive, true);
   });
+}
+
+async function approvePendingDraft() {
+  const pending = await send("getPendingDraftApproval", {}, { url: "chrome-extension://geo-assistant/popup.html" });
+  assert.equal(pending.ok, true);
+  assert.ok(pending.data?.targets?.length > 0);
+  const decision = await send("approvePendingDraft", {}, { url: "chrome-extension://geo-assistant/popup.html" });
+  assert.equal(decision.ok, true);
+  assert.equal(decision.data.approved, true);
 }
 
 const health = await send("health");
@@ -139,6 +155,10 @@ const task = {
   })),
 };
 const selections = accounts.data.map((item) => ({ platformKey: item.platformKey, accountId: item.accountId }));
+const unapproved = await send("writeDrafts", { task, accountSelections: selections });
+assert.equal(unapproved.ok, false);
+assert.match(unapproved.error, /等待人工确认/);
+await approvePendingDraft();
 const written = await send("writeDrafts", { task, accountSelections: selections });
 assert.equal(written.ok, true);
 assert.equal(written.data.length, 4);
@@ -151,6 +171,8 @@ const createRequestCount = () => fetchCalls.filter((call) =>
   || call.url.startsWith("https://mp.weixin.qq.com/cgi-bin/operate_appmsg?")
 ).length;
 const firstCreateRequestCount = createRequestCount();
+await send("writeDrafts", { task, accountSelections: selections });
+await approvePendingDraft();
 const replayedWrite = await send("writeDrafts", { task, accountSelections: selections });
 assert.equal(replayedWrite.ok, true);
 assert.equal(replayedWrite.data.length, 4);
@@ -226,7 +248,10 @@ assert.match(wechatBody, /<img src="https:\/\/img\.example\/approved\.png">/);
 assert.match(wechatBody, /<pre><code>const approved = true;<\/code><\/pre>/);
 
 const csdnTask = { ...task, targets: [{ ...task.targets[0], platform_key: "csdn" }] };
-const csdn = await send("writeDrafts", { task: csdnTask, accountSelections: [{ platformKey: "csdn", accountId: "csdn:test" }] });
+const csdnPayload = { task: csdnTask, accountSelections: [{ platformKey: "csdn", accountId: "csdn:test" }] };
+await send("writeDrafts", csdnPayload);
+await approvePendingDraft();
+const csdn = await send("writeDrafts", csdnPayload);
 assert.equal(csdn.ok, true);
 assert.equal(csdn.data[0].request_status, "failed");
 assert.match(csdn.data[0].message, /官方客户端授权/);
@@ -237,10 +262,21 @@ assert.match(expired.error, /已过期/);
 
 const unsafeImageTask = { ...task, targets: [{ ...task.targets[0], body_html: '<img src="file:///tmp/private.png">' }] };
 const zhihuSelection = selections.find((item) => item.platformKey === "zhihu");
-const unsafeImage = await send("writeDrafts", { task: unsafeImageTask, accountSelections: [zhihuSelection] });
+const unsafeImagePayload = { task: unsafeImageTask, accountSelections: [zhihuSelection] };
+await send("writeDrafts", unsafeImagePayload);
+await approvePendingDraft();
+const unsafeImage = await send("writeDrafts", unsafeImagePayload);
 assert.equal(unsafeImage.ok, true);
 assert.equal(unsafeImage.data[0].request_status, "failed");
 assert.match(unsafeImage.data[0].message, /本地或非 HTTPS 图片/);
+
+const forged = await send(
+  "writeDrafts",
+  { task, accountSelections: selections },
+  { url: "http://localhost:39004/forged" },
+);
+assert.equal(forged.ok, false);
+assert.match(forged.error, /只允许已验证的本机 GEO 工作台/);
 
 const contentSource = await readFile(new URL("../content-script.js", import.meta.url), "utf8");
 const contentListeners = new Map();

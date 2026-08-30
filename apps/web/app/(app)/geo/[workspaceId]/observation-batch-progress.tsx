@@ -14,12 +14,15 @@ import type {
 import styles from "./observation-batch-progress.module.css";
 
 const SETTLED = new Set(["success", "partial", "failed"]);
+const MAX_VISIBLE_PROVIDER_NODES = 100;
 
 type ObservationStatus = OfficialApiObservationTask["status"];
 
 type ObservationNode = {
   status: ObservationStatus;
   task?: OfficialApiObservationTask;
+  rangeStart: number;
+  rangeEnd: number;
 };
 
 const SPECTRAL_PALETTES = [
@@ -104,10 +107,28 @@ function observationNodes(
     ...Array<ObservationStatus>(group.pending).fill("pending"),
   ];
 
-  return Array.from({ length: group.total }, (_, index) => ({
-    status: groupTasks[index]?.status ?? aggregateFallback[index] ?? "pending",
-    task: groupTasks[index],
-  }));
+  if (group.total <= MAX_VISIBLE_PROVIDER_NODES) {
+    return Array.from({ length: group.total }, (_, index) => ({
+      status: groupTasks[index]?.status ?? aggregateFallback[index] ?? "pending",
+      task: groupTasks[index],
+      rangeStart: index + 1,
+      rangeEnd: index + 1,
+    }));
+  }
+
+  return Array.from({ length: MAX_VISIBLE_PROVIDER_NODES }, (_, index) => {
+    const rangeStartIndex = Math.floor((index * group.total) / MAX_VISIBLE_PROVIDER_NODES);
+    const rangeEndIndex = Math.max(
+      rangeStartIndex,
+      Math.floor(((index + 1) * group.total) / MAX_VISIBLE_PROVIDER_NODES) - 1,
+    );
+    const midpoint = Math.floor((rangeStartIndex + rangeEndIndex) / 2);
+    return {
+      status: aggregateFallback[midpoint] ?? "pending",
+      rangeStart: rangeStartIndex + 1,
+      rangeEnd: rangeEndIndex + 1,
+    };
+  });
 }
 
 function badgeLabel(batch: OfficialApiObservationBatch) {
@@ -153,6 +174,9 @@ export default function ObservationBatchProgress({
       ? styles.cardComplete
       : styles.cardResting;
   const borderGradientId = `batch-spectral-border-${batch.batch_id}`;
+  const usesCompactNodes = batch.provider_groups.some(
+    (group) => group.total > MAX_VISIBLE_PROVIDER_NODES,
+  );
 
   useEffect(() => {
     // Progress is already updated locally from the lightweight batch endpoint.
@@ -247,7 +271,7 @@ export default function ObservationBatchProgress({
 
       <div className={styles.columnLabels} aria-hidden="true">
         <span>模型</span>
-        <span>真实观测（每个节点代表 1 条真实观测）</span>
+        <span>{usesCompactNodes ? `真实观测缩略图（每个模型最多 ${MAX_VISIBLE_PROVIDER_NODES} 个节点）` : "真实观测（每个节点代表 1 条真实观测）"}</span>
         <span>完成</span>
       </div>
 
@@ -298,7 +322,9 @@ export default function ObservationBatchProgress({
                     );
                     const taskLabel = node.task
                       ? `${node.task.question_label} · 第 ${node.task.repeat_index} 次`
-                      : `第 ${index + 1} 条观测`;
+                      : node.rangeStart === node.rangeEnd
+                        ? `第 ${node.rangeStart} 条观测`
+                        : `第 ${node.rangeStart}-${node.rangeEnd} 条观测缩略`;
                     const title = `${taskLabel} · ${NODE_STATUS_LABELS[node.status]}`;
                     const nodeStyle = {
                       "--node-color": nodeColor,

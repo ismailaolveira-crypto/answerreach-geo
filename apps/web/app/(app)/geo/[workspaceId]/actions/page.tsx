@@ -325,6 +325,18 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 	async function submitExecutionEvidence(actionId: number, targetId: number, sourceUrl: string) {
 		"use server";
 		const action = await getActionExecutionDetail(workspaceId, actionId);
+		if (action.action_type === "analysis") {
+			const sha256 = createHash("sha256").update(sourceUrl).digest("hex");
+			await submitActionExecutionEvidence(workspaceId, actionId, targetId, {
+				evidence_type: "analysis_report",
+				artifact_uri: `geo-action://${actionId}/analysis-report/${targetId}`,
+				sha256,
+				detail: { source: "action_command_center", summary: sourceUrl },
+				idempotency_key: `evidence-${actionId}-${targetId}-analysis-report-${randomUUID()}`,
+			});
+			revalidatePath(`/geo/${workspaceId}/actions`);
+			return getActionExecutionDetail(workspaceId, actionId);
+		}
 		const evidenceTypes = action.action_type === "official_site"
 			? ["same_domain_readback"]
 			: action.action_type === "structured_data"
@@ -357,7 +369,9 @@ export default async function ActionsPage({ params, searchParams }: ActionsPageP
 				? "platform_draft"
 				: target.delivery_status === "awaiting_brand_legal_review"
 					? "brand_legal"
-					: "technical";
+					: target.delivery_status === "awaiting_analysis_review"
+						? "analysis"
+						: "technical";
 		const subjectFingerprint = createHash("sha256")
 			.update(`${action.scope_fingerprint || "legacy"}:${target.id}:${target.delivery_status}:${target.updated_at}`)
 			.digest("hex");

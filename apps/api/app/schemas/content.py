@@ -227,6 +227,7 @@ class DeliveryPackageShareRead(TimestampedSchema):
     expires_at: datetime | None = None
     created_by_user_id: int | None = None
     last_accessed_at: datetime | None = None
+    confirmation_token: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -245,8 +246,9 @@ class DeliveryPackageAccessLogRead(TimestampedSchema):
 
 
 class PublicDeliveryConfirmRequest(BaseModel):
-    actor_name: str | None = Field(default=None, max_length=255)
-    comment: str | None = None
+    confirmation_token: str = Field(min_length=20, max_length=200)
+    actor_name: str = Field(min_length=1, max_length=255)
+    comment: str | None = Field(default=None, max_length=1000)
 
 
 class PublicDeliveryPackageRead(BaseModel):

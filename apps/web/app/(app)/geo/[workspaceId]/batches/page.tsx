@@ -42,7 +42,7 @@ export default async function ObservationBatchesPage({ params, searchParams }: P
 
   return <div className="sy-page">
     <header className="sy-topbar">
-      <Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link>
+      <Link className="sy-brand" href={`/geo/${workspaceId}`}><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 AnswerReach</b></Link>
       <Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link>
     </header>
     <main className="sy-work-main sy-batches-main">

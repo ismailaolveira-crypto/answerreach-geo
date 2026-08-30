@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">入答 AnswerReach 标志</title>
+  <desc id="desc">三层彩色菱形代表模型、问题与证据，中央白色区域代表统一答案。</desc>
+  <defs>
+    <linearGradient id="layerTop" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#52E1FF"/><stop offset="1" stop-color="#3989FF"/></linearGradient>
+    <linearGradient id="layerMid" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3989FF"/><stop offset="1" stop-color="#3D35ED"/></linearGradient>
+    <linearGradient id="layerLow" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#3D35ED"/><stop offset="1" stop-color="#D56FE6"/></linearGradient>
+  </defs>
+  <g id="icon">
+    <path d="M52 186 256 74l204 112-204 112Z" fill="url(#layerTop)"/>
+    <path d="m52 254 204-112 204 112-204 112Z" fill="url(#layerMid)" opacity=".88"/>
+    <path d="m52 322 204-112 204 112-204 112Z" fill="url(#layerLow)" opacity=".78"/>
+    <path d="m172 186 84-46 84 46-84 46Z" fill="#fff"/>
+  </g>
+</svg>

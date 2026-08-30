@@ -1215,15 +1215,15 @@ class BailianQwenResponsesProvider(VolcengineWebSearchProvider):
 
 def get_provider_api_key(provider: LLMProvider) -> tuple[str | None, str]:
     settings = get_settings()
-    provider_key = (provider.auth_config or {}).get("api_key")
-    if provider_key:
-        return str(provider_key), "provider.auth_config.api_key"
     encrypted_provider_key = (provider.auth_config or {}).get("api_key_encrypted")
     if encrypted_provider_key:
         try:
             return decrypt_secret(str(encrypted_provider_key)), "provider.auth_config.api_key_encrypted"
         except RuntimeError:
             return None, "provider.auth_config.api_key_encrypted"
+    provider_key = (provider.auth_config or {}).get("api_key")
+    if provider_key:
+        return str(provider_key), "provider.auth_config.api_key_legacy"
     if provider.provider_type in {"qwen_compatible", "bailian_qwen_responses"}:
         if settings.qwen_api_key:
             return settings.qwen_api_key, "QWEN_API_KEY"
@@ -1253,8 +1253,16 @@ def get_provider_onboarding() -> list[dict[str, Any]]:
     return PROVIDER_ONBOARDING
 
 
-def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
-    api_key, auth_source = get_provider_api_key(provider)
+def diagnose_provider(
+    provider: LLMProvider,
+    *,
+    api_key_override: str | None = None,
+) -> dict[str, Any]:
+    api_key, auth_source = (
+        (api_key_override, "workspace_secret")
+        if api_key_override
+        else get_provider_api_key(provider)
+    )
     api_key_error = provider_api_key_format_error(api_key)
     base_url = (provider.api_base_url or get_provider_default_base_url(provider.provider_type) or "").rstrip("/")
     last_blocker = provider.cost_rule.get("last_blocker")
@@ -1406,8 +1414,16 @@ def diagnose_provider(provider: LLMProvider) -> dict[str, Any]:
     }
 
 
-def get_search_provider(provider: LLMProvider) -> BaseLLMSearchProvider:
-    api_key, _auth_source = get_provider_api_key(provider)
+def get_search_provider(
+    provider: LLMProvider,
+    *,
+    api_key_override: str | None = None,
+) -> BaseLLMSearchProvider:
+    api_key, _auth_source = (
+        (api_key_override, "workspace_secret")
+        if api_key_override
+        else get_provider_api_key(provider)
+    )
     api_key_error = provider_api_key_format_error(api_key)
     if api_key_error:
         raise ValueError(f"{api_key_error}。请只粘贴控制台生成的 Key 原文后重试。")

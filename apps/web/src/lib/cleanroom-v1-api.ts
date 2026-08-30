@@ -22,6 +22,34 @@ export type GeoCollaborationMember = {
 	email: string;
 	role: WorkspaceMembership["role"];
 	initial: string;
+	bindings: Array<{
+		provider: GeoCollaborationProvider;
+		status: "verified" | "error";
+		external_id_type: "user_id" | "open_id" | "union_id";
+		external_display_name?: string | null;
+		verified_at?: string | null;
+	}>;
+	notification_preferences: {
+		provider_settings: Partial<Record<GeoCollaborationProvider, boolean>>;
+		event_types: GeoCollaborationEventType[];
+	};
+	recent_deliveries: GeoCollaborationDelivery[];
+};
+
+export type GeoCollaborationProvider = "wecom" | "feishu" | "dingtalk";
+export type GeoCollaborationEventType = "assigned" | "due_soon" | "approval" | "blocked" | "progress" | "manual_summary";
+export type GeoCollaborationDelivery = {
+	id: number;
+	provider: GeoCollaborationProvider;
+	connection_mode: "webhook" | "app";
+	context_type: GeoCollaborationItem["context_type"];
+	context_id: number;
+	event_type: GeoCollaborationEventType;
+	status: "sending" | "provider_accepted" | "failed";
+	provider_message_ref?: string | null;
+	error_code?: string | null;
+	attempted_at: string;
+	accepted_at?: string | null;
 };
 
 export type GeoCollaborationItem = {
@@ -101,13 +129,43 @@ export type GeoCollaborationActivity = {
 };
 
 export type GeoCollaborationChannel = {
-	provider: "wecom" | "feishu" | "dingtalk";
+	provider: GeoCollaborationProvider;
 	label: string;
 	status: "disconnected" | "configured" | "connected" | "error";
 	display_name?: string | null;
+	connection_mode?: "webhook" | "app" | null;
+	configured_fields: string[];
+	capabilities: Partial<Record<"group_broadcast" | "member_binding" | "direct_message" | "provider_acceptance" | "read_receipt", boolean>>;
+	deep_link_base_url?: string | null;
 	configured_at?: string | null;
 	last_tested_at?: string | null;
 	last_error_code?: string | null;
+};
+
+export type GeoCollaborationNotificationPreview = {
+	recipient_user_id: number;
+	event_type: GeoCollaborationEventType;
+	snapshot: {
+		title: string;
+		category: string;
+		status: string;
+		progress: number;
+		summary?: string;
+		detail?: string;
+		relative_url: string;
+		note?: string;
+	};
+	providers: Array<{
+		provider: GeoCollaborationProvider;
+		label: string;
+		ready: boolean;
+		reason?: string | null;
+		connection_mode?: "webhook" | "app" | null;
+		identity_verified?: boolean | null;
+		status_fact: string;
+	}>;
+	message_preview: string;
+	external_write_performed: false;
 };
 
 export type GeoCollaborationCenter = {
@@ -308,7 +366,7 @@ export type GeoObservationAlertCenter = {
 export type WorkspaceIntegrationSettings = {
 	workspace_id: number;
 	deepseek_api_key_configured: boolean;
-	article_sync_mcp_server_path?: string | null;
+	article_sync_mcp_server_configured: boolean;
 	article_sync_mcp_token_configured: boolean;
 	deepseek_updated_at?: string | null;
 	article_sync_mcp_updated_at?: string | null;
@@ -946,7 +1004,7 @@ export type ActionExecutionApproval = {
 };
 
 export type ActionExecutionDetail = CleanroomAction & {
-	action_type: "article" | "official_site" | "structured_data" | "third_party_source" | "legacy_unclassified";
+	action_type: "article" | "official_site" | "structured_data" | "third_party_source" | "analysis" | "legacy_unclassified";
 	deliverable_type: string;
 	workflow_version: string;
 	assignee_user_id?: number | null;
@@ -1023,6 +1081,75 @@ export type AgentRuntimeTest = {
 	latency_ms: number;
 	thread_id?: string | null;
 	error?: string | null;
+};
+
+export type AgentWorkspaceContext = {
+	batch_id?: number | null;
+	question_plan_id?: number | null;
+	action_id?: number | null;
+	model_keys: string[];
+};
+
+export type AgentWorkspaceEvent = {
+	id: number;
+	sequence: number;
+	event_type: string;
+	stage: string;
+	message: string;
+	detail: Record<string, unknown>;
+	created_at: string;
+};
+
+export type AgentWorkspaceMessage = {
+	id: number;
+	sequence: number;
+	role: "user" | "assistant";
+	content: string;
+	status: "queued" | "running" | "completed" | "failed";
+	structured_payload: {
+		answer?: string;
+		rationale_summary?: string[];
+		evidence_summary?: Array<{ label: string; detail: string }>;
+		execution_plan?: Array<{ label: string; status: "ready" | "needs_user" | "blocked" }>;
+		suggested_action?: { title: string; summary: string; action_type: string } | null;
+		source_context?: {
+			scope?: AgentWorkspaceContext;
+			evidence_ids?: number[];
+			evidence_count?: number;
+		};
+		linked_action_id?: number;
+		needs_user?: boolean;
+	};
+	runtime_key?: AgentRuntimeKey | null;
+	model?: string | null;
+	job_id?: number | null;
+	error_message?: string | null;
+	events: AgentWorkspaceEvent[];
+	created_at: string;
+	updated_at: string;
+};
+
+export type AgentWorkspaceConversation = {
+	id: number;
+	workspace_id: number;
+	title: string;
+	status: "active" | "archived";
+	runtime_key: AgentRuntimeKey;
+	model?: string | null;
+	reasoning_effort?: CodexReasoningEffort | null;
+	context: AgentWorkspaceContext;
+	last_message_status?: AgentWorkspaceMessage["status"] | null;
+	needs_user: boolean;
+	last_message_at?: string | null;
+	created_at: string;
+	updated_at: string;
+	messages: AgentWorkspaceMessage[];
+};
+
+export type AgentWorkspaceContextOptions = {
+	batches: Array<{ id: number; label: string; status: string; model_keys: string[] }>;
+	questions: Array<{ id: number; label: string }>;
+	actions: Array<{ id: number; label: string; status: string }>;
 };
 
 export type CleanroomAgentRun = {
@@ -1859,11 +1986,82 @@ export function markGeoCollaborationThreadRead(
 export function configureGeoCollaborationChannel(
 	workspaceId: string | number,
 	provider: GeoCollaborationChannel["provider"],
-	payload: { webhook_url: string; display_name?: string | null },
+	payload: {
+		connection_mode: "webhook" | "app";
+		webhook_url?: string | null;
+		corp_id?: string | null;
+		app_id?: string | null;
+		app_key?: string | null;
+		agent_id?: string | null;
+		app_secret?: string | null;
+		display_name?: string | null;
+		deep_link_base_url?: string | null;
+	},
 ) {
 	return apiRequest<GeoCollaborationChannel>(
 		`/workspaces/${workspaceId}/collaboration/channels/${provider}`,
 		{ method: "PUT", body: JSON.stringify({ provider, ...payload }) },
+	);
+}
+
+export function bindGeoCollaborationMember(
+	workspaceId: string | number,
+	memberId: number,
+	provider: GeoCollaborationProvider,
+	payload: { external_user_id: string; external_id_type: "user_id" | "open_id" | "union_id" },
+) {
+	return apiRequest<GeoCollaborationMember>(
+		`/workspaces/${workspaceId}/collaboration/members/${memberId}/bindings/${provider}`,
+		{ method: "PUT", body: JSON.stringify(payload) },
+	);
+}
+
+export function updateGeoCollaborationNotificationPreferences(
+	workspaceId: string | number,
+	memberId: number,
+	payload: {
+		provider_settings: Partial<Record<GeoCollaborationProvider, boolean>>;
+		event_types: GeoCollaborationEventType[];
+	},
+) {
+	return apiRequest<GeoCollaborationMember>(
+		`/workspaces/${workspaceId}/collaboration/members/${memberId}/notification-preferences`,
+		{ method: "PUT", body: JSON.stringify(payload) },
+	);
+}
+
+export function previewGeoCollaborationNotification(
+	workspaceId: string | number,
+	payload: {
+		recipient_user_id: number;
+		context_type: GeoCollaborationItem["context_type"];
+		context_id: number;
+		event_type: GeoCollaborationEventType;
+		providers: GeoCollaborationProvider[];
+		note?: string;
+	},
+) {
+	return apiRequest<GeoCollaborationNotificationPreview>(
+		`/workspaces/${workspaceId}/collaboration/notifications/preview`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
+}
+
+export function sendGeoCollaborationNotification(
+	workspaceId: string | number,
+	payload: {
+		recipient_user_id: number;
+		context_type: GeoCollaborationItem["context_type"];
+		context_id: number;
+		event_type: GeoCollaborationEventType;
+		providers: GeoCollaborationProvider[];
+		note?: string;
+		idempotency_key: string;
+	},
+) {
+	return apiRequest<{ recipient_user_id: number; results: GeoCollaborationDelivery[]; truth_note: string }>(
+		`/workspaces/${workspaceId}/collaboration/notifications/send`,
+		{ method: "POST", body: JSON.stringify(payload) },
 	);
 }
 
@@ -2017,7 +2215,6 @@ export function updateWorkspaceIntegrations(
 	workspaceId: string | number,
 	payload: {
 		deepseek_api_key?: string;
-		article_sync_mcp_server_path?: string;
 		article_sync_mcp_token?: string;
 	},
 ) {
@@ -2582,6 +2779,67 @@ export function getAgentRuntime(workspaceId: string | number) {
 
 export function getAgentRuntimes(workspaceId: string | number) {
 	return apiRequest<AgentRuntime[]>(`/workspaces/${workspaceId}/agent-runtimes`);
+}
+
+export function getAgentWorkspaceContextOptions(workspaceId: string | number) {
+	return apiRequest<AgentWorkspaceContextOptions>(`/workspaces/${workspaceId}/agent-workspace/context-options`);
+}
+
+export function getAgentWorkspaceConversations(workspaceId: string | number) {
+	return apiRequest<AgentWorkspaceConversation[]>(`/workspaces/${workspaceId}/agent-workspace/conversations`);
+}
+
+export function getAgentWorkspaceConversation(workspaceId: string | number, conversationId: number) {
+	return apiRequest<AgentWorkspaceConversation>(`/workspaces/${workspaceId}/agent-workspace/conversations/${conversationId}`);
+}
+
+export function createAgentWorkspaceConversation(
+	workspaceId: string | number,
+	payload: { title?: string; context: AgentWorkspaceContext },
+) {
+	return apiRequest<AgentWorkspaceConversation>(`/workspaces/${workspaceId}/agent-workspace/conversations`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function updateAgentWorkspaceConversation(
+	workspaceId: string | number,
+	conversationId: number,
+	payload: { title?: string; status?: "active" | "archived"; context?: AgentWorkspaceContext },
+) {
+	return apiRequest<AgentWorkspaceConversation>(`/workspaces/${workspaceId}/agent-workspace/conversations/${conversationId}`, {
+		method: "PATCH",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function sendAgentWorkspaceMessage(
+	workspaceId: string | number,
+	conversationId: number,
+	payload: {
+		content: string;
+		runtime_key: AgentRuntimeKey | "auto";
+		model?: string | null;
+		reasoning_effort?: CodexReasoningEffort | null;
+	},
+) {
+	return apiRequest<AgentWorkspaceConversation>(`/workspaces/${workspaceId}/agent-workspace/conversations/${conversationId}/messages`, {
+		method: "POST",
+		body: JSON.stringify(payload),
+	});
+}
+
+export function createAgentWorkspaceSuggestionAction(
+	workspaceId: string | number,
+	conversationId: number,
+	messageId: number,
+	payload: { title: string; expected_goal: string; assignee_user_id: number; due_at: string },
+) {
+	return apiRequest<{ action_id: number; created: boolean }>(
+		`/workspaces/${workspaceId}/agent-workspace/conversations/${conversationId}/messages/${messageId}/action`,
+		{ method: "POST", body: JSON.stringify(payload) },
+	);
 }
 
 export function testAgentRuntime(workspaceId: string | number, runtimeKey: AgentRuntimeKey = "local_codex") {

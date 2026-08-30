@@ -18,17 +18,33 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _single_action_unique_constraint_name() -> str:
+    """Resolve the real name emitted by each database for ``unique=True``.
+
+    SQLite reports the original inline constraint without a name, while PostgreSQL
+    creates ``geo_reobservations_v1_action_id_key``.  The batch naming convention
+    supplies the fallback name for SQLite.
+    """
+
+    inspector = sa.inspect(op.get_bind())
+    for constraint in inspector.get_unique_constraints("geo_reobservations_v1"):
+        if constraint.get("column_names") == ["action_id"] and constraint.get("name"):
+            return str(constraint["name"])
+    return "uq_geo_reobservations_v1_action_id"
+
+
 def upgrade() -> None:
     with op.batch_alter_table("geo_optimization_actions_v1") as batch:
         batch.add_column(
             sa.Column("measurement_plan", sa.JSON(), nullable=False, server_default="{}")
         )
 
+    action_unique_constraint = _single_action_unique_constraint_name()
     with op.batch_alter_table(
         "geo_reobservations_v1",
         naming_convention={"uq": "uq_%(table_name)s_%(column_0_name)s"},
     ) as batch:
-        batch.drop_constraint("uq_geo_reobservations_v1_action_id", type_="unique")
+        batch.drop_constraint(action_unique_constraint, type_="unique")
         batch.add_column(sa.Column("round_index", sa.Integer(), nullable=True))
     op.execute("UPDATE geo_reobservations_v1 SET round_index = 1 WHERE round_index IS NULL")
     with op.batch_alter_table(

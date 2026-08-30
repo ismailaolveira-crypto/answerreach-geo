@@ -51,6 +51,8 @@
   width: 27px;
 }
 
+.brand > img { filter: drop-shadow(0 4px 7px rgb(58 77 232 / 16%)); height: 30px; object-fit: contain; width: 30px; }
+
 .toplinks {
   align-items: center;
   display: flex;

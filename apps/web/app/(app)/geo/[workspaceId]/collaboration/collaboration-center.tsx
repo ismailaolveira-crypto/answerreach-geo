@@ -19,6 +19,7 @@ import {
 	markCollaborationRead,
 	saveCollaborationWorkInfo,
 } from "./actions";
+import { CollaborationContacts } from "./collaboration-contacts";
 import styles from "./collaboration.module.css";
 
 type Tab = "discussions" | "contacts";
@@ -463,7 +464,7 @@ export function CollaborationCenter({ workspaceId, initialData, initialShare = n
 				<button type="button" className={tab === "contacts" ? styles.activeTab : ""} onClick={() => setTab("contacts")}>通讯录</button>
 			</nav>
 
-			{tab === "contacts" ? <section className={styles.contactsPage}><header><span>工作区通讯录</span><h2>{data.members.length} 位协作成员</h2><p>仅展示已加入当前工作区的真实账号。</p></header><div>{data.members.map((member) => <article key={member.id}><Avatar name={member.name} initial={member.initial} /><div><strong>{member.name}{member.id === data.current_user_id ? "（我）" : ""}</strong><span>{member.email}</span></div><em>{({ owner: "所有者", admin: "管理员", operator: "运营", reviewer: "审核", viewer: "只读" } as Record<string, string>)[member.role]}</em></article>)}</div></section>
+			{tab === "contacts" ? <CollaborationContacts workspaceId={workspaceId} data={data} onData={setData} onOpenWork={(item) => { setTab("discussions"); void selectItem(item); }} />
 			: <div className={styles.workspace}>
 				<aside className={styles.threadRail}>
 					<header className={styles.railHeader}><strong>团队讨论</strong><Popover.Root open={showStarter} onOpenChange={setShowStarter}><Popover.Trigger asChild><button type="button" className={styles.startDiscussion}>＋ 发起讨论</button></Popover.Trigger><Popover.Portal><Popover.Content className={styles.starterMenu} side="bottom" align="start" sideOffset={8} collisionPadding={12}><header><div><b>选择讨论对象</b><small>选择真实工作或某次观测洞察</small></div><Popover.Close aria-label="关闭">×</Popover.Close></header><div className={styles.starterGroups}><button type="button" data-active={starterGroup === "work"} onClick={() => { setStarterGroup("work"); setStarterKind("all"); }}>工作</button><button type="button" data-active={starterGroup === "insight"} onClick={() => { setStarterGroup("insight"); setStarterKind("all"); }}>洞察结果</button></div><label><span>⌕</span><input autoFocus value={starterQuery} onChange={(event) => setStarterQuery(event.target.value)} placeholder={starterGroup === "work" ? "搜索优化行动或问题" : "搜索问题、模型或观测结果"} /></label><nav>{(starterGroup === "work" ? ([['all','全部'],['action','优化行动'],['question','问题']] as const) : ([['all','全部观测'],['evidence','模型回答']] as const)).map(([value,label]) => <button key={value} type="button" data-active={starterKind === value} onClick={() => setStarterKind(value)}>{label}</button>)}</nav><div>{startableItems.length ? startableItems.map((item) => <WorkRow key={item.key} item={item} active={selected?.key === item.key} onSelect={() => selectItem(item)} />) : <p>没有找到对应结果</p>}</div></Popover.Content></Popover.Portal></Popover.Root></header>

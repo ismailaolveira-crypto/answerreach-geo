@@ -201,7 +201,7 @@ export default async function EvidenceDetail({ params, searchParams }: Props) {
   const archivedCount = displayedSamples.filter((item) => item.raw_artifact_uri || item.screenshot_uri).length;
   const focusedSourceRecord = hasFocusedSource ? uniqueSources(evidence).find((source) => sourceIdentity(sourceUrl(source)) === focusedSource) : undefined;
   const focusedSourceLabel = focusedSourceRecord ? displayDomain(sourceUrl(focusedSourceRecord) ?? "已锁定来源") : null;
-  return <div className="sy-page"><header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header><main className="sy-detail-main">
+  return <div className="sy-page"><header className="sy-topbar"><Link className="sy-brand" href={`/geo/${workspaceId}`}><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 AnswerReach</b></Link><Link className="sy-back" href={`/geo/${workspaceId}`}>← 返回决策地图</Link></header><main className="sy-detail-main">
     <div className="sy-detail-meta" aria-label="本组观测摘要">
       <article><span>最近成功观测</span><b>{formatDate(evidence.captured_at)}</b></article>
       <article><span>{hasFocusedSource ? "已锁定回答" : "本组样本"}</span><b>{hasFocusedSource ? "1 张原始回答卡" : `${sampleGroup.length} 次独立回答`}</b></article>

@@ -25,6 +25,23 @@
         <span id="lastChecked"></span>
       </section>
 
+      <section class="approval-card" id="approvalCard" hidden aria-live="polite">
+        <div class="approval-head">
+          <div>
+            <strong>待确认草稿</strong>
+            <p id="approvalOrigin"></p>
+          </div>
+          <span id="approvalCount"></span>
+        </div>
+        <ul id="approvalTargets"></ul>
+        <p class="approval-note">批准后回到 GEO 工作台再点一次写入。这里只授权本次、本批内容，不会自动发布。
+        </p>
+        <div class="approval-actions">
+          <button type="button" id="rejectApprovalButton">拒绝</button>
+          <button type="button" id="approveApprovalButton">核对无误，允许写草稿</button>
+        </div>
+      </section>
+
       <section class="platform-card" aria-label="平台登录状态">
         <ul class="platform-list" id="platformList"></ul>
       </section>

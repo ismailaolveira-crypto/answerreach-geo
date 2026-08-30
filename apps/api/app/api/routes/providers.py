@@ -27,6 +27,7 @@ from app.services.audit import record_audit_log
 from app.services.alert import create_provider_failure_alert
 from app.services.llm_provider import diagnose_provider, get_provider_onboarding, get_search_provider
 from app.services.usage import enforce_monthly_search_budget, record_usage
+from app.services.workspace_secrets import normalize_provider_auth_config
 
 router = APIRouter(prefix="/llm-providers", tags=["llm-providers"])
 
@@ -273,7 +274,9 @@ def create_provider(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles("super_admin")),
 ) -> LLMProvider:
-    provider = LLMProvider(**payload.model_dump())
+    data = payload.model_dump()
+    data["auth_config"] = normalize_provider_auth_config(data.get("auth_config"))
+    provider = LLMProvider(**data)
     db.add(provider)
     db.flush()
     record_audit_log(
@@ -297,7 +300,13 @@ def update_provider(
     user: User = Depends(require_roles("super_admin")),
 ) -> LLMProvider:
     provider = get_provider_or_404(db, provider_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    update_data = payload.model_dump(exclude_unset=True)
+    if "auth_config" in update_data:
+        update_data["auth_config"] = normalize_provider_auth_config(
+            update_data["auth_config"],
+            existing=provider.auth_config,
+        )
+    for field, value in update_data.items():
         setattr(provider, field, value)
     record_audit_log(
         db,
@@ -305,7 +314,7 @@ def update_provider(
         action="provider.update",
         resource_type="llm_provider",
         resource_id=provider.id,
-        detail={"updated_fields": list(payload.model_dump(exclude_unset=True).keys())},
+        detail={"updated_fields": list(update_data.keys())},
     )
     db.commit()
     db.refresh(provider)

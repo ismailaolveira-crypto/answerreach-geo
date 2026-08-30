@@ -13,7 +13,10 @@ const IMAGE_UPLOAD_PLATFORM_KEYS = new Set([
   "wechat", "zhihu", "juejin", "51cto", ...BUNDLED_PLATFORM_KEYS,
 ]);
 const DRAFT_RECEIPT_STORE = "geoArticleAssistantDraftReceiptsV1";
+const PENDING_APPROVAL_STORE = "geoArticleAssistantPendingApprovalV1";
+const APPROVED_TASK_STORE = "geoArticleAssistantApprovedTaskV1";
 const MAX_DRAFT_RECEIPTS = 100;
+const APPROVAL_TTL_MS = 10 * 60 * 1000;
 let bundledAdaptersPromise;
 
 function bundledAdapters() {
@@ -72,6 +75,90 @@ function draftReceiptKey(task, target, accountId) {
     target.content_fingerprint,
     (localHash >>> 0).toString(16),
   ].join(":");
+}
+
+function taskApprovalKey(task, accountSelections) {
+  const accounts = (Array.isArray(accountSelections) ? accountSelections : [])
+    .map((item) => `${item?.platformKey || ""}:${item?.accountId || ""}`)
+    .sort();
+  return JSON.stringify([
+    task.run_id,
+    task.task_token,
+    task.content_fingerprint,
+    task.targets.map((target) => [target.platform_key, target.content_fingerprint]),
+    accounts,
+  ]);
+}
+
+async function requireDraftApproval(task, accountSelections, sourceOrigin) {
+  const key = taskApprovalKey(task, accountSelections);
+  const stored = await chrome.storage.local.get([APPROVED_TASK_STORE]);
+  const approved = stored[APPROVED_TASK_STORE];
+  if (approved?.key === key && Number(approved.expiresAt || 0) > Date.now()) {
+    await chrome.storage.local.remove(APPROVED_TASK_STORE);
+    return;
+  }
+  const expiresAt = Math.min(Date.parse(task.expires_at), Date.now() + APPROVAL_TTL_MS);
+  await chrome.storage.local.set({
+    [PENDING_APPROVAL_STORE]: {
+      key,
+      task,
+      accountSelections,
+      sourceOrigin,
+      requestedAt: Date.now(),
+      expiresAt,
+    },
+  });
+  throw new Error("等待人工确认：请打开 GEO 文章助手，核对标题、平台和账号后批准，再在工作台重试。");
+}
+
+async function getPendingDraftApproval() {
+  const stored = await chrome.storage.local.get(PENDING_APPROVAL_STORE);
+  const pending = stored[PENDING_APPROVAL_STORE];
+  if (!pending || Number(pending.expiresAt || 0) <= Date.now()) {
+    await chrome.storage.local.remove([PENDING_APPROVAL_STORE, APPROVED_TASK_STORE]);
+    return null;
+  }
+  return {
+    runId: pending.task.run_id,
+    sourceOrigin: pending.sourceOrigin,
+    requestedAt: pending.requestedAt,
+    expiresAt: pending.expiresAt,
+    targets: pending.task.targets.map((target) => ({
+      platformKey: target.platform_key,
+      title: target.title,
+      contentFingerprint: target.content_fingerprint,
+      accountId: pending.accountSelections.find((item) => item.platformKey === target.platform_key)?.accountId || "",
+    })),
+  };
+}
+
+async function decidePendingDraftApproval(approved) {
+  const stored = await chrome.storage.local.get(PENDING_APPROVAL_STORE);
+  const pending = stored[PENDING_APPROVAL_STORE];
+  if (!pending || Number(pending.expiresAt || 0) <= Date.now()) {
+    await chrome.storage.local.remove([PENDING_APPROVAL_STORE, APPROVED_TASK_STORE]);
+    throw new Error("待确认任务已过期，请在 GEO 工作台重新发起");
+  }
+  await chrome.storage.local.remove(PENDING_APPROVAL_STORE);
+  if (!approved) {
+    await chrome.storage.local.remove(APPROVED_TASK_STORE);
+    return { approved: false };
+  }
+  await chrome.storage.local.set({
+    [APPROVED_TASK_STORE]: { key: pending.key, expiresAt: pending.expiresAt },
+  });
+  return { approved: true, expiresAt: pending.expiresAt };
+}
+
+function trustedAppOrigin(sender) {
+  const candidate = sender?.url || sender?.tab?.url || "";
+  try {
+    const origin = new URL(candidate).origin;
+    return origin === "http://localhost:39003" || origin === "http://127.0.0.1:39003" ? origin : null;
+  } catch {
+    return null;
+  }
 }
 
 async function readDraftReceipts() {
@@ -409,8 +496,9 @@ async function getAccounts() {
     .map((item) => item.account);
 }
 
-async function writeDrafts(task, accountSelections) {
+async function writeDrafts(task, accountSelections, sourceOrigin) {
   assertTask(task);
+  await requireDraftApproval(task, accountSelections, sourceOrigin);
   const selections = Array.isArray(accountSelections) ? accountSelections : [];
   const selectedByPlatform = new Map();
   for (const selection of selections) {
@@ -476,7 +564,7 @@ async function writeDrafts(task, accountSelections) {
   return results;
 }
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.protocolVersion !== PROTOCOL) return false;
   (async () => {
     if (message.method === "health") return {
@@ -491,7 +579,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     };
     if (message.method === "getAccounts") return getAccounts();
     if (message.method === "getPlatformStatuses") return getPlatformStatuses();
-    if (message.method === "writeDrafts") return writeDrafts(message.payload?.task, message.payload?.accountSelections);
+    if (message.method === "getPendingDraftApproval") return getPendingDraftApproval();
+    if (message.method === "approvePendingDraft") return decidePendingDraftApproval(true);
+    if (message.method === "rejectPendingDraft") return decidePendingDraftApproval(false);
+    if (message.method === "writeDrafts") {
+      const sourceOrigin = trustedAppOrigin(sender);
+      if (!sourceOrigin) throw new Error("只允许已验证的本机 GEO 工作台发起草稿任务");
+      return writeDrafts(message.payload?.task, message.payload?.accountSelections, sourceOrigin);
+    }
     throw new Error("不受支持的 GEO 文章助手操作");
   })().then((data) => sendResponse({ ok: true, data })).catch((error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "GEO 文章助手调用失败" }));
   return true;

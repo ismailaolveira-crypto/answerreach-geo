@@ -1,6 +1,10 @@
 import Link from "next/link";
 import type { Route } from "next";
-import { createDeliveryShareAction, revokeDeliveryShareAction } from "@/app/actions";
+import {
+  createDeliveryShareAction,
+  revokeDeliveryShareAction,
+  rotateDeliveryConfirmationTokenAction
+} from "@/app/actions";
 import { SubmitButton } from "@/app/(app)/submit-button";
 import {
   getDeliveryAccessLogs,
@@ -17,7 +21,7 @@ import {
 
 type PageProps = {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ share?: string; revoked?: string }>;
+  searchParams: Promise<{ share?: string; revoked?: string; confirmation_rotated?: string }>;
 };
 
 const DELIVERABLE_STATUSES = new Set(["ready", "delivered", "accepted"]);
@@ -140,7 +144,7 @@ export default async function DeliveryPackagePage({ params, searchParams }: Page
               {deliverables.length === 0
                 ? "暂无客户可见报告，先发布投放并进入待交付状态。"
                 : latestActiveShare
-                  ? "客户交付链接已就绪，可直接发送给客户查看和确认。"
+                  ? "只读链接已就绪。如需让对方验收，还要通过另一渠道发送专用验收码。"
                   : "已有可交付报告，但还没有有效分享链接。"}
             </p>
           </div>
@@ -151,8 +155,11 @@ export default async function DeliveryPackagePage({ params, searchParams }: Page
         {publicSharePath ? (
           <div className="row">
             <div>
-              <h3>公开交付链接</h3>
+              <h3>外部只读链接</h3>
               <small>{publicSharePath}</small>
+              <small>
+                专用验收码：{latestActiveShare?.confirmation_token ?? "尚未生成，请在下方重新生成"}
+              </small>
             </div>
             <Link className="button" href={asRoute(publicSharePath)}>
               打开客户视图
@@ -260,6 +267,9 @@ export default async function DeliveryPackagePage({ params, searchParams }: Page
             分享链接 #{queryParams.revoked} 已撤销，客户将无法继续通过该链接访问交付包。
           </div>
         ) : null}
+        {queryParams.confirmation_rotated ? (
+          <div className="notice success">专用验收码已重新生成，旧验收码立即失效。</div>
+        ) : null}
         <form className="form inline-form" action={createShare}>
           <div className="field">
             <label htmlFor="name">链接名称</label>
@@ -284,18 +294,26 @@ export default async function DeliveryPackagePage({ params, searchParams }: Page
                     <span>{share.expires_at ? `过期 ${share.expires_at}` : "长期有效"}</span>
                     <span>{share.last_accessed_at ? `访问 ${share.last_accessed_at}` : "未访问"}</span>
                   </div>
-                  <small>/share/delivery/{share.token}</small>
+                  <small>只读链接：/share/delivery/{share.token}</small>
+                  <small>专用验收码：{share.confirmation_token ?? "未生成"}</small>
                 </div>
                 <div className="row-actions">
                   <Link className="button secondary" href={`/share/delivery/${share.token}`}>
                     打开
                   </Link>
                   {share.status === "active" ? (
-                    <form action={revokeDeliveryShareAction.bind(null, id, share.id)}>
-                      <SubmitButton className="button secondary" pendingText="撤销中...">
-                        撤销
-                      </SubmitButton>
-                    </form>
+                    <>
+                      <form action={rotateDeliveryConfirmationTokenAction.bind(null, id, share.id)}>
+                        <SubmitButton className="button secondary" pendingText="生成中...">
+                          {share.confirmation_token ? "更换验收码" : "生成验收码"}
+                        </SubmitButton>
+                      </form>
+                      <form action={revokeDeliveryShareAction.bind(null, id, share.id)}>
+                        <SubmitButton className="button secondary" pendingText="撤销中...">
+                          撤销
+                        </SubmitButton>
+                      </form>
+                    </>
                   ) : null}
                 </div>
               </div>

@@ -122,8 +122,8 @@ export function RegisterShowcaseCarousel() {
               type="button"
             >
               <span aria-hidden="true" className="cq-register-showcase-slide-brand">
-                <span className="cq-register-showcase-slide-mark"><i /><i /><i /></span>
-                <b>春秋元泉 <em>GEO</em></b>
+                <img alt="" src="/brand/answerreach-mark.svg" />
+                <b>入答 <em>AnswerReach</em></b>
               </span>
               <span className="cq-register-showcase-slide-image" style={{ backgroundImage: `url("${slide.asset}")` }} />
               <span className="cq-register-showcase-slide-copy"><b>{slide.label}</b><small>{slide.note}</small></span>

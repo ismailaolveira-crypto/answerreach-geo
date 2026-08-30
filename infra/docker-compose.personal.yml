@@ -5,18 +5,26 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    command: ["sh", "-c", "uv run alembic upgrade head && uv run uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "uv run --no-sync alembic upgrade head && uv run --no-sync uvicorn app.main:app --host 0.0.0.0 --port 8000 --forwarded-allow-ips='*' --no-access-log"]
     environment:
       DEPLOYMENT_MODE: personal
       ENVIRONMENT: personal
       AUTO_CREATE_TABLES: "false"
       DATABASE_URL: sqlite:////data/geo_platform.db
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
+      INTERNAL_PROXY_SECRET: ${GEO_INTERNAL_PROXY_SECRET:?Run generate_deployment_config.py first}
+      PUBLIC_REGISTRATION_ENABLED: "true"
       CORS_ORIGINS: http://localhost:${GEO_HTTP_PORT:-3000}
       ALLOWED_HOSTS: api,localhost,127.0.0.1
     volumes:
       - geo_personal_data:/data
       - geo_personal_artifacts:/app/private_artifacts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health/ready', timeout=3)"]
       interval: 10s
@@ -28,21 +36,28 @@ services:
     build:
       context: ..
       dockerfile: apps/api/Dockerfile
-    command: ["uv", "run", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "${GEO_WORKER_CONCURRENCY:-8}", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID:?Run the personal launcher first}"]
+    command: ["uv", "run", "--no-sync", "python", "scripts/run_worker.py", "--interval-seconds", "1", "--concurrency", "${GEO_WORKER_CONCURRENCY:-8}", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID:?Run the personal launcher first}"]
     environment:
       DEPLOYMENT_MODE: personal
       ENVIRONMENT: personal
       AUTO_CREATE_TABLES: "false"
       DATABASE_URL: sqlite:////data/geo_platform.db
       AUTH_SECRET: ${GEO_AUTH_SECRET:?Run generate_deployment_config.py first}
+      PUBLIC_REGISTRATION_ENABLED: "true"
     volumes:
       - geo_personal_data:/data
       - geo_personal_artifacts:/app/private_artifacts
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=256m,mode=1777
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "uv", "run", "python", "scripts/check_worker_heartbeat.py", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID}", "--quiet"]
+      test: ["CMD", "uv", "run", "--no-sync", "python", "scripts/check_worker_heartbeat.py", "--worker-id", "personal:${GEO_WORKER_INSTANCE_ID}", "--quiet"]
       interval: 15s
       timeout: 8s
       retries: 12
@@ -57,14 +72,22 @@ services:
         NEXT_PUBLIC_API_BASE_URL: ""
     environment:
       INTERNAL_API_BASE_URL: http://api:8000
+      INTERNAL_PROXY_SECRET: ${GEO_INTERNAL_PROXY_SECRET:?Run generate_deployment_config.py first}
       GEO_LOCAL_HTTP: "true"
+      GEO_PUBLIC_REGISTRATION_ENABLED: "true"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     depends_on:
       api:
         condition: service_healthy
     restart: unless-stopped
 
   gateway:
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     ports:
       - "127.0.0.1:${GEO_HTTP_PORT:-3000}:80"
     volumes:

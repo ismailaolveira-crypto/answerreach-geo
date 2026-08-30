@@ -13,6 +13,7 @@
 .topbar { align-items:center; background:rgb(255 255 255 / 88%); backdrop-filter:blur(20px); border-bottom:1px solid var(--line); display:flex; height:64px; justify-content:space-between; padding:0 2rem; position:sticky; top:0; z-index:20; }
 .brand { align-items:center; display:flex; gap:.65rem; font-size:1rem; }
 .brand>span { align-items:center; background:var(--blue); border-radius:.5rem; color:#fff; display:flex; height:1.8rem; justify-content:center; width:1.8rem; }
+.brand>img { filter:drop-shadow(0 4px 7px rgb(58 77 232 / 16%)); height:1.9rem; object-fit:contain; width:1.9rem; }
 .topbar nav { align-items:center; display:flex; gap:.2rem; }
 .topbar nav a { color:#66758b; font-size:.8rem; font-weight:680; padding:1.4rem .85rem 1.15rem; position:relative; }
 .topbar nav a:hover,.topbar nav a[aria-current="page"] { color:var(--blue); }

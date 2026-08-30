@@ -1,5 +1,7 @@
 # 品牌资产来源
 
+`answerreach-mark.svg` 与 `answerreach-logo.svg` 是入答 AnswerReach 的自有原创品牌资产，由本项目于 2026-08-30 定稿；`spring-yuan-workspace.svg` 仅用于标识当前春秋元泉测试工作区，避免与产品品牌混用。
+
 这些文件仅作为内部模型识别标志展示，不进行重绘、描边、变色或二次创作。检索日期：2026-08-03。
 
 | 文件 | 官方来源 | 说明 |
