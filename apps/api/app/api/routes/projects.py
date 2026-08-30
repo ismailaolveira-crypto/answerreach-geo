@@ -1781,8 +1781,10 @@ def get_project_operating_trends(
     project_id: int,
     days: int = 14,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> ProjectOperatingTrends:
-    get_project_or_404(db, project_id)
+    project = get_project_or_404(db, project_id)
+    assert_company_access(user, project.company_id)
     safe_days = max(7, min(days, 90))
     today = datetime.now(UTC).date()
     start_day = today - timedelta(days=safe_days - 1)
@@ -1807,8 +1809,13 @@ def get_project_operating_trends(
 
 
 @router.get("/{project_id}/stage-goals", response_model=list[ProjectStageGoalRead])
-def list_project_stage_goals(project_id: int, db: Session = Depends(get_db)) -> list[ProjectStageGoalRead]:
-    get_project_or_404(db, project_id)
+def list_project_stage_goals(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[ProjectStageGoalRead]:
+    project = get_project_or_404(db, project_id)
+    assert_company_access(user, project.company_id)
     goals = db.scalars(
         select(ProjectStageGoal)
         .where(ProjectStageGoal.project_id == project_id)
@@ -1822,7 +1829,10 @@ def list_project_stage_goal_timeline(
     project_id: int,
     goal_id: int,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> list[ProjectStageGoalTimelineItem]:
+    project = get_project_or_404(db, project_id)
+    assert_company_access(user, project.company_id)
     goal = _get_stage_goal_or_404(db, project_id, goal_id)
     items = [
         ProjectStageGoalTimelineItem(

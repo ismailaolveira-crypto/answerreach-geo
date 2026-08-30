@@ -34,6 +34,7 @@ ACTION_TYPES = {
     "official_site",
     "structured_data",
     "third_party_source",
+    "analysis",
     "legacy_unclassified",
 }
 
@@ -95,6 +96,12 @@ TARGET_WORKFLOWS: dict[str, tuple[str, ...]] = {
         "external_content_live",
         "public_readback_verified",
     ),
+    "analysis": (
+        "scope_confirmed",
+        "analysis_in_progress",
+        "awaiting_analysis_review",
+        "analysis_verified",
+    ),
 }
 
 TARGET_TYPES_BY_ACTION: dict[str, set[str]] = {
@@ -102,6 +109,7 @@ TARGET_TYPES_BY_ACTION: dict[str, set[str]] = {
     "official_site": {"official_page"},
     "structured_data": {"schema"},
     "third_party_source": {"external_source"},
+    "analysis": {"analysis_deliverable"},
 }
 
 FINAL_TARGET_STATUS = {
@@ -113,6 +121,7 @@ APPROVAL_STATES = {
     "official_site": {"awaiting_brand_legal_review"},
     "structured_data": {"awaiting_technical_review"},
     "third_party_source": set(),
+    "analysis": {"awaiting_analysis_review"},
 }
 
 TARGET_DEFAULTS: dict[str, tuple[str, str]] = {
@@ -120,6 +129,7 @@ TARGET_DEFAULTS: dict[str, tuple[str, str]] = {
     "official_site": ("official_page", "gap_confirmed"),
     "structured_data": ("schema", "schema_gap_confirmed"),
     "third_party_source": ("external_source", "source_selected"),
+    "analysis": ("analysis_deliverable", "scope_confirmed"),
 }
 
 MANAGER_ROLES = {"owner", "admin"}

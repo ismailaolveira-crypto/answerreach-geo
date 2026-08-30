@@ -27,6 +27,15 @@ DEFAULT_EXTENSION_WAIT_SECONDS = 35.0
 DEFAULT_TOOL_TIMEOUT_SECONDS = 360.0
 
 
+def _child_environment(token: str) -> dict[str, str]:
+    """Pass only runtime necessities, never the API process's provider secrets."""
+    allowed = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL")
+    env = {key: os.environ[key] for key in allowed if os.environ.get(key)}
+    env["NODE_ENV"] = "production"
+    env["MCP_TOKEN"] = token
+    return env
+
+
 class ArticleSyncAdapter(Protocol):
     def probe(self) -> dict: ...
 
@@ -106,16 +115,17 @@ class _StdioMcpSession:
         if self.running:
             return
         self._stop_locked()
-        path = Path(self.server_path).expanduser()
+        path = Path(self.server_path).expanduser().resolve(strict=False)
         if not path.is_file():
             raise RuntimeError("article_sync_mcp_server_path_not_found")
+        if path.suffix not in {".js", ".mjs", ".cjs"}:
+            raise RuntimeError("article_sync_mcp_server_path_invalid")
         if _tcp_port_is_open(DEFAULT_EXTENSION_BRIDGE_PORT):
             raise RuntimeError("article_sync_mcp_port_in_use")
 
-        env = os.environ.copy()
         # The token stays in the child environment and is never included in
         # command arguments, URLs, responses, or diagnostic messages.
-        env["MCP_TOKEN"] = self.token
+        env = _child_environment(self.token)
         try:
             self._process = subprocess.Popen(
                 [self.node_binary, str(path)],

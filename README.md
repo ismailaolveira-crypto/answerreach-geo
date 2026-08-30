@@ -180,10 +180,11 @@ http://127.0.0.1:3000
 | 个人 Docker 版 | SQLite | 仅 `127.0.0.1` | 默认 8，并受 Provider QPS 与 SQLite 写入限制 | 同事各自在电脑独立使用 |
 | macOS 原生常驻版 | SQLite | 仅本机 | 由 LaunchAgent 保持 Web / API / Worker，同样受实际资源限制 | 开发机长期本地使用 |
 | 局域网团队版 | PostgreSQL | 可信内网 | 中央 Worker 最多 125 个并发槽 | 同一办公室共享账号与证据 |
+| 云端正式单机版 | PostgreSQL | 指定 HTTPS 域名 | 默认 32，可按服务器和 Provider 限额调整 | 跨地点团队与早期正式客户 |
 
 局域网模式的代码和配置已经提供，但仍应在正式内部投用前完成两台真实电脑的端到端验收。不要把端口直接映射到公网；跨办公地点优先使用公司 VPN、Tailscale 或正式 HTTPS 反向代理。
 
-部署与数据边界详见 [`docs/local-deployment-modes.md`](docs/local-deployment-modes.md)。
+本机与内网边界详见 [`docs/local-deployment-modes.md`](docs/local-deployment-modes.md)；云端一键部署、备份和扩容边界详见 [`docs/production-deployment.md`](docs/production-deployment.md)。
 
 ## Provider 与联网能力
 
@@ -202,7 +203,7 @@ http://127.0.0.1:3000
 - 个人版配置保存在稳定的本机用户目录；已有配置不会在更新或重新解压时被覆盖。
 - 数据库和证据保存在 Docker 数据卷；停止容器或更换代码目录不会自动删除数据。
 - 不要运行 `docker compose down -v`，它会删除个人数据卷。
-- 备份可能包含数据库、证据和本机密钥，只能保存在受控位置，不得上传 GitHub 或转发。
+- 备份会将数据库、证据和本机配置整体认证加密；加密文件和独立 `backup.key` 必须分开保管，不得上传 GitHub 或转发。
 - Local Agent V1 只上报设备、EgoLite 与 Codex 的非敏感健康状态，不提供远程 Shell。
 - 最终发布仍需用户在目标平台确认；系统不会把同步请求接受写成“已经发布”。
 

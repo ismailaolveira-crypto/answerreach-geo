@@ -39,6 +39,7 @@ const typeMeta = {
 	official_site: { label: "修改官网页面", tone: "indigo" },
 	structured_data: { label: "补充结构化数据", tone: "violet" },
 	third_party_source: { label: "建设第三方信源", tone: "cyan" },
+	analysis: { label: "调研与分析", tone: "slate" },
 	legacy_unclassified: { label: "待确认行动类型", tone: "slate" },
 } as const;
 
@@ -47,6 +48,7 @@ function ActionTypeGlyph({ type }: { type: string }) {
 	if (type === "official_site") return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.75" y="5" width="16.5" height="14" rx="2.25" /><path d="M3.75 8.75h16.5M7 6.9h.01M9.25 6.9h.01M8 15.75l2.25-2.25 1.75 1.75 3.75-4" /></svg>;
 	if (type === "structured_data") return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.25 5.25 3.75 12l4.5 6.75M15.75 5.25 20.25 12l-4.5 6.75M14 3.75 10 20.25" /></svg>;
 	if (type === "third_party_source") return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="2.25" /><circle cx="17.75" cy="6" r="2.25" /><circle cx="17.75" cy="18" r="2.25" /><path d="m8 11 7.75-4M8 13l7.75 4" /></svg>;
+	if (type === "analysis") return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="5.75" /><path d="m14.75 14.75 4.5 4.5M8 10.5h5M10.5 8v5" /></svg>;
 	return <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.25" /><path d="M9.8 9.25a2.35 2.35 0 0 1 4.55.8c0 1.8-2.35 2-2.35 3.7M12 17.25h.01" /></svg>;
 }
 
@@ -55,6 +57,7 @@ const workflow: Record<string, string[]> = {
 	official_site: ["gap_confirmed", "change_proposed", "awaiting_brand_legal_review", "handed_to_web_owner", "deployed", "same_domain_readback_verified"],
 	structured_data: ["schema_gap_confirmed", "jsonld_proposed", "awaiting_technical_review", "deployed", "source_readback_verified", "schema_validated"],
 	third_party_source: ["source_selected", "cooperation_briefed", "external_execution", "external_content_live", "public_readback_verified"],
+	analysis: ["scope_confirmed", "analysis_in_progress", "awaiting_analysis_review", "analysis_verified"],
 };
 
 const visibleWorkflow: Record<string, Array<{ label: string; states: string[] }>> = {
@@ -81,6 +84,12 @@ const visibleWorkflow: Record<string, Array<{ label: string; states: string[] }>
 		{ label: "准备合作", states: ["cooperation_briefed"] },
 		{ label: "执行上线", states: ["external_execution", "external_content_live"] },
 		{ label: "核验完成", states: ["public_readback_verified"] },
+	],
+	analysis: [
+		{ label: "确认范围", states: ["scope_confirmed"] },
+		{ label: "执行分析", states: ["analysis_in_progress"] },
+		{ label: "审核结论", states: ["awaiting_analysis_review"] },
+		{ label: "完成留证", states: ["analysis_verified"] },
 	],
 };
 
@@ -111,6 +120,10 @@ const statusLabel: Record<string, string> = {
 	external_execution: "外部执行中",
 	external_content_live: "内容已公开",
 	public_readback_verified: "公网回读完成",
+	scope_confirmed: "确认分析范围",
+	analysis_in_progress: "开始分析",
+	awaiting_analysis_review: "审核分析结论",
+	analysis_verified: "分析结论已留证",
 };
 
 const approvalTypeByStatus: Record<string, string> = {
@@ -118,6 +131,7 @@ const approvalTypeByStatus: Record<string, string> = {
 	awaiting_platform_review: "platform_draft",
 	awaiting_brand_legal_review: "brand_legal",
 	awaiting_technical_review: "technical",
+	awaiting_analysis_review: "analysis",
 };
 
 const requiredEvidenceByAction: Record<string, string[]> = {
@@ -125,6 +139,7 @@ const requiredEvidenceByAction: Record<string, string[]> = {
 	official_site: ["same_domain_readback"],
 	structured_data: ["source_code", "schema_validation"],
 	third_party_source: ["external_publication"],
+	analysis: ["analysis_report"],
 };
 
 const targetLogoByPlatform: Record<string, string> = {
@@ -136,7 +151,7 @@ const targetLogoByPlatform: Record<string, string> = {
 };
 
 function targetLogo(actionType: string, platformKey?: string | null, targetRef?: string | null) {
-	if (actionType === "official_site") return "/icon.svg";
+	if (actionType === "official_site") return "/brand/spring-yuan-workspace.svg";
 	if (platformKey && targetLogoByPlatform[platformKey.toLowerCase()]) return targetLogoByPlatform[platformKey.toLowerCase()];
 	const reference = String(targetRef || "").toLowerCase();
 	if (reference.includes("zhihu.com") || reference === "zhihu") return targetLogoByPlatform.zhihu;
@@ -197,6 +212,8 @@ const targetCtaLabel: Record<string, string> = {
 	cooperation_briefed: "准备合作方案",
 	external_execution: "开始外部执行",
 	external_content_live: "确认内容已上线",
+	analysis_in_progress: "开始分析",
+	awaiting_analysis_review: "提交分析结论",
 };
 
 function dueInput(days = 3) {
@@ -383,7 +400,7 @@ export function ActionCommandCenter({ workspaceId, initialActions, initialSelect
 										{isArticle && target.delivery_status === "draft_write_requested" ? <div className={styles.draftPublishFlow}><button type="button" onClick={() => openLegacyForAction(selected.id)}>查看草稿写入结果</button><small className={styles.draftNote}>{target.status_note}</small></div> : null}
 										{isArticle && target.delivery_status === "draft_link_returned" && candidateDraftUrl && distributionMatch ? <div className={styles.draftPublishFlow}><a className={styles.draftLink} href={candidateDraftUrl} target="_blank" rel="noopener noreferrer">打开{target.display_name}草稿核对 <span aria-hidden="true">↗</span></a><button type="button" disabled={isPending} onClick={() => confirmDraft(distributionMatch.run.id, distributionMatch.target.id, target.display_name)}>我已打开，确认正文可见</button><small className={styles.draftNote}>{target.status_note}</small></div> : null}
 										{isArticle && ["draft_saved", "awaiting_human_publish"].includes(target.delivery_status) ? <div className={styles.draftPublishFlow}>{confirmedDraftUrl ? <a className={styles.draftLink} href={confirmedDraftUrl} target="_blank" rel="noopener noreferrer">打开{target.display_name}草稿并人工发布 <span aria-hidden="true">↗</span></a> : <button type="button" onClick={() => openLegacyForAction(selected.id)}>查看草稿回读</button>}<details className={styles.publicationDetails}><summary>我已在平台发布</summary><div className={styles.compactForm}><input type="url" aria-label={`${target.display_name}公开文章地址`} value={sourceUrl} onChange={(event) => setSourceUrls((current) => ({ ...current, [target.id]: event.target.value }))} placeholder="粘贴发布后的公开文章地址" /><button type="button" disabled={!sourceUrl.trim()} onClick={() => run(() => onSubmitEvidence(selected.id, target.id, sourceUrl.trim()), "公开文章已核验，该平台目标已完成")}>核验并完成</button></div></details><small className={styles.draftNote}>{target.status_note}</small></div> : null}
-										{finalStep && !evidenceReady && selected.action_type !== "article" ? <div className={styles.compactForm}><input value={sourceUrl} onChange={(event) => setSourceUrls((current) => ({ ...current, [target.id]: event.target.value }))} placeholder="粘贴已上线的公开地址" /><button type="button" disabled={!sourceUrl.trim()} onClick={() => run(() => onSubmitEvidence(selected.id, target.id, sourceUrl.trim()), "所需完成证据已全部核验，可以推进最终状态")}>核验全部证据</button></div> : null}
+										{finalStep && !evidenceReady && selected.action_type !== "article" && (!approvalType || approved) ? <div className={styles.compactForm}><input value={sourceUrl} onChange={(event) => setSourceUrls((current) => ({ ...current, [target.id]: event.target.value }))} placeholder={selected.action_type === "analysis" ? "填写分析结论（至少 20 字）" : "粘贴已上线的公开地址"} /><button type="button" disabled={selected.action_type === "analysis" ? sourceUrl.trim().length < 20 : !sourceUrl.trim()} onClick={() => run(() => onSubmitEvidence(selected.id, target.id, sourceUrl.trim()), selected.action_type === "analysis" ? "分析结论已留证，行动已完成" : "所需完成证据已全部核验，可以推进最终状态")}>{selected.action_type === "analysis" ? "记录结论" : "核验全部证据"}</button></div> : null}
 										{!isArticle && next && (!approvalType || approved) && (!finalStep || evidenceReady) ? <button type="button" className={styles.primaryButton} onClick={() => run(() => onTransition(selected.id, target.id, next), `已进入：${statusLabel[next]}`)}>{targetCtaLabel[next] || `继续到“${statusLabel[next]}”`}</button> : null}
 										{!next ? <span className={styles.completeTag}>✓ 已完成并留证</span> : null}
 									</div>

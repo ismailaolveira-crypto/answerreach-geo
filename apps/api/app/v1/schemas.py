@@ -102,7 +102,7 @@ class WorkspaceUpdate(BaseModel):
 class WorkspaceIntegrationRead(BaseModel):
     workspace_id: int
     deepseek_api_key_configured: bool = False
-    article_sync_mcp_server_path: str | None = None
+    article_sync_mcp_server_configured: bool = False
     article_sync_mcp_token_configured: bool = False
     deepseek_updated_at: datetime | None = None
     article_sync_mcp_updated_at: datetime | None = None
@@ -110,7 +110,6 @@ class WorkspaceIntegrationRead(BaseModel):
 
 class WorkspaceIntegrationUpdate(BaseModel):
     deepseek_api_key: str | None = Field(default=None, max_length=500)
-    article_sync_mcp_server_path: str | None = Field(default=None, max_length=1000)
     article_sync_mcp_token: str | None = Field(default=None, max_length=1000)
 
 
@@ -765,10 +764,25 @@ class OfficialApiObservationJobStatus(BaseModel):
     error_message: str | None = None
 
 
+MAX_OFFICIAL_OBSERVATION_PROVIDERS = 5
+MAX_OFFICIAL_OBSERVATION_QUESTIONS = 10
+MAX_OFFICIAL_OBSERVATION_REPEATS = 100
+
+
 class OfficialApiObservationBatchCreate(BaseModel):
-    provider_ids: list[int] = Field(min_length=1, max_length=5)
-    question_plan_ids: list[int] = Field(min_length=1, max_length=5)
-    repeat_count: int = Field(default=1, ge=1, le=5)
+    provider_ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_OFFICIAL_OBSERVATION_PROVIDERS,
+    )
+    question_plan_ids: list[int] = Field(
+        min_length=1,
+        max_length=MAX_OFFICIAL_OBSERVATION_QUESTIONS,
+    )
+    repeat_count: int = Field(
+        default=1,
+        ge=1,
+        le=MAX_OFFICIAL_OBSERVATION_REPEATS,
+    )
 
     @model_validator(mode="after")
     def validate_unique_matrix(self):

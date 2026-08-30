@@ -702,6 +702,72 @@ class GeoAgentEvent(CleanRoomTimestamp, Base):
     detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class GeoAgentConversation(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_conversations_v1"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(160), nullable=False, default="新的 GEO 对话")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    runtime_key: Mapped[str] = mapped_column(String(50), nullable=False, default="local_codex")
+    model: Mapped[str | None] = mapped_column(String(120))
+    reasoning_effort: Mapped[str | None] = mapped_column(String(20))
+    external_thread_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    context_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class GeoAgentConversationMessage(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_conversation_messages_v1"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence", name="uq_geo_agent_conversation_message_sequence_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_agent_conversations_v1.id"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="completed", index=True)
+    structured_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    runtime_key: Mapped[str | None] = mapped_column(String(50))
+    model: Mapped[str | None] = mapped_column(String(120))
+    external_turn_id: Mapped[str | None] = mapped_column(String(160), index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("queue_jobs.id"), index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class GeoAgentConversationEvent(CleanRoomTimestamp, Base):
+    __tablename__ = "geo_agent_conversation_events_v1"
+    __table_args__ = (
+        UniqueConstraint("message_id", "sequence", name="uq_geo_agent_conversation_event_sequence_v1"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_workspaces_v1.id"), nullable=False, index=True
+    )
+    message_id: Mapped[int] = mapped_column(
+        ForeignKey("geo_agent_conversation_messages_v1.id"), nullable=False, index=True
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    stage: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+
+
 class GeoAgentArtifact(CleanRoomTimestamp, Base):
     __tablename__ = "geo_agent_artifacts_v1"
 

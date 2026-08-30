@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.models import Company, Competitor, LLMProvider, Project
 from app.models.cleanroom_v1 import GeoContentAsset, GeoContentBrief, GeoContentClaim, GeoWorkspace
 from app.services.llm_provider import get_search_provider
+from app.services.workspace_secrets import DEEPSEEK_API_KEY, get_workspace_secret
 
 
 ARTIFACT_ROOT = Path(__file__).resolve().parents[2] / "private_artifacts" / "content_generation"
@@ -210,7 +211,14 @@ def generate_content_asset(
         raise ValueError("Mock providers cannot create a real content draft")
     company, project, competitors = _company_project(db, workspace)
     prompt = build_generation_prompt(workspace, brief, platform_key=platform_key)
-    answer = get_search_provider(provider).answer(prompt, company, project, competitors)
+    workspace_api_key = (
+        get_workspace_secret(db, workspace.id, DEEPSEEK_API_KEY)
+        if provider.provider_type == "deepseek_web_search"
+        else None
+    )
+    answer = get_search_provider(provider, api_key_override=workspace_api_key).answer(
+        prompt, company, project, competitors
+    )
     raw = {
         "provider_id": provider.id,
         "provider_type": provider.provider_type,

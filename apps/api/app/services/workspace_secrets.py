@@ -32,6 +32,28 @@ def decrypt_secret(value: str) -> str:
         raise RuntimeError("workspace_secret_decrypt_failed") from exc
 
 
+def normalize_provider_auth_config(
+    incoming: dict | None,
+    *,
+    existing: dict | None = None,
+) -> dict:
+    """Encrypt a submitted Provider key and reject caller-supplied ciphertext."""
+
+    current = dict(existing or {})
+    submitted = dict(incoming or {})
+    submitted.pop("api_key_encrypted", None)
+    raw_key = submitted.pop("api_key", None)
+    current.update(submitted)
+    if isinstance(raw_key, str) and raw_key.strip() and raw_key != "***configured***":
+        current["api_key_encrypted"] = encrypt_secret(raw_key.strip())
+    current.pop("api_key", None)
+    if current.get("api_key_encrypted"):
+        current["api_key_configured"] = True
+    else:
+        current.pop("api_key_configured", None)
+    return current
+
+
 def get_workspace_secret(db: Session, workspace_id: int, key: str) -> str | None:
     row = db.scalar(
         select(GeoWorkspaceSecret).where(
@@ -67,9 +89,13 @@ def set_workspace_secret(
 
 
 def resolve_article_sync_credentials(db: Session, workspace_id: int) -> tuple[str | None, str | None]:
-    """Resolve the official MCP Server path and extension token."""
+    """Resolve the operator-owned MCP path and the workspace-owned token.
+
+    A workspace manager may rotate the bridge token, but cannot choose a local
+    executable path.  Executable selection is a deployment/operator boundary.
+    """
     settings = get_settings()
-    server_path = get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_SERVER_PATH) or settings.article_sync_mcp_server_path
+    server_path = settings.article_sync_mcp_server_path
     token = get_workspace_secret(db, workspace_id, ARTICLE_SYNC_MCP_TOKEN) or settings.article_sync_mcp_token
     return server_path, token
 

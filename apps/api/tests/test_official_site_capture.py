@@ -7,7 +7,12 @@ from app.services.official_site_capture import (
     OfficialSiteCapture,
     captured_visual_purpose,
 )
+from app.services.secure_official_browser import _install_network_policy
 from app.services.article_media import MAX_ARTICLE_VISUALS
+
+
+def public_resolver(_host: str, _port: int) -> list[str]:
+    return ["93.184.216.34"]
 
 
 class FakeRunner:
@@ -27,10 +32,10 @@ class FakeRunner:
 
     def __call__(self, arguments: list[str], _timeout: int) -> CommandResult:
         self.commands.append(arguments)
-        if arguments and arguments[0] == "playwright":
+        if arguments[1:3] == ["-m", "app.services.secure_official_browser"]:
             if not self.playwright_ok:
                 return CommandResult(stdout="", stderr="capture failed", returncode=1)
-            target = Path(arguments[-1])
+            target = Path(arguments[arguments.index("--output") + 1])
             self._write_valid_png(target)
             return CommandResult(stdout="", stderr="", returncode=0)
         if arguments[:3] == ["opencli", "profile", "list"]:
@@ -67,7 +72,7 @@ class FakeRunner:
 
 def test_capture_accepts_only_exact_official_host(tmp_path: Path) -> None:
     runner = FakeRunner()
-    outcome = OfficialSiteCapture(runner=runner).capture(
+    outcome = OfficialSiteCapture(runner=runner, resolver=public_resolver).capture(
         run_id=7,
         official_website="https://brand.example.com/",
         candidates=[
@@ -85,9 +90,30 @@ def test_capture_accepts_only_exact_official_host(tmp_path: Path) -> None:
     assert runner.commands == []
 
 
+def test_capture_requires_the_exact_official_origin(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    outcome = OfficialSiteCapture(runner=runner, resolver=public_resolver).capture(
+        run_id=7,
+        official_website="https://brand.example.com/",
+        candidates=[
+            {
+                "source_url": "http://brand.example.com:443/product",
+                "alt_text": "降级页面",
+                "purpose": "不应采集",
+                "recommended_platforms": ["wechat"],
+            }
+        ],
+        output_directory=tmp_path / "visuals",
+    )
+
+    assert outcome.status == "rejected"
+    assert outcome.reason == "no_official_domain_candidate"
+    assert runner.commands == []
+
+
 def test_capture_archives_png_with_isolated_chrome(tmp_path: Path) -> None:
     runner = FakeRunner()
-    outcome = OfficialSiteCapture(runner=runner).capture(
+    outcome = OfficialSiteCapture(runner=runner, resolver=public_resolver).capture(
         run_id=8,
         official_website="https://brand.example.com/",
         candidates=[
@@ -108,7 +134,13 @@ def test_capture_archives_png_with_isolated_chrome(tmp_path: Path) -> None:
     assert item.sha256
     assert item.size_bytes == item.path.stat().st_size
     assert item.capture_engine == "playwright_chrome"
-    assert runner.commands[0][0:2] == ["playwright", "screenshot"]
+    assert runner.commands[0][1:3] == ["-m", "app.services.secure_official_browser"]
+    assert runner.commands[0][runner.commands[0].index("--approved-host") + 1] == (
+        "brand.example.com"
+    )
+    assert runner.commands[0][runner.commands[0].index("--approved-address") + 1] == (
+        "93.184.216.34"
+    )
     assert not any(command[0] == "opencli" for command in runner.commands)
 
 
@@ -124,7 +156,7 @@ def test_capture_respects_safety_ceiling_without_forcing_a_target_count(tmp_path
         for index in range(MAX_ARTICLE_VISUALS + 2)
     ]
 
-    outcome = OfficialSiteCapture(runner=runner).capture(
+    outcome = OfficialSiteCapture(runner=runner, resolver=public_resolver).capture(
         run_id=11,
         official_website="https://brand.example.com/",
         candidates=candidates,
@@ -145,7 +177,9 @@ def test_captured_purpose_removes_pre_capture_disclaimer() -> None:
 
 
 def test_capture_persists_truthful_post_capture_purpose(tmp_path: Path) -> None:
-    outcome = OfficialSiteCapture(runner=FakeRunner()).capture(
+    outcome = OfficialSiteCapture(
+        runner=FakeRunner(), resolver=public_resolver
+    ).capture(
         run_id=10,
         official_website="https://brand.example.com/",
         candidates=[
@@ -162,9 +196,9 @@ def test_capture_persists_truthful_post_capture_purpose(tmp_path: Path) -> None:
     assert outcome.items[0].purpose == "已从官网真实采集，供内容审核与配图选择。"
 
 
-def test_capture_falls_back_to_connected_browser_and_closes(tmp_path: Path) -> None:
+def test_capture_never_falls_back_to_connected_user_browser(tmp_path: Path) -> None:
     runner = FakeRunner(playwright_ok=False)
-    outcome = OfficialSiteCapture(runner=runner).capture(
+    outcome = OfficialSiteCapture(runner=runner, resolver=public_resolver).capture(
         run_id=8,
         official_website="https://brand.example.com/",
         candidates=[
@@ -177,16 +211,16 @@ def test_capture_falls_back_to_connected_browser_and_closes(tmp_path: Path) -> N
         ],
         output_directory=tmp_path / "visuals",
     )
-    assert outcome.status == "captured"
-    assert outcome.items[0].capture_engine == "opencli_browser_bridge"
-    assert any("material-profile" in command for command in runner.commands)
-    assert any("--tab" in command and "page-1" in command for command in runner.commands)
-    assert runner.commands[-1][-1] == "close"
+    assert outcome.status == "unavailable"
+    assert outcome.reason == "isolated_browser_capture_failed"
+    assert outcome.items == []
+    assert not any(command[0] == "opencli" for command in runner.commands)
 
 
 def test_capture_rejects_blank_browser_page(tmp_path: Path) -> None:
     outcome = OfficialSiteCapture(
-        runner=FakeRunner(playwright_ok=False, empty_page=True)
+        runner=FakeRunner(playwright_ok=False, empty_page=True),
+        resolver=public_resolver,
     ).capture(
         run_id=9,
         official_website="https://brand.example.com/",
@@ -200,6 +234,80 @@ def test_capture_rejects_blank_browser_page(tmp_path: Path) -> None:
         ],
         output_directory=tmp_path / "visuals",
     )
-    assert outcome.status == "failed"
-    assert outcome.reason == "official_page_visual_empty"
+    assert outcome.status == "unavailable"
+    assert outcome.reason == "isolated_browser_capture_failed"
     assert outcome.items == []
+
+
+def test_capture_rejects_private_dns_before_starting_browser(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    outcome = OfficialSiteCapture(
+        runner=runner,
+        resolver=lambda _host, _port: ["127.0.0.1"],
+    ).capture(
+        run_id=12,
+        official_website="https://brand.example.com/",
+        candidates=[
+            {
+                "source_url": "https://brand.example.com/product",
+                "alt_text": "产品页",
+                "purpose": "审核配图",
+                "recommended_platforms": ["wechat"],
+            }
+        ],
+        output_directory=tmp_path / "visuals",
+    )
+
+    assert outcome.status == "rejected"
+    assert outcome.reason == "unsafe_official_target"
+    assert runner.commands == []
+
+
+def test_isolated_browser_policy_is_context_wide_and_blocks_websockets() -> None:
+    class FakeRequest:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    class FakeRoute:
+        def __init__(self, url: str) -> None:
+            self.request = FakeRequest(url)
+            self.action: str | None = None
+
+        def continue_(self) -> None:
+            self.action = "continued"
+
+        def abort(self, _reason: str) -> None:
+            self.action = "aborted"
+
+    class FakeSocket:
+        def __init__(self) -> None:
+            self.closed: tuple[int | None, str | None] | None = None
+
+        def close(self, *, code=None, reason=None) -> None:
+            self.closed = (code, reason)
+
+    class FakeContext:
+        route_handler = None
+        socket_handler = None
+
+        def route(self, pattern, handler) -> None:
+            assert pattern == "**/*"
+            self.route_handler = handler
+
+        def route_web_socket(self, pattern, handler) -> None:
+            assert pattern == "**/*"
+            self.socket_handler = handler
+
+    context = FakeContext()
+    _install_network_policy(context, host="brand.example.com", port=443, scheme="https")
+    assert context.route_handler is not None
+    assert context.socket_handler is not None
+    allowed = FakeRoute("https://brand.example.com/product")
+    blocked_popup = FakeRoute("http://127.0.0.1/admin")
+    context.route_handler(allowed)
+    context.route_handler(blocked_popup)
+    assert allowed.action == "continued"
+    assert blocked_popup.action == "aborted"
+    socket = FakeSocket()
+    context.socket_handler(socket)
+    assert socket.closed == (1008, "network policy")

@@ -5,7 +5,7 @@ import { getPublicDeliveryExportUrl, getPublicDeliveryPackage } from "@/lib/api"
 
 type PageProps = {
   params: Promise<{ token: string }>;
-  searchParams: Promise<{ confirmed?: string }>;
+  searchParams: Promise<{ confirmed?: string; confirmation_error?: string }>;
 };
 
 function statusLabel(status?: string | null) {
@@ -72,7 +72,10 @@ export default async function PublicDeliveryPackagePage({ params, searchParams }
         <section className="panel">
           <h2>复盘报告</h2>
           {queryParams.confirmed ? (
-            <p className="subtle">已收到阅读确认，感谢反馈。</p>
+            <div className="notice success">验收记录已保存，回到 GEO 工作台后可回读这条证据。</div>
+          ) : null}
+          {queryParams.confirmation_error ? (
+            <div className="notice warning">未能完成验收。请检查验收码和确认人，或联系发送方重新生成验收码。</div>
           ) : null}
           <div className="list">
             {packageData.deliverables.length === 0 ? (
@@ -99,16 +102,17 @@ export default async function PublicDeliveryPackagePage({ params, searchParams }
                         推荐率 {deltaPct(deltas.company_recommendation_rate_delta)}
                       </small>
                       {isAccepted ? (
-                        <p className="subtle">客户已确认阅读。</p>
+                        <p className="subtle">已通过专用验收码保存确认记录。</p>
                       ) : (
                         <form
                           className="archive-inline-form"
                           action={confirmPublicDeliveryAction.bind(null, token, item.placement.id)}
                         >
-                          <input name="actor_name" placeholder="确认人" />
+                          <input name="confirmation_token" placeholder="专用验收码" required minLength={20} autoComplete="one-time-code" />
+                          <input name="actor_name" placeholder="确认人姓名" required />
                           <input name="comment" placeholder="备注，可选" />
                           <SubmitButton className="button secondary" pendingText="确认中...">
-                            确认已阅读
+                            提交验收确认
                           </SubmitButton>
                         </form>
                       )}

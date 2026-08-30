@@ -7,10 +7,10 @@ import "./question-analysis.css";
 import "./question-analysis-selector.css";
 
 export const metadata: Metadata = {
-	title: "GEO 优化平台",
-	description: "多智能体协同的企业 GEO 优化服务系统",
+	title: "入答 AnswerReach｜企业 GEO 增长工作台",
+	description: "让品牌进入 AI 的答案。以真实证据驱动企业 GEO 洞察、行动与效果核验。",
 	icons: {
-		icon: "/favicon.ico",
+		icon: "/icon.svg",
 		shortcut: "/favicon.ico",
 	},
 };

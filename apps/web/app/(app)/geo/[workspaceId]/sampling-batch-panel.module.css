@@ -572,17 +572,39 @@
   cursor: default;
 }
 
-.stepper b {
+.stepper label {
   align-items: center;
-  animation: valueSet 180ms ease-out;
   border-left: 1px solid #e1e8f1;
   border-right: 1px solid #e1e8f1;
   display: flex;
-  font-size: 14px;
   justify-content: center;
 }
 
-.stepper b small {
+.stepper input {
+  appearance: textfield;
+  background: transparent;
+  border: 0;
+  color: var(--composer-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 760;
+  outline: 0;
+  padding: 0;
+  text-align: right;
+  width: 40px;
+}
+
+.stepper input::-webkit-inner-spin-button,
+.stepper input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.stepper label:focus-within {
+  box-shadow: inset 0 0 0 2px rgb(36 107 254 / 18%);
+}
+
+.stepper label small {
   color: #7d8b9e;
   font-size: 10px;
   font-weight: 650;
@@ -872,6 +894,7 @@
 .customQuestion input:focus-visible,
 .customQuestion button:focus-visible,
 .stepper button:focus-visible,
+.stepper input:focus-visible,
 .submit:focus-visible {
   outline: 2px solid var(--composer-blue);
   outline-offset: 2px;
@@ -942,7 +965,7 @@
   .customQuestion,
   .questionToggle i,
   .stepper button,
-  .stepper b,
+  .stepper label,
   .receipt,
   .total strong,
   .spectralRail,

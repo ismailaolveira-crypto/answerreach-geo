@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models import LLMProvider
+from app.services.workspace_secrets import normalize_provider_auth_config
 
 
 ARK_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
@@ -51,17 +52,17 @@ def upsert_ark_providers(api_key: str | None, kimi_model: str | None = None, act
             provider.api_base_url = ARK_BASE_URL
             provider.model_name = model_name
             provider.status = status
-            auth_config = dict(provider.auth_config or {})
-            if api_key:
-                auth_config["api_key"] = api_key
-            provider.auth_config = auth_config
+            provider.auth_config = normalize_provider_auth_config(
+                {"api_key": api_key} if api_key else {},
+                existing=provider.auth_config,
+            )
             touched.append(
                 {
                     "id": provider.id,
                     "name": provider.name,
                     "model_name": provider.model_name,
                     "status": provider.status,
-                    "api_key_configured": bool(provider.auth_config.get("api_key")),
+                    "api_key_configured": bool(provider.auth_config.get("api_key_encrypted")),
                 }
             )
         db.commit()

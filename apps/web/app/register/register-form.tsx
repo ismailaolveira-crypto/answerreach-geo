@@ -3,12 +3,14 @@
 import Link from "next/link";
 import { type FormEvent, type KeyboardEvent, useMemo, useRef, useState } from "react";
 
-type RegisterError = "exists" | "invalid" | "unavailable";
+type RegisterError = "exists" | "invalid" | "unavailable" | "throttled" | "disabled";
 
 const errorMessages: Record<RegisterError, string> = {
   exists: "该邮箱已经注册。你可以直接登录，或换一个邮箱创建工作区。",
   invalid: "账号信息没有通过校验，请检查邮箱、官网地址和密码后重试。",
-  unavailable: "账号服务暂时无法连接，请确认本地 API 已启动后重试。"
+  unavailable: "账号服务暂时无法连接，请确认本地 API 已启动后重试。",
+  throttled: "创建尝试过多，请稍后再试。",
+  disabled: "当前环境不开放自助注册，请联系工作区管理员发送邀请。"
 };
 
 export function RegisterForm({ initialError }: Readonly<{ initialError?: string }>) {
@@ -81,7 +83,7 @@ export function RegisterForm({ initialError }: Readonly<{ initialError?: string 
     <div className={`cq-register-card is-step-${step}`}>
       <div className="cq-register-heading">
         <div className="cq-register-heading-copy">
-          <div className="cq-register-brand"><i aria-hidden="true"><b /><b /><b /></i><span>春秋元泉</span></div>
+          <div className="cq-register-brand"><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><span><b>入答</b><small>AnswerReach</small></span></div>
           <h1>建立 GEO 观测空间</h1>
           <p>创建管理员身份，再定义企业与品牌边界。</p>
         </div>
@@ -129,7 +131,7 @@ export function RegisterForm({ initialError }: Readonly<{ initialError?: string 
           <legend className="cq-auth-sr-only">品牌工作区</legend>
           <div className="cq-register-field">
             <label htmlFor="register-company">公司名称</label>
-            <input id="register-company" name="company_name" autoComplete="organization" placeholder="例如：春秋元泉科技" maxLength={255} value={companyName} onChange={(event) => setCompanyName(event.target.value)} required />
+            <input id="register-company" name="company_name" autoComplete="organization" placeholder="例如：远景科技" maxLength={255} value={companyName} onChange={(event) => setCompanyName(event.target.value)} required />
           </div>
           <div className="cq-register-field">
             <label htmlFor="register-brand">品牌名称</label>

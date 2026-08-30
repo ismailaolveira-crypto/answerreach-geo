@@ -25,6 +25,15 @@ from app.v1.roi_csv_imports import batch_read, confirm_import, preflight_csv, te
 router = APIRouter(prefix="/v1", tags=["geo-roi-csv-imports-v1"])
 
 
+def _spreadsheet_safe_cell(value: object) -> object:
+    """Keep exported error reports inert in spreadsheet applications."""
+
+    if not isinstance(value, str):
+        return value
+    stripped = value.lstrip()
+    return f"'{value}" if stripped.startswith(("=", "+", "-", "@")) else value
+
+
 class CsvPreflightRequest(BaseModel):
     file_name: str = Field(min_length=1, max_length=255)
     csv_text: str = Field(min_length=1, max_length=2_000_000)
@@ -157,9 +166,12 @@ def download_business_metric_import_errors(
     for row in rows:
         for error in row.errors_json or [{"field": "row", "code": "invalid", "message": "需修复"}]:
             writer.writerow([
-                row.row_number, row.record_id or "", row.status,
-                error.get("field") or "row", error.get("code") or "invalid",
-                error.get("message") or "需修复",
+                row.row_number,
+                _spreadsheet_safe_cell(row.record_id or ""),
+                row.status,
+                _spreadsheet_safe_cell(error.get("field") or "row"),
+                _spreadsheet_safe_cell(error.get("code") or "invalid"),
+                _spreadsheet_safe_cell(error.get("message") or "需修复"),
             ])
     return Response(
         content="\ufeff" + output.getvalue(),

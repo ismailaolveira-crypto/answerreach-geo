@@ -51,6 +51,13 @@ def retry_delay_seconds(attempts: int) -> int:
     return min(30, 3 * (2 ** max(0, attempts - 1)))
 
 
+def user_visible_job_error(job: QueueJob) -> str:
+    error = str(job.error_message or "后台任务执行失败")
+    if error.startswith("Unsupported job type:"):
+        return "后台 Worker 版本过旧，请执行一键修复后重试"
+    return error
+
+
 def sync_observation_task_from_job(db: Session, job: QueueJob) -> None:
     """Mirror queue execution into the canonical observation ledger."""
 
@@ -134,6 +141,29 @@ def sync_observation_task_from_job(db: Session, job: QueueJob) -> None:
         if receipt is not None:
             db.add(receipt)
         db.add(batch)
+
+
+def sync_agent_conversation_message_from_job(db: Session, job: QueueJob) -> None:
+    """Keep the user-visible message aligned with the durable queue receipt."""
+
+    if job.job_type != "geo_agent.conversation":
+        return
+    from app.models.cleanroom_v1 import GeoAgentConversationMessage
+
+    message = db.scalar(
+        select(GeoAgentConversationMessage).where(
+            GeoAgentConversationMessage.job_id == job.id
+        )
+    )
+    if message is None:
+        return
+    if job.status == "failed":
+        message.status = "failed"
+        message.error_message = user_visible_job_error(job)
+    elif job.status == "pending" and message.status == "running":
+        message.status = "queued"
+        message.error_message = job.error_message
+    db.add(message)
 
 
 def enqueue_crawl_task_job(
@@ -486,6 +516,24 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             }
             job.status = "success" if result.status in {"awaiting_review", "cancelled"} else "failed"
             job.error_message = result.error_message
+        elif job.job_type == "geo_agent.conversation":
+            from app.models.cleanroom_v1 import GeoAgentConversationMessage
+            from app.v1.agent_workspace import execute_agent_workspace_message
+
+            payload_json = dict(job.payload_json or {})
+            message = db.get(
+                GeoAgentConversationMessage, int(payload_json["message_id"])
+            )
+            if message is None:
+                raise ValueError("Agent conversation message not found")
+            result = execute_agent_workspace_message(db, message)
+            job.payload_json = {
+                **payload_json,
+                "stage": "complete",
+                "message_status": result.status,
+            }
+            job.status = "success"
+            job.error_message = None
         elif job.job_type == "geo_opportunity.discover":
             from app.v1.opportunity_agent import execute_opportunity_analysis
 
@@ -561,6 +609,7 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
     job.finished_at = datetime.now(UTC) if job.status in {"success", "failed"} else None
     db.add(job)
     sync_observation_task_from_job(db, job)
+    sync_agent_conversation_message_from_job(db, job)
     db.commit()
     db.refresh(job)
     return job

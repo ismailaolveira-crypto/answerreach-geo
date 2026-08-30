@@ -26,7 +26,7 @@ def main() -> None:
         from app.db.session import Base, SessionLocal, engine
         from app.main import create_app
         from app.models import Company, LLMProvider, User
-        from app.services.auth import create_access_token, hash_password
+        from app.services.auth import hash_password, issue_access_token
         from app.services.llm_provider import ProviderAnswer
         from app.v1 import routes
 
@@ -58,6 +58,8 @@ def main() -> None:
             status="active",
         )
         db.add_all([user, provider])
+        db.flush()
+        access_token = issue_access_token(db, user)
         db.commit()
 
         class FakeAdapter:
@@ -87,7 +89,7 @@ def main() -> None:
         routes.get_search_provider = lambda _provider: FakeAdapter()
         routes.OFFICIAL_API_ARTIFACT_ROOT = root / "artifacts"
         client = TestClient(create_app())
-        headers = {"Authorization": f"Bearer {create_access_token(user.id)}"}
+        headers = {"Authorization": f"Bearer {access_token}"}
         workspace = client.post(
             "/api/v1/workspaces",
             headers=headers,

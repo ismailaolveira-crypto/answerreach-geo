@@ -12,10 +12,12 @@ from sqlalchemy.pool import StaticPool
 
 from app import models  # noqa: F401
 from app.api.deps import get_current_user
+from app.core.config import Settings
 from app.db.session import Base, get_db
 from app.main import create_app
 from app.models.collaboration import (
     GeoCollaborationAttachment,
+    GeoCollaborationDelivery,
     GeoCollaborationMessage,
     GeoCollaborationThread,
 )
@@ -30,6 +32,8 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.services.workspace_access import add_membership
+from app.services.office_collaboration import ProviderResult
+from app.v1 import collaboration_routes
 
 
 @pytest.fixture
@@ -365,6 +369,94 @@ def test_upload_rejects_unknown_type(collaboration_client: TestClient) -> None:
     assert response.status_code == 415
 
 
+def test_attachment_workspace_quota_blocks_before_second_file_is_written(
+    collaboration_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        collaboration_workspace_storage_quota_bytes=20,
+        collaboration_user_storage_quota_bytes=20,
+        collaboration_attachment_count_quota=10,
+        collaboration_upload_rate_limit_per_10_minutes=10,
+    )
+    monkeypatch.setattr(collaboration_routes, "get_settings", lambda: settings)
+    first = b"first-file-1"
+    created = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/attachments",
+        content=first,
+        headers={
+            "content-type": "text/plain",
+            "x-file-name": "first.txt",
+            "x-file-size": str(len(first)),
+        },
+    )
+    assert created.status_code == 201, created.text
+    second = b"second-file"
+    blocked = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/attachments",
+        content=second,
+        headers={
+            "content-type": "text/plain",
+            "x-file-name": "second.txt",
+            "x-file-size": str(len(second)),
+        },
+    )
+    assert blocked.status_code == 413
+    assert blocked.json()["detail"] == "工作区附件存储空间不足"
+    assert len(list(collaboration_routes.UPLOAD_ROOT.rglob("*.*"))) == 1
+
+
+def test_attachment_upload_rate_limit_is_persistent(
+    collaboration_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        collaboration_upload_rate_limit_per_10_minutes=1,
+    )
+    monkeypatch.setattr(collaboration_routes, "get_settings", lambda: settings)
+    first = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/attachments",
+        content=b"first",
+        headers={
+            "content-type": "text/plain",
+            "x-file-name": "first.txt",
+            "x-file-size": "5",
+        },
+    )
+    assert first.status_code == 201, first.text
+    blocked = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/attachments",
+        content=b"second",
+        headers={
+            "content-type": "text/plain",
+            "x-file-name": "second.txt",
+            "x-file-size": "6",
+        },
+    )
+    assert blocked.status_code == 429
+    assert int(blocked.headers["Retry-After"]) > 0
+
+
+def test_attachment_rejects_underdeclared_size_without_persisting_file(
+    collaboration_client: TestClient,
+) -> None:
+    before = set(collaboration_routes.UPLOAD_ROOT.rglob("*.*"))
+    rejected = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/attachments",
+        content=b"actual-file-content",
+        headers={
+            "content-type": "text/plain",
+            "x-file-name": "underdeclared.txt",
+            "x-file-size": "1",
+        },
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "文件大小与声明不一致"
+    assert set(collaboration_routes.UPLOAD_ROOT.rglob("*.*")) == before
+
+
 def test_channel_only_accepts_official_webhook_host(collaboration_client: TestClient) -> None:
     rejected = collaboration_client.put(
         "/api/v1/workspaces/1/collaboration/channels/wecom",
@@ -385,3 +477,125 @@ def test_channel_only_accepts_official_webhook_host(collaboration_client: TestCl
     )
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["status"] == "configured"
+
+    edited = collaboration_client.put(
+        "/api/v1/workspaces/1/collaboration/channels/wecom",
+        json={
+            "provider": "wecom",
+            "connection_mode": "webhook",
+            "display_name": "品牌增长组",
+            "deep_link_base_url": "https://geo.example.com",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["display_name"] == "品牌增长组"
+    assert edited.json()["configured_fields"] == ["webhook_url"]
+
+
+def test_app_channel_binding_preferences_preview_and_send_are_persisted(
+    collaboration_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    configured = collaboration_client.put(
+        "/api/v1/workspaces/1/collaboration/channels/feishu",
+        json={
+            "provider": "feishu",
+            "connection_mode": "app",
+            "app_id": "cli_test",
+            "app_secret": "private-value",
+            "display_name": "春秋元泉 GEO",
+            "deep_link_base_url": "https://geo.example.com",
+        },
+    )
+    assert configured.status_code == 200, configured.text
+    assert configured.json()["configured_fields"] == ["app_id", "app_secret"]
+    assert "private-value" not in configured.text
+
+    monkeypatch.setattr(
+        "app.v1.collaboration_routes.test_office_connection",
+        lambda *args, **kwargs: ProviderResult(True, None, {"authentication": "accepted"}),
+    )
+    tested = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/channels/feishu/test"
+    )
+    assert tested.status_code == 200, tested.text
+    assert tested.json()["status"] == "connected"
+    assert tested.json()["connection_mode"] == "app"
+
+    monkeypatch.setattr(
+        "app.v1.collaboration_routes.verify_office_member",
+        lambda *args, **kwargs: {
+            "external_user_id": "ou_verified",
+            "external_display_name": "李同学",
+        },
+    )
+    bound = collaboration_client.put(
+        "/api/v1/workspaces/1/collaboration/members/2/bindings/feishu",
+        json={"external_user_id": "ou_candidate", "external_id_type": "open_id"},
+    )
+    assert bound.status_code == 200, bound.text
+    assert bound.json()["bindings"][0]["status"] == "verified"
+    assert "ou_verified" not in bound.text
+
+    preference = collaboration_client.put(
+        "/api/v1/workspaces/1/collaboration/members/2/notification-preferences",
+        json={
+            "provider_settings": {"wecom": False, "feishu": True, "dingtalk": False},
+            "event_types": ["manual_summary", "assigned"],
+        },
+    )
+    assert preference.status_code == 200, preference.text
+    assert preference.json()["notification_preferences"]["provider_settings"]["feishu"] is True
+
+    preview_payload = {
+        "recipient_user_id": 2,
+        "context_type": "action",
+        "context_id": 1,
+        "event_type": "manual_summary",
+        "providers": ["feishu"],
+        "note": "请今天确认审核意见",
+    }
+    preview = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/notifications/preview",
+        json=preview_payload,
+    )
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["external_write_performed"] is False
+    assert preview.json()["providers"][0]["ready"] is True
+    assert "发布知乎对比证据文章" in preview.json()["message_preview"]
+
+    monkeypatch.setattr(
+        "app.v1.collaboration_routes.send_office_message",
+        lambda *args, **kwargs: ProviderResult(True, "om_test", {"message_id": "om_test"}),
+    )
+    sent = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/notifications/send",
+        json={**preview_payload, "idempotency_key": "office-send-0001"},
+    )
+    repeated = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/notifications/send",
+        json={**preview_payload, "idempotency_key": "office-send-0001"},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["results"][0]["status"] == "provider_accepted"
+    assert repeated.json()["results"][0]["id"] == sent.json()["results"][0]["id"]
+    assert "已读" in sent.json()["truth_note"]
+    with collaboration_client.app.state.collaboration_sessions() as db:
+        assert db.scalar(select(func.count(GeoCollaborationDelivery.id))) == 1
+
+
+def test_notification_is_blocked_when_member_preference_is_off(
+    collaboration_client: TestClient,
+) -> None:
+    response = collaboration_client.post(
+        "/api/v1/workspaces/1/collaboration/notifications/preview",
+        json={
+            "recipient_user_id": 2,
+            "context_type": "action",
+            "context_id": 1,
+            "event_type": "manual_summary",
+            "providers": ["wecom"],
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["providers"][0]["ready"] is False
+    assert response.json()["external_write_performed"] is False

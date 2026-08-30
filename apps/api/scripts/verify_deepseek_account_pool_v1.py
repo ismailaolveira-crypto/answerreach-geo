@@ -25,7 +25,7 @@ def main() -> None:
         from app.db.session import Base, SessionLocal, engine
         from app.main import create_app
         from app.models import Company, GeoBrowserAccount, User
-        from app.services.auth import create_access_token, hash_password
+        from app.services.auth import hash_password, issue_access_token
 
         Base.metadata.create_all(bind=engine)
         db = SessionLocal()
@@ -36,9 +36,12 @@ def main() -> None:
         user_a = User(name="A", email="pool-a@test.local", password_hash=hash_password("test"), role="company_admin", status="active", company_id=company_a.id)
         user_b = User(name="B", email="pool-b@test.local", password_hash=hash_password("test"), role="company_admin", status="active", company_id=company_b.id)
         db.add_all([user_a, user_b])
+        db.flush()
+        token_a = issue_access_token(db, user_a)
+        token_b = issue_access_token(db, user_b)
         db.commit()
-        headers_a = {"Authorization": f"Bearer {create_access_token(user_a.id)}"}
-        headers_b = {"Authorization": f"Bearer {create_access_token(user_b.id)}"}
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+        headers_b = {"Authorization": f"Bearer {token_b}"}
         client = TestClient(create_app())
 
         workspace = client.post("/api/v1/workspaces", headers=headers_a, json={"company_id": company_a.id, "slug": "pool-spring-yuan", "brand_name": "春秋元泉"}).json()

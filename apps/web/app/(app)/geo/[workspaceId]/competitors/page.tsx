@@ -101,7 +101,7 @@ export default async function CompetitorComparisonPage({ params, searchParams }:
 
   return <div className={`${styles.page} geo-competitors-page`}>
     <header className={styles.topbar}>
-      <Link className={styles.brand} href={`/geo/${workspaceId}`}><span aria-hidden="true">◈</span><b>春秋元泉 GEO</b></Link>
+      <Link className={styles.brand} href={`/geo/${workspaceId}`}><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 AnswerReach</b></Link>
       <nav className={styles.toplinks} aria-label="GEO 主导航">
         <Link href={`/geo/${workspaceId}`}>决策地图</Link>
         <Link aria-current="page" href={`/geo/${workspaceId}/competitors` as Route}>竞品对比</Link>

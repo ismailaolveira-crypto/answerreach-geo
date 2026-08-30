@@ -16,7 +16,43 @@ const lastChecked = document.querySelector("#lastChecked");
 const refreshButton = document.querySelector("#refreshButton");
 const managePlatformsButton = document.querySelector("#managePlatformsButton");
 const version = document.querySelector("#version");
+const approvalCard = document.querySelector("#approvalCard");
+const approvalOrigin = document.querySelector("#approvalOrigin");
+const approvalCount = document.querySelector("#approvalCount");
+const approvalTargets = document.querySelector("#approvalTargets");
+const approveApprovalButton = document.querySelector("#approveApprovalButton");
+const rejectApprovalButton = document.querySelector("#rejectApprovalButton");
 let visiblePlatforms = [];
+
+async function renderPendingApproval() {
+  const pending = await send("getPendingDraftApproval").catch(() => null);
+  approvalCard.hidden = !pending;
+  if (!pending) return;
+  approvalOrigin.textContent = `来自 ${pending.sourceOrigin} · 任务 #${pending.runId}`;
+  approvalCount.textContent = `${pending.targets.length} 个平台`;
+  approvalTargets.replaceChildren(...pending.targets.map((target) => {
+    const item = document.createElement("li");
+    const title = document.createElement("strong");
+    title.textContent = target.title || "未命名草稿";
+    const detail = document.createElement("small");
+    detail.textContent = `${target.platformKey} · ${target.accountId}`;
+    item.append(title, detail);
+    return item;
+  }));
+}
+
+async function decideApproval(method) {
+  approveApprovalButton.disabled = true;
+  rejectApprovalButton.disabled = true;
+  try {
+    await send(method);
+    await renderPendingApproval();
+    summaryText.textContent = method === "approvePendingDraft" ? "已批准，请回工作台重试写入" : "已拒绝本次草稿任务";
+  } finally {
+    approveApprovalButton.disabled = false;
+    rejectApprovalButton.disabled = false;
+  }
+}
 
 function send(method) {
   return new Promise((resolve, reject) => {
@@ -111,4 +147,6 @@ async function refresh() {
 version.textContent = `v${chrome.runtime.getManifest().version}`;
 refreshButton.addEventListener("click", refresh);
 managePlatformsButton.addEventListener("click", () => chrome.tabs.create({ url: chrome.runtime.getURL("platforms.html") }));
-refresh();
+approveApprovalButton.addEventListener("click", () => decideApproval("approvePendingDraft"));
+rejectApprovalButton.addEventListener("click", () => decideApproval("rejectPendingDraft"));
+Promise.all([refresh(), renderPendingApproval()]);

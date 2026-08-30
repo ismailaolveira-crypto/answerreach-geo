@@ -25,8 +25,9 @@ from app.models.workspace_access import (
     LocalAgentEnrollment,
     LocalAgentNode,
     WorkspaceInvitation,
+    WorkspaceMembership,
 )
-from app.services.auth import create_access_token, hash_password
+from app.services.auth import hash_password, issue_access_token
 from app.services.workspace_access import add_membership, token_digest
 from app.services.worker_heartbeat import register_worker
 from app.services.worker_service import (
@@ -89,12 +90,16 @@ def access_api() -> Generator[tuple[TestClient, sessionmaker[Session], dict], No
         )
         # Establish explicit membership mode on the second workspace too.
         add_membership(db, workspace_id=hidden_workspace.id, user_id=owner.id, role="owner")
+        owner_token = issue_access_token(db, owner)
+        non_member_token = issue_access_token(db, same_company_non_member)
         db.commit()
         ids = {
             "company": company.id,
             "other_company": other_company.id,
             "owner": owner.id,
+            "owner_token": owner_token,
             "non_member": same_company_non_member.id,
+            "non_member_token": non_member_token,
             "workspace": workspace.id,
             "hidden_workspace": hidden_workspace.id,
             "owner_membership": owner_membership.id,
@@ -113,23 +118,23 @@ def access_api() -> Generator[tuple[TestClient, sessionmaker[Session], dict], No
         engine.dispose()
 
 
-def headers(user_id: int) -> dict[str, str]:
-    return {"Authorization": f"Bearer {create_access_token(user_id)}"}
+def headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
 
 def test_same_company_non_member_cannot_list_or_open_workspace(access_api) -> None:
     client, _session, ids = access_api
-    response = client.get("/api/v1/workspaces", headers=headers(ids["non_member"]))
+    response = client.get("/api/v1/workspaces", headers=headers(ids["non_member_token"]))
     assert response.status_code == 200
     assert response.json() == []
     denied = client.get(
         f"/api/v1/workspaces/{ids['workspace']}/members",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
     )
     assert denied.status_code == 404
     cannot_create = client.post(
         "/api/v1/workspaces",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
         json={
             "company_id": ids["company"],
             "slug": "must-not-create",
@@ -155,12 +160,12 @@ def test_empty_workspace_never_falls_back_to_company_wide_access(access_api) -> 
         db.commit()
         workspace_id = empty_workspace.id
 
-    listed = client.get("/api/v1/workspaces", headers=headers(ids["non_member"]))
+    listed = client.get("/api/v1/workspaces", headers=headers(ids["non_member_token"]))
     assert listed.status_code == 200
     assert all(item["id"] != workspace_id for item in listed.json())
     denied = client.get(
         f"/api/v1/workspaces/{workspace_id}/members",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
     )
     assert denied.status_code == 404
 
@@ -195,7 +200,7 @@ def test_queue_worker_status_is_live_and_workspace_protected(access_api) -> None
 
     response = client.get(
         f"/api/v1/workspaces/{ids['workspace']}/queue-worker-status",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
     )
     assert response.status_code == 200, response.text
     assert response.json()["online"] is True
@@ -205,7 +210,7 @@ def test_queue_worker_status_is_live_and_workspace_protected(access_api) -> None
 
     denied = client.get(
         f"/api/v1/workspaces/{ids['workspace']}/queue-worker-status",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
     )
     assert denied.status_code == 404
 
@@ -268,7 +273,7 @@ def test_queue_worker_repair_requires_manager_and_records_result(
 
     response = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/queue-worker-repair",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
     )
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "online"
@@ -277,7 +282,7 @@ def test_queue_worker_repair_requires_manager_and_records_result(
 
     denied = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/queue-worker-repair",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
     )
     assert denied.status_code == 404
 
@@ -301,7 +306,7 @@ def test_offline_worker_rejects_batch_before_any_rows_are_created(access_api) ->
 
     response = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/observation-batches",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
         json={"provider_ids": [999], "question_plan_ids": [999], "repeat_count": 1},
     )
 
@@ -384,12 +389,12 @@ def test_global_worker_accepts_truthful_pending_batches_for_two_accounts_and_wor
 
     first = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/observation-batches",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
         json={"provider_ids": [provider_id], "question_plan_ids": [question_ids[0]], "repeat_count": 1},
     )
     second = client.post(
         f"/api/v1/workspaces/{ids['hidden_workspace']}/observation-batches",
-        headers=headers(ids["non_member"]),
+        headers=headers(ids["non_member_token"]),
         json={"provider_ids": [provider_id], "question_plan_ids": [question_ids[1]], "repeat_count": 1},
     )
 
@@ -428,11 +433,108 @@ def test_global_worker_accepts_truthful_pending_batches_for_two_accounts_and_wor
         )
 
 
+def test_observation_batch_capacity_blocks_repeated_queue_expansion(
+    access_api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, testing_session, ids = access_api
+    monkeypatch.setattr(
+        "app.v1.routes.get_settings",
+        lambda: Settings(
+            _env_file=None,
+            observation_active_batch_limit=1,
+            observation_pending_task_limit=10_000,
+            observation_daily_task_limit=25_000,
+            observation_batch_rate_limit_per_hour=10,
+        ),
+    )
+    now = datetime.now(UTC)
+    with testing_session() as db:
+        question = GeoQuestionPlan(
+            workspace_id=ids["workspace"],
+            question_text="企业级大模型治理平台怎么选？",
+            journey_stage="consideration",
+            role="technical_lead",
+            topic_tags=[],
+            importance=5,
+            is_brand_query=False,
+            active=True,
+            status="active",
+            source_type="manual",
+            source_evidence={},
+            template_variables=[],
+        )
+        provider = LLMProvider(
+            name="Capacity Test Search",
+            provider_type="bailian_qwen_responses",
+            api_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            model_name="qwen-plus",
+            auth_config={"api_key": "fixture-not-a-real-key"},
+            cost_rule={"platform_key": "qianwen"},
+            status="active",
+        )
+        db.add_all([question, provider])
+        db.flush()
+        db.add(
+            LLMProviderTestRun(
+                provider_id=provider.id,
+                actor_user_id=ids["owner"],
+                ok=True,
+                prompt_text="test-only readiness",
+                answer_summary="test-only",
+                latency_ms=1,
+            )
+        )
+        register_worker(
+            db,
+            worker_id="queue:test:capacity",
+            mode="continuous",
+            hostname="route-test",
+            process_id=405,
+            concurrency=8,
+            workspace_id=None,
+            observation_batch_id=None,
+            now=now,
+        )
+        db.commit()
+        provider_id = provider.id
+        question_id = question.id
+
+    payload = {
+        "provider_ids": [provider_id],
+        "question_plan_ids": [question_id],
+        "repeat_count": 1,
+    }
+    first = client.post(
+        f"/api/v1/workspaces/{ids['workspace']}/observation-batches",
+        headers=headers(ids["owner_token"]),
+        json=payload,
+    )
+    blocked = client.post(
+        f"/api/v1/workspaces/{ids['workspace']}/observation-batches",
+        headers=headers(ids["owner_token"]),
+        json=payload,
+    )
+    assert first.status_code == 202, first.text
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"] == "当前运行中的观测批次已达到上限"
+    listed = client.get(
+        f"/api/v1/workspaces/{ids['workspace']}/observation-batches?page=1&page_size=100",
+        headers=headers(ids["owner_token"]),
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["pagination"]["total"] == 1
+    assert listed.json()["items"][0]["pending"] == 1
+    with testing_session() as db:
+        assert db.query(GeoObservationBatch).count() == 1
+        assert db.query(GeoObservationTask).count() == 1
+
+
 def test_invitation_creates_member_once_and_stores_only_token_hash(access_api) -> None:
     client, testing_session, ids = access_api
     created = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/invitations",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
         json={"email": "invitee@example.com", "role": "reviewer", "expires_in_hours": 24},
     )
     assert created.status_code == 201, created.text
@@ -461,6 +563,26 @@ def test_invitation_creates_member_once_and_stores_only_token_hash(access_api) -
     joined_headers = {"Authorization": f"Bearer {accepted_payload['access_token']}"}
     workspaces = client.get("/api/v1/workspaces", headers=joined_headers).json()
     assert [item["id"] for item in workspaces] == [ids["workspace"]]
+    with testing_session() as db:
+        invited_user = db.scalar(select(User).where(User.email == "invitee@example.com"))
+        assert invited_user is not None
+        assert invited_user.company_id is None
+        assert invited_user.role == "viewer"
+        invited_membership = db.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == ids["workspace"],
+                WorkspaceMembership.user_id == invited_user.id,
+            )
+        )
+        assert invited_membership is not None
+        invited_membership_id = invited_membership.id
+
+    revoked = client.delete(
+        f"/api/v1/workspaces/{ids['workspace']}/members/{invited_membership_id}",
+        headers=headers(ids["owner_token"]),
+    )
+    assert revoked.status_code == 200
+    assert client.get("/api/v1/workspaces", headers=joined_headers).json() == []
     replay = client.post(
         "/api/auth/invitations/accept",
         json={
@@ -476,7 +598,7 @@ def test_expired_invitation_is_rejected(access_api) -> None:
     client, testing_session, ids = access_api
     created = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/invitations",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
         json={"email": "late@example.com", "role": "viewer", "expires_in_hours": 1},
     ).json()
     with testing_session() as db:
@@ -492,7 +614,7 @@ def test_last_owner_cannot_be_removed(access_api) -> None:
     client, _session, ids = access_api
     response = client.delete(
         f"/api/v1/workspaces/{ids['workspace']}/members/{ids['owner_membership']}",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
     )
     assert response.status_code == 409
 
@@ -517,27 +639,27 @@ def test_admin_cannot_promote_ownership_or_modify_an_owner(access_api) -> None:
             role="admin",
             invited_by_user_id=ids["owner"],
         )
+        admin_token = issue_access_token(db, admin)
         db.commit()
-        admin_id = admin.id
         admin_membership_id = admin_membership.id
 
     promote_self = client.patch(
         f"/api/v1/workspaces/{ids['workspace']}/members/{admin_membership_id}",
-        headers=headers(admin_id),
+        headers=headers(admin_token),
         json={"role": "owner"},
     )
     assert promote_self.status_code == 403
 
     demote_owner = client.patch(
         f"/api/v1/workspaces/{ids['workspace']}/members/{ids['owner_membership']}",
-        headers=headers(admin_id),
+        headers=headers(admin_token),
         json={"role": "admin"},
     )
     assert demote_owner.status_code == 403
 
     revoke_owner = client.delete(
         f"/api/v1/workspaces/{ids['workspace']}/members/{ids['owner_membership']}",
-        headers=headers(admin_id),
+        headers=headers(admin_token),
     )
     assert revoke_owner.status_code == 403
 
@@ -546,7 +668,7 @@ def test_local_agent_enrollment_heartbeat_and_secret_rejection(access_api) -> No
     client, testing_session, ids = access_api
     enrollment = client.post(
         f"/api/v1/workspaces/{ids['workspace']}/local-agent-enrollments",
-        headers=headers(ids["owner"]),
+        headers=headers(ids["owner_token"]),
     )
     assert enrollment.status_code == 201, enrollment.text
     enrollment_payload = enrollment.json()
@@ -653,6 +775,7 @@ def test_production_mode_requires_postgres_https_and_explicit_hosts() -> None:
             database_url="sqlite:///local.db",
             auto_create_tables=False,
             auth_secret="x" * 32,
+            internal_proxy_secret="p" * 32,
             cors_origins="https://geo.example.com",
             allowed_hosts="api.example.com",
         ).validate_deployment()
@@ -664,8 +787,10 @@ def test_production_mode_requires_postgres_https_and_explicit_hosts() -> None:
             database_url="postgresql+psycopg://user:pass@db/geo",
             auto_create_tables=False,
             auth_secret="x" * 32,
+            internal_proxy_secret="p" * 32,
             cors_origins="http://geo.example.com",
             allowed_hosts="api.example.com",
+            public_registration_enabled=False,
         ).validate_deployment()
     Settings(
         _env_file=None,
@@ -674,8 +799,10 @@ def test_production_mode_requires_postgres_https_and_explicit_hosts() -> None:
         database_url="postgresql+psycopg://user:pass@db/geo",
         auto_create_tables=False,
         auth_secret="x" * 32,
+        internal_proxy_secret="p" * 32,
         cors_origins="https://geo.example.com",
         allowed_hosts="api.example.com",
+        public_registration_enabled=False,
     ).validate_deployment()
     with pytest.raises(RuntimeError, match="PostgreSQL"):
         Settings(
@@ -685,8 +812,21 @@ def test_production_mode_requires_postgres_https_and_explicit_hosts() -> None:
             database_url="sqlite:///local.db",
             auto_create_tables=False,
             auth_secret="x" * 32,
+            internal_proxy_secret="p" * 32,
             cors_origins="https://geo.example.com",
             allowed_hosts="api.example.com",
+        ).validate_deployment()
+
+
+def test_lan_and_production_reject_public_registration() -> None:
+    with pytest.raises(RuntimeError, match="PUBLIC_REGISTRATION_ENABLED=false"):
+        Settings(
+            _env_file=None,
+            deployment_mode="lan",
+            database_url="postgresql+psycopg://user:pass@db/geo",
+            auth_secret="x" * 32,
+            internal_proxy_secret="p" * 32,
+            public_registration_enabled=True,
         ).validate_deployment()
 
 

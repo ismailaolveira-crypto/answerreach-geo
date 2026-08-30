@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { SESSION_COOKIE } from "@/lib/session-security";
+import { isTrustedFormOrigin, SESSION_COOKIE } from "@/lib/session-security";
+
+const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function secure(response: NextResponse): NextResponse {
   response.headers.set("X-Content-Type-Options", "nosniff");
@@ -34,6 +36,18 @@ export function middleware(request: NextRequest) {
     pathname.includes(".");
 
   if (isApi) {
+    if (UNSAFE_METHODS.has(request.method.toUpperCase())) {
+      const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
+      const trustedFetchSite = !fetchSite || fetchSite === "same-origin" || fetchSite === "none";
+      if (!trustedFetchSite || !isTrustedFormOrigin(request)) {
+        return secure(
+          NextResponse.json(
+            { detail: "请求来源无法验证，请从 GEO 工作台重新操作" },
+            { status: 403 }
+          )
+        );
+      }
+    }
     return secure(NextResponse.next());
   }
 

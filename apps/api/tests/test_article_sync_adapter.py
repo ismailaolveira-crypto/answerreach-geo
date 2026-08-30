@@ -2,11 +2,30 @@ import json
 
 import pytest
 
-from app.services.article_sync_adapter import StdioMcpArticleSyncAdapter
+from app.services.article_sync_adapter import StdioMcpArticleSyncAdapter, _child_environment
 
 
 def mcp_result(payload: object) -> dict:
     return {"content": [{"type": "text", "text": json.dumps(payload, ensure_ascii=False)}]}
+
+
+def test_mcp_child_receives_only_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PATH", "/safe/bin")
+    monkeypatch.setenv("HOME", "/safe/home")
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-reach-child")
+    monkeypatch.setenv("DATABASE_URL", "must-not-reach-child")
+    monkeypatch.setenv("AUTH_SECRET", "must-not-reach-child")
+
+    environment = _child_environment("workspace-bridge-token")
+
+    assert environment["PATH"] == "/safe/bin"
+    assert environment["HOME"] == "/safe/home"
+    assert environment["MCP_TOKEN"] == "workspace-bridge-token"
+    assert "OPENAI_API_KEY" not in environment
+    assert "DATABASE_URL" not in environment
+    assert "AUTH_SECRET" not in environment
 
 
 def test_probe_decodes_authenticated_platforms(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-"""Verify the 5 providers x 5 questions x 5 repeats orchestration contract."""
+"""Verify the 5 providers x 10 questions x 100 repeats orchestration contract."""
 
 import json
 import os
@@ -26,7 +26,7 @@ def main() -> None:
         from app.db.session import Base, SessionLocal, engine
         from app.main import create_app
         from app.models import Company, LLMProvider, LLMProviderTestRun, QueueJob, User
-        from app.services.auth import create_access_token, hash_password
+        from app.services.auth import hash_password, issue_access_token
         from app.v1 import routes
 
         Base.metadata.create_all(bind=engine)
@@ -56,15 +56,17 @@ def main() -> None:
                 LLMProviderTestRun(provider_id=provider.id, actor_user_id=user.id, ok=True, prompt_text="联网验证")
                 for provider in providers
             ])
+            access_token = issue_access_token(db, user)
             db.commit()
             provider_ids = [provider.id for provider in providers]
-            user_id = user.id
             company_id = company.id
 
+        projected_calls_by_provider = []
         routes.diagnose_provider = lambda _provider: {"ready": True, "supports_web_search": True}
-        routes.enforce_monthly_search_budget = lambda _db, _provider, projected_calls: {"projected_calls": projected_calls}
+        routes.workspace_worker_is_online = lambda _db, _workspace_id: True
+        routes.enforce_monthly_search_budget = lambda _db, provider, projected_calls: projected_calls_by_provider.append((provider.id, projected_calls))
         client = TestClient(create_app())
-        headers = {"Authorization": f"Bearer {create_access_token(user_id)}"}
+        headers = {"Authorization": f"Bearer {access_token}"}
         workspace = client.post("/api/v1/workspaces", headers=headers, json={
             "company_id": company_id,
             "slug": "batch-contract",
@@ -79,7 +81,7 @@ def main() -> None:
         assert empty_history.json()["items"] == []
         assert empty_history.json()["pagination"]["total"] == 0
         question_ids = []
-        for index in range(1, 6):
+        for index in range(1, 11):
             question = client.post(f"/api/v1/workspaces/{workspace['id']}/question-plans", headers=headers, json={
                 "question_text": f"批量观测采购问题 {index} 怎么选？",
                 "importance": 5,
@@ -90,16 +92,17 @@ def main() -> None:
         response = client.post(
             f"/api/v1/workspaces/{workspace['id']}/observation-batches",
             headers=headers,
-            json={"provider_ids": provider_ids, "question_plan_ids": question_ids, "repeat_count": 5},
+            json={"provider_ids": provider_ids, "question_plan_ids": question_ids, "repeat_count": 100},
         )
         response.raise_for_status()
         batch = response.json()
-        assert batch["total"] == 125
-        assert batch["pending"] == 125
+        assert batch["total"] == 5000
+        assert batch["pending"] == 5000
         assert len(batch["provider_groups"]) == 5
-        assert len(batch["question_groups"]) == 5
-        assert all(group["total"] == 25 for group in batch["provider_groups"])
-        assert all(group["total"] == 25 for group in batch["question_groups"])
+        assert len(batch["question_groups"]) == 10
+        assert all(group["total"] == 1000 for group in batch["provider_groups"])
+        assert all(group["total"] == 500 for group in batch["question_groups"])
+        assert projected_calls_by_provider == [(provider_id, 1000) for provider_id in provider_ids]
 
         history = client.get(
             f"/api/v1/workspaces/{workspace['id']}/observation-batches?page=1&page_size=1",
@@ -114,7 +117,7 @@ def main() -> None:
             headers=headers,
         )
         detail_page.raise_for_status()
-        assert detail_page.json()["task_pagination"] == {"page": 2, "page_size": 7, "total": 125, "total_pages": 18}
+        assert detail_page.json()["task_pagination"] == {"page": 2, "page_size": 7, "total": 5000, "total_pages": 715}
         assert len(detail_page.json()["tasks"]) == 7
 
         with SessionLocal() as db:
@@ -122,15 +125,17 @@ def main() -> None:
                 QueueJob.job_type == "geo_observation.collect",
             ).order_by(QueueJob.id)))
             child_count = len(children)
-            assert child_count == 125
+            assert child_count == 5000
             # The first scheduling wave must cover every selected platform,
             # rather than queueing all repeats for the first provider first.
             assert [int(job.payload_json["provider_id"]) for job in children[:5]] == provider_ids
-            children[0].status = "success"
-            children[1].status = "failed"
-            children[1].error_message = "联网渠道超时"
-            children[2].status = "running"
-            db.add_all(children[:3])
+            from app.models import GeoObservationTask
+            tasks = list(db.scalars(select(GeoObservationTask).order_by(GeoObservationTask.id).limit(3)))
+            tasks[0].status = "completed"
+            tasks[1].status = "failed"
+            tasks[1].error_detail = "联网渠道超时"
+            tasks[2].status = "running"
+            db.add_all(tasks)
             db.commit()
 
         mixed = client.get(
@@ -155,7 +160,7 @@ def main() -> None:
         print(json.dumps({
             "ok": True,
             "batch_id": batch["batch_id"],
-            "matrix": "5x5x5",
+            "matrix": "5x10x100",
             "total": batch["total"],
             "provider_groups": len(batch["provider_groups"]),
             "question_groups": len(batch["question_groups"]),

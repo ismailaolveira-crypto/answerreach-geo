@@ -796,7 +796,25 @@ class OpenClawRuntime:
         if kwargs.get("reasoning_effort"):
             command.extend(["--thinking", str(kwargs["reasoning_effort"])])
         started_at = monotonic()
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        allowed_env = (
+            "PATH",
+            "HOME",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL",
+            "XDG_CONFIG_HOME",
+            "OPENCLAW_CONFIG_PATH",
+            "OPENCLAW_STATE_DIR",
+        )
+        runtime_env = {key: os.environ[key] for key in allowed_env if os.environ.get(key)}
+        process = subprocess.Popen(
+            command,
+            cwd=str(task_directory),
+            env=runtime_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
         while True:
             try:
                 stdout, stderr = process.communicate(timeout=0.25)

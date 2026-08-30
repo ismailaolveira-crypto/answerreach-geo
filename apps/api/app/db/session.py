@@ -23,6 +23,7 @@ if settings.database_url.startswith("sqlite"):
     @event.listens_for(engine, "connect")
     def _configure_sqlite(dbapi_connection, _connection_record) -> None:
         cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()

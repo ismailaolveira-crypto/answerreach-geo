@@ -116,7 +116,7 @@ export default async function QuestionAnalysisPage({
 
 	return <div className="sy-page sy-page-analysis">
 		<header className="sy-topbar">
-			<Link className="sy-brand" href={`/geo/${workspaceId}`}><span>◈</span><b>春秋元泉 GEO</b></Link>
+			<Link className="sy-brand" href={`/geo/${workspaceId}`}><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><b>入答 AnswerReach</b></Link>
 			<nav className="sy-toplinks">
 				<Link href={`/geo/${workspaceId}`}>概览</Link>
 				<Link className="is-current" href={`/geo/${workspaceId}/questions`}>问题分析</Link>

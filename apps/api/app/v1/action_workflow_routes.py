@@ -84,6 +84,7 @@ REQUIRED_APPROVAL_BY_STATUS = {
     "awaiting_platform_review": "platform_draft",
     "awaiting_brand_legal_review": "brand_legal",
     "awaiting_technical_review": "technical",
+    "awaiting_analysis_review": "analysis",
 }
 
 REQUIRED_EVIDENCE_BY_ACTION = {
@@ -91,6 +92,7 @@ REQUIRED_EVIDENCE_BY_ACTION = {
     "official_site": {"same_domain_readback"},
     "structured_data": {"source_code", "schema_validation"},
     "third_party_source": {"external_publication"},
+    "analysis": {"analysis_report"},
 }
 
 
@@ -209,6 +211,14 @@ def _verify_evidence(
     target: GeoActionTarget,
     payload: ActionEvidenceCreate,
 ) -> tuple[str, dict]:
+    if payload.evidence_type == "analysis_report":
+        summary = str(payload.detail.get("summary") or "").strip()
+        if len(summary) < 20:
+            raise HTTPException(status_code=422, detail="请填写至少 20 个字的分析结论")
+        return "verified", {
+            **payload.detail,
+            "verification": {"method": "human_analysis_record.v1", "sha256": payload.sha256},
+        }
     if not payload.source_url:
         return "pending", {
             **payload.detail,
@@ -761,6 +771,13 @@ def submit_action_evidence(
     if superseded:
         superseded.verification_status = "superseded"
     if verification_status == "verified":
+        if action.action_type == "analysis" and not _latest_approved(
+            db,
+            action_id=action.id,
+            target_id=target.id,
+            approval_type="analysis",
+        ):
+            raise HTTPException(status_code=409, detail="分析结论审核通过后才能记录完成证据")
         target.verified_at = evidence.verified_at
         required = REQUIRED_EVIDENCE_BY_ACTION[action.action_type]
         if required.issubset(_verified_evidence_types(db, action.id, target.id)):

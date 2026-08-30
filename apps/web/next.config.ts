@@ -5,6 +5,7 @@ const configuredDistDir = process.env.GEO_NEXT_DIST_DIR?.trim();
 const nextConfig: NextConfig = {
   typedRoutes: true,
   devIndicators: false,
+  output: "standalone",
   // `next build` replaces the production output directory. Keep the local
   // development server in a separate directory so a verification build cannot
   // invalidate CSS and chunks that open browser sessions are still using.

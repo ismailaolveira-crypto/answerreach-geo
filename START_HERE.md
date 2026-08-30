@@ -50,12 +50,12 @@ Windows 若提示 WSL2 或虚拟化未开启，请先按 Docker Desktop 提示�
 - 证据卷：`chunqiu_yuanquan_geo_personal_artifacts`
 - macOS 本机配置与密钥：`~/.config/chunqiu-yuanquan-geo/.env.personal`
 - Windows 本机配置与密钥：`%LOCALAPPDATA%\ChunqiuYuanquanGEO\.env.personal`
-- macOS 备份：`~/.local/share/chunqiu-yuanquan-geo/backups`
-- Windows 备份：`%LOCALAPPDATA%\ChunqiuYuanquanGEO\backups`
+- macOS 加密备份：`~/.local/share/chunqiu-yuanquan-geo/backups`，独立密钥：`~/.config/chunqiu-yuanquan-geo/backup.key`
+- Windows 加密备份：`%LOCALAPPDATA%\ChunqiuYuanquanGEO\backups`，独立密钥：`%LOCALAPPDATA%\ChunqiuYuanquanGEO\backup.key`
 
-停止服务、重启 Docker Desktop、或将新版本解压到另一个目录，都不会改变上述固定数据卷和用户配置。更新前先运行备份入口，然后直接在新版本中启动；不需要复制密钥文件。
+停止服务、重启 Docker Desktop、或将新版本解压到另一个目录，都不会改变上述固定数据卷和用户配置。更新前先运行备份入口，然后直接在新版本中启动。日常更新不需要手动复制密钥，但做灾难恢复时必须同时拿到另行保管的 `backup.key`。
 
-不要运行 `docker compose down -v`。`-v` 会删除数据卷。备份目录中可能包含 Provider 配置与本机密钥，不得上传 GitHub 或转发。
+不要运行 `docker compose down -v`。`-v` 会删除数据卷。备份目录只保留认证加密的 `.gcm` 文件，但密文和 `backup.key` 仍不得上传 GitHub 或转发。
 
 ## 当前边界
 

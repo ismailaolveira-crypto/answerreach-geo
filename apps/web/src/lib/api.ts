@@ -1423,6 +1423,7 @@ async function apiFetch<T>(path: string, init?: RequestInit & { token?: string }
     throw new Error(`API request failed: ${res.status} ${res.statusText}${detail ? ` - ${detail}` : ""}`);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -1435,6 +1436,10 @@ export async function loginUser(payload: { email: string; password: string }) {
     method: "POST",
     body: JSON.stringify(payload)
   });
+}
+
+export async function logoutUser() {
+  return apiFetch<void>("/api/auth/logout", { method: "POST" });
 }
 
 export async function registerUser(payload: { name: string; email: string; password: string; role?: string }) {
@@ -2343,6 +2348,7 @@ export type DeliveryPackageShare = {
   expires_at?: string | null;
   created_by_user_id?: number | null;
   last_accessed_at?: string | null;
+  confirmation_token?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -2416,6 +2422,13 @@ export async function revokeDeliveryShare(projectId: string, shareId: number) {
   });
 }
 
+export async function rotateDeliveryConfirmationToken(projectId: string, shareId: number) {
+  return apiFetch<DeliveryPackageShare>(
+    `/api/projects/${projectId}/delivery-shares/${shareId}/confirmation-token`,
+    { method: "POST" }
+  );
+}
+
 export async function getDeliveryAccessLogs(projectId: string) {
   return apiFetch<DeliveryPackageAccessLog[]>(`/api/projects/${projectId}/delivery-shares/access-logs`);
 }
@@ -2427,7 +2440,7 @@ export async function getPublicDeliveryPackage(token: string) {
 export async function confirmPublicDeliveryReport(
   token: string,
   placementId: number,
-  payload: { actor_name?: string; comment?: string }
+  payload: { confirmation_token: string; actor_name: string; comment?: string }
 ) {
   return apiFetch<DeliveryPackageAccessLog>(
     `/api/public/delivery-packages/${token}/placements/${placementId}/confirm`,

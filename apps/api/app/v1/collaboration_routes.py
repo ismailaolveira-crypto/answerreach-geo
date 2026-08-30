@@ -4,15 +4,15 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 import re
+import shutil
 from typing import Literal
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, HttpUrl, model_validator
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, HttpUrl, SecretStr, model_validator
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -27,18 +27,35 @@ from app.models.cleanroom_v1 import (
     GeoEvidence,
     GeoOptimizationAction,
     GeoQuestionPlan,
+    GeoWorkspace,
 )
 from app.models.collaboration import (
     GeoCollaborationAttachment,
     GeoCollaborationChannel,
+    GeoCollaborationDelivery,
+    GeoCollaborationMemberBinding,
     GeoCollaborationMessage,
+    GeoCollaborationMention,
+    GeoCollaborationNotificationPreference,
     GeoCollaborationRead,
     GeoCollaborationThread,
 )
 from app.models.user import User
 from app.models.workspace_access import WorkspaceMembership
+from app.core.config import get_settings
+from app.services.auth import consume_security_rate_limit
 from app.services.workspace_access import require_workspace_access, require_workspace_manager
 from app.services.workspace_secrets import get_workspace_secret, set_workspace_secret
+from app.services.office_collaboration import (
+    CAPABILITIES,
+    PROVIDER_LABELS,
+    OfficeProviderError,
+    required_fields,
+    send_message as send_office_message,
+    test_connection as test_office_connection,
+    validate_configuration,
+    verify_member as verify_office_member,
+)
 from app.v1.action_workflow import TARGET_WORKFLOWS, append_event
 
 
@@ -47,11 +64,6 @@ router = APIRouter(prefix="/v1", tags=["collaboration-center"])
 CONTEXT_TYPES = {"action", "alert", "question", "evidence"}
 CHANNEL_PROVIDERS = {"wecom", "feishu", "dingtalk"}
 CHANNEL_LABELS = {"wecom": "企业微信", "feishu": "飞书", "dingtalk": "钉钉"}
-CHANNEL_HOSTS = {
-    "wecom": {"qyapi.weixin.qq.com"},
-    "feishu": {"open.feishu.cn"},
-    "dingtalk": {"oapi.dingtalk.com"},
-}
 ACTION_TYPE_LABELS = {
     "article": "发布平台文章",
     "official_site": "修改官网页面",
@@ -128,8 +140,44 @@ class MessageCreate(BaseModel):
 
 class ChannelConfigure(BaseModel):
     provider: Literal["wecom", "feishu", "dingtalk"]
-    webhook_url: HttpUrl
+    connection_mode: Literal["webhook", "app"] = "webhook"
+    webhook_url: HttpUrl | None = None
+    corp_id: str | None = Field(default=None, max_length=255)
+    app_id: str | None = Field(default=None, max_length=255)
+    app_key: str | None = Field(default=None, max_length=255)
+    agent_id: str | None = Field(default=None, max_length=80)
+    app_secret: SecretStr | None = None
     display_name: str | None = Field(default=None, max_length=120)
+    deep_link_base_url: HttpUrl | None = None
+
+
+class MemberBindingUpdate(BaseModel):
+    external_user_id: str = Field(min_length=1, max_length=255)
+    external_id_type: Literal["user_id", "open_id", "union_id"] = "user_id"
+
+
+class NotificationPreferenceUpdate(BaseModel):
+    provider_settings: dict[Literal["wecom", "feishu", "dingtalk"], bool]
+    event_types: list[
+        Literal["assigned", "due_soon", "approval", "blocked", "progress", "manual_summary"]
+    ] = Field(max_length=6)
+
+
+class NotificationPreviewRequest(BaseModel):
+    recipient_user_id: int = Field(gt=0)
+    context_type: Literal["action", "alert", "question", "evidence"]
+    context_id: int = Field(gt=0)
+    event_type: Literal[
+        "assigned", "due_soon", "approval", "blocked", "progress", "manual_summary"
+    ] = "manual_summary"
+    providers: list[Literal["wecom", "feishu", "dingtalk"]] = Field(
+        default_factory=list, max_length=3
+    )
+    note: str = Field(default="", max_length=500)
+
+
+class NotificationSendRequest(NotificationPreviewRequest):
+    idempotency_key: str = Field(min_length=8, max_length=80, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
 class WorkInfoUpdate(BaseModel):
@@ -251,7 +299,68 @@ def _members(db: Session, workspace_id: int, current_user: User) -> list[dict]:
                 "initial": (current_user.name or current_user.email or "U").strip()[:1].upper(),
             },
         )
+    bindings_by_user: dict[int, list[dict]] = {}
+    for binding in db.scalars(
+        select(GeoCollaborationMemberBinding).where(
+            GeoCollaborationMemberBinding.workspace_id == workspace_id
+        )
+    ):
+        bindings_by_user.setdefault(binding.user_id, []).append(
+            {
+                "provider": binding.provider,
+                "status": binding.status,
+                "external_id_type": binding.external_id_type,
+                "external_display_name": binding.external_display_name,
+                "verified_at": binding.verified_at,
+            }
+        )
+    preferences = {
+        row.user_id: row
+        for row in db.scalars(
+            select(GeoCollaborationNotificationPreference).where(
+                GeoCollaborationNotificationPreference.workspace_id == workspace_id
+            )
+        )
+    }
+    deliveries_by_user: dict[int, list[dict]] = {}
+    delivery_rows = list(
+        db.scalars(
+            select(GeoCollaborationDelivery)
+            .where(GeoCollaborationDelivery.workspace_id == workspace_id)
+            .order_by(GeoCollaborationDelivery.id.desc())
+            .limit(100)
+        )
+    )
+    for delivery in delivery_rows:
+        values = deliveries_by_user.setdefault(delivery.recipient_user_id, [])
+        if len(values) < 8:
+            values.append(_delivery_payload(delivery))
+    default_events = ["assigned", "due_soon", "approval", "blocked", "progress", "manual_summary"]
+    for member in members:
+        preference = preferences.get(member["id"])
+        member["bindings"] = bindings_by_user.get(member["id"], [])
+        member["notification_preferences"] = {
+            "provider_settings": dict(preference.provider_settings or {}) if preference else {},
+            "event_types": list(preference.event_types or []) if preference else default_events,
+        }
+        member["recent_deliveries"] = deliveries_by_user.get(member["id"], [])
     return members
+
+
+def _delivery_payload(row: GeoCollaborationDelivery) -> dict:
+    return {
+        "id": row.id,
+        "provider": row.provider,
+        "connection_mode": row.connection_mode,
+        "context_type": row.context_type,
+        "context_id": row.context_id,
+        "event_type": row.event_type,
+        "status": row.status,
+        "provider_message_ref": row.provider_message_ref,
+        "error_code": row.error_code,
+        "attempted_at": row.attempted_at,
+        "accepted_at": row.accepted_at,
+    }
 
 
 def _action_progress(db: Session, action: GeoOptimizationAction) -> tuple[int, int, int]:
@@ -310,19 +419,10 @@ def _thread_stats(
     current_user_id: int,
     user_names: dict[int, str],
 ) -> dict[int, dict]:
-    """Build conversation summaries in two queries instead of querying every row."""
+    """Build exact summaries with bounded SQL aggregates, never all-row materialization."""
     thread_ids = [thread.id for thread in threads.values()]
     if not thread_ids:
         return {}
-    reads = {
-        row.thread_id: row
-        for row in db.scalars(
-            select(GeoCollaborationRead).where(
-                GeoCollaborationRead.thread_id.in_(thread_ids),
-                GeoCollaborationRead.user_id == current_user_id,
-            )
-        )
-    }
     stats = {
         thread_id: {
             "message_count": 0,
@@ -333,16 +433,35 @@ def _thread_stats(
         }
         for thread_id in thread_ids
     }
-    messages = list(
-        db.scalars(
-            select(GeoCollaborationMessage)
-            .where(GeoCollaborationMessage.thread_id.in_(thread_ids))
-            .order_by(GeoCollaborationMessage.id.asc())
+    latest_ids = (
+        select(
+            GeoCollaborationMessage.thread_id.label("thread_id"),
+            func.max(GeoCollaborationMessage.id).label("message_id"),
+        )
+        .where(GeoCollaborationMessage.thread_id.in_(thread_ids))
+        .group_by(GeoCollaborationMessage.thread_id)
+        .subquery()
+    )
+    for thread_id, count in db.execute(
+        select(
+            GeoCollaborationMessage.thread_id,
+            func.count(GeoCollaborationMessage.id),
+        )
+        .where(GeoCollaborationMessage.thread_id.in_(thread_ids))
+        .group_by(GeoCollaborationMessage.thread_id)
+    ):
+        stats[int(thread_id)]["message_count"] = int(count or 0)
+    latest_messages = db.scalars(
+        select(GeoCollaborationMessage).join(
+            latest_ids,
+            and_(
+                latest_ids.c.thread_id == GeoCollaborationMessage.thread_id,
+                latest_ids.c.message_id == GeoCollaborationMessage.id,
+            ),
         )
     )
-    for message in messages:
+    for message in latest_messages:
         summary = stats[message.thread_id]
-        summary["message_count"] += 1
         summary["last_message_preview"] = (
             message.body.strip()
             or ("[附件]" if message.attachment_refs else "[消息]")
@@ -350,17 +469,45 @@ def _thread_stats(
         summary["last_message_author_name"] = user_names.get(
             message.author_user_id or 0, "系统"
         )
-        mentioned = current_user_id in (message.mention_user_ids or [])
-        summary["mentioned_current_user"] = (
-            summary["mentioned_current_user"] or mentioned
+    for thread_id, count in db.execute(
+        select(
+            GeoCollaborationMessage.thread_id,
+            func.count(GeoCollaborationMessage.id),
         )
-        read = reads.get(message.thread_id)
-        last_read_id = read.last_read_message_id if read else None
-        if (
-            message.author_user_id != current_user_id
-            and (last_read_id is None or message.id > last_read_id)
-        ):
-            summary["unread_count"] += 1
+        .outerjoin(
+            GeoCollaborationRead,
+            and_(
+                GeoCollaborationRead.thread_id == GeoCollaborationMessage.thread_id,
+                GeoCollaborationRead.user_id == current_user_id,
+            ),
+        )
+        .where(
+            GeoCollaborationMessage.thread_id.in_(thread_ids),
+            or_(
+                GeoCollaborationMessage.author_user_id.is_(None),
+                GeoCollaborationMessage.author_user_id != current_user_id,
+            ),
+            or_(
+                GeoCollaborationRead.id.is_(None),
+                GeoCollaborationRead.last_read_message_id.is_(None),
+                GeoCollaborationMessage.id > GeoCollaborationRead.last_read_message_id,
+            ),
+        )
+        .group_by(GeoCollaborationMessage.thread_id)
+    ):
+        stats[int(thread_id)]["unread_count"] = int(count or 0)
+    mentioned_threads = set(
+        db.scalars(
+            select(GeoCollaborationMention.thread_id)
+            .where(
+                GeoCollaborationMention.thread_id.in_(thread_ids),
+                GeoCollaborationMention.user_id == current_user_id,
+            )
+            .distinct()
+        )
+    )
+    for thread_id in mentioned_threads:
+        stats[int(thread_id)]["mentioned_current_user"] = True
     return stats
 
 
@@ -646,12 +793,40 @@ def _channels(db: Session, workspace_id: int) -> list[dict]:
             "label": CHANNEL_LABELS[provider],
             "status": configured[provider].status if provider in configured else "disconnected",
             "display_name": configured[provider].display_name if provider in configured else None,
+            "connection_mode": configured[provider].connection_mode if provider in configured else None,
+            "configured_fields": list(configured[provider].configured_fields or []) if provider in configured else [],
+            "capabilities": dict(configured[provider].capabilities or {}) if provider in configured else {},
+            "deep_link_base_url": configured[provider].deep_link_base_url if provider in configured else None,
             "configured_at": configured[provider].configured_at if provider in configured else None,
             "last_tested_at": configured[provider].last_tested_at if provider in configured else None,
             "last_error_code": configured[provider].last_error_code if provider in configured else None,
         }
         for provider in ("wecom", "feishu", "dingtalk")
     ]
+
+
+def _credential_key(provider: str, mode: str, field: str) -> str:
+    if mode == "webhook" and field == "webhook_url":
+        return f"collaboration_{provider}_webhook_url"
+    return f"collaboration_{provider}_{mode}_{field}"
+
+
+def _channel_credentials(
+    db: Session, workspace_id: int, provider: str, mode: str
+) -> dict[str, str]:
+    return {
+        field: value
+        for field in required_fields(provider, mode)
+        if (
+            value := get_workspace_secret(
+                db, workspace_id, _credential_key(provider, mode, field)
+            )
+        )
+    }
+
+
+def _office_http_error(exc: OfficeProviderError) -> HTTPException:
+    return HTTPException(status_code=exc.status_code, detail=exc.user_message)
 
 
 def _media_kind(mime_type: str) -> str:
@@ -748,6 +923,50 @@ def _safe_upload_path(row: GeoCollaborationAttachment) -> Path:
     return path
 
 
+def _attachment_usage(db: Session, *, workspace_id: int, user_id: int) -> tuple[int, int, int]:
+    active = GeoCollaborationAttachment.status != "deleted"
+    workspace_bytes, workspace_count = db.execute(
+        select(
+            func.coalesce(func.sum(GeoCollaborationAttachment.byte_size), 0),
+            func.count(GeoCollaborationAttachment.id),
+        ).where(GeoCollaborationAttachment.workspace_id == workspace_id, active)
+    ).one()
+    user_bytes = db.scalar(
+        select(func.coalesce(func.sum(GeoCollaborationAttachment.byte_size), 0)).where(
+            GeoCollaborationAttachment.workspace_id == workspace_id,
+            GeoCollaborationAttachment.uploader_user_id == user_id,
+            active,
+        )
+    )
+    return int(workspace_bytes or 0), int(user_bytes or 0), int(workspace_count or 0)
+
+
+def _enforce_attachment_capacity(
+    db: Session,
+    *,
+    workspace_id: int,
+    user_id: int,
+    reserved_bytes: int,
+) -> None:
+    settings = get_settings()
+    workspace_bytes, user_bytes, workspace_count = _attachment_usage(
+        db,
+        workspace_id=workspace_id,
+        user_id=user_id,
+    )
+    if workspace_count >= settings.collaboration_attachment_count_quota:
+        raise HTTPException(status_code=413, detail="工作区附件数量已达到上限")
+    if workspace_bytes + reserved_bytes > settings.collaboration_workspace_storage_quota_bytes:
+        raise HTTPException(status_code=413, detail="工作区附件存储空间不足")
+    if user_bytes + reserved_bytes > settings.collaboration_user_storage_quota_bytes:
+        raise HTTPException(status_code=413, detail="你的附件存储空间已达到上限")
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    free_bytes = shutil.disk_usage(UPLOAD_ROOT).free
+    safety_reserve = max(256 * 1024 * 1024, reserved_bytes * 2)
+    if free_bytes - reserved_bytes < safety_reserve:
+        raise HTTPException(status_code=507, detail="服务器可用存储空间不足")
+
+
 @router.post("/workspaces/{workspace_id}/collaboration/attachments", status_code=201)
 async def upload_collaboration_attachment(
     workspace_id: int,
@@ -763,6 +982,32 @@ async def upload_collaboration_attachment(
     limit = MEDIA_LIMITS[kind]
     if x_file_size is not None and x_file_size > limit:
         raise HTTPException(status_code=413, detail="文件超过允许大小")
+    if x_file_size == 0:
+        raise HTTPException(status_code=422, detail="不能上传空文件")
+    settings = get_settings()
+    retry_after = consume_security_rate_limit(
+        db,
+        scope="collaboration-upload",
+        identity=f"{workspace_id}:{user.id}",
+        limit=settings.collaboration_upload_rate_limit_per_10_minutes,
+        window=timedelta(minutes=10),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="附件上传过于频繁，请稍后重试",
+            headers={"Retry-After": str(retry_after)},
+        )
+    db.scalar(
+        select(GeoWorkspace).where(GeoWorkspace.id == workspace_id).with_for_update()
+    )
+    _enforce_attachment_capacity(
+        db,
+        workspace_id=workspace_id,
+        user_id=user.id,
+        reserved_bytes=x_file_size if x_file_size is not None else limit,
+    )
     original_name = Path(unquote(x_file_name)).name.strip()[:255]
     if not original_name:
         raise HTTPException(status_code=422, detail="文件名不能为空")
@@ -789,6 +1034,9 @@ async def upload_collaboration_attachment(
     if total == 0:
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail="不能上传空文件")
+    if x_file_size is not None and total != x_file_size:
+        target.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail="文件大小与声明不一致")
     if kind in {"image", "video"} and not _valid_media_signature(mime_type, bytes(header)):
         target.unlink(missing_ok=True)
         raise HTTPException(status_code=415, detail="文件内容与格式不一致")
@@ -1034,6 +1282,34 @@ def create_collaboration_message(
             "created_at": duplicate.created_at,
             "message": _message_payload(duplicate, users),
         }
+    settings = get_settings()
+    retry_after = consume_security_rate_limit(
+        db,
+        scope="collaboration-message",
+        identity=f"{workspace_id}:{user.id}",
+        limit=settings.collaboration_message_rate_limit_per_10_minutes,
+        window=timedelta(minutes=10),
+    )
+    db.commit()
+    if retry_after:
+        raise HTTPException(
+            status_code=429,
+            detail="消息发送过于频繁，请稍后重试",
+            headers={"Retry-After": str(retry_after)},
+        )
+    db.scalar(
+        select(GeoWorkspace).where(GeoWorkspace.id == workspace_id).with_for_update()
+    )
+    message_count = int(
+        db.scalar(
+            select(func.count(GeoCollaborationMessage.id)).where(
+                GeoCollaborationMessage.workspace_id == workspace_id
+            )
+        )
+        or 0
+    )
+    if message_count >= settings.collaboration_message_count_quota:
+        raise HTTPException(status_code=413, detail="工作区消息数量已达到上限，请先归档历史讨论")
     active_member_ids = set(
         db.scalars(
             select(WorkspaceMembership.user_id).where(
@@ -1087,6 +1363,15 @@ def create_collaboration_message(
     )
     db.add(message)
     db.flush()
+    for mentioned_user_id in mention_ids:
+        db.add(
+            GeoCollaborationMention(
+                workspace_id=workspace_id,
+                thread_id=thread.id,
+                message_id=message.id,
+                user_id=mentioned_user_id,
+            )
+        )
     for attachment in uploaded:
         attachment.message_id = message.id
         attachment.status = "attached"
@@ -1245,12 +1530,6 @@ def mark_collaboration_read(
     return {"thread_id": thread.id, "last_read_message_id": latest_id, "read_at": state.read_at}
 
 
-def _validate_channel_url(provider: str, value: str) -> None:
-    parsed = urlsplit(value)
-    if parsed.scheme != "https" or (parsed.hostname or "").lower() not in CHANNEL_HOSTS[provider]:
-        raise HTTPException(status_code=422, detail="请使用该平台官方 HTTPS 机器人地址")
-
-
 @router.put("/workspaces/{workspace_id}/collaboration/channels/{provider}")
 def configure_collaboration_channel(
     workspace_id: int,
@@ -1262,26 +1541,61 @@ def configure_collaboration_channel(
     require_workspace_manager(db, user, workspace_id)
     if provider not in CHANNEL_PROVIDERS or payload.provider != provider:
         raise HTTPException(status_code=422, detail="渠道类型不匹配")
-    webhook_url = str(payload.webhook_url)
-    _validate_channel_url(provider, webhook_url)
-    set_workspace_secret(
-        db,
-        workspace_id=workspace_id,
-        key=f"collaboration_{provider}_webhook_url",
-        value=webhook_url,
-        user_id=user.id,
-    )
     row = db.scalar(
         select(GeoCollaborationChannel).where(
             GeoCollaborationChannel.workspace_id == workspace_id,
             GeoCollaborationChannel.provider == provider,
         )
     )
+    raw_credentials = {
+        "webhook_url": str(payload.webhook_url) if payload.webhook_url else "",
+        "corp_id": payload.corp_id or "",
+        "app_id": payload.app_id or "",
+        "app_key": payload.app_key or "",
+        "agent_id": payload.agent_id or "",
+        "app_secret": payload.app_secret.get_secret_value() if payload.app_secret else "",
+    }
+    credentials = {
+        key: value.strip()
+        for key, value in raw_credentials.items()
+        if value and value.strip()
+    }
+    # Editing a verified connection must not force an administrator to paste its
+    # secret again. Only reuse encrypted values when the connection mode is
+    # unchanged; switching mode always requires that mode's complete credential set.
+    effective_credentials = dict(credentials)
+    if row is not None and row.connection_mode == payload.connection_mode:
+        stored_credentials = _channel_credentials(
+            db, workspace_id, provider, payload.connection_mode
+        )
+        effective_credentials = {**stored_credentials, **credentials}
+    try:
+        configured_fields = validate_configuration(
+            provider, payload.connection_mode, effective_credentials
+        )
+    except OfficeProviderError as exc:
+        raise _office_http_error(exc) from exc
+    for field in configured_fields:
+        if field not in credentials:
+            continue
+        set_workspace_secret(
+            db,
+            workspace_id=workspace_id,
+            key=_credential_key(provider, payload.connection_mode, field),
+            value=credentials[field],
+            user_id=user.id,
+        )
     if row is None:
         row = GeoCollaborationChannel(workspace_id=workspace_id, provider=provider)
         db.add(row)
     row.status = "configured"
     row.display_name = payload.display_name or CHANNEL_LABELS[provider]
+    row.connection_mode = payload.connection_mode
+    row.configured_fields = configured_fields
+    row.capabilities = CAPABILITIES[provider][payload.connection_mode]
+    row.deep_link_base_url = (
+        str(payload.deep_link_base_url).rstrip("/") if payload.deep_link_base_url else None
+    )
     row.configured_by_user_id = user.id
     row.configured_at = utcnow()
     row.last_error_code = None
@@ -1305,37 +1619,401 @@ def test_collaboration_channel(
             GeoCollaborationChannel.provider == provider,
         )
     )
-    webhook_url = get_workspace_secret(
-        db, workspace_id, f"collaboration_{provider}_webhook_url"
-    )
-    if row is None or not webhook_url:
-        raise HTTPException(status_code=409, detail="请先保存渠道机器人地址")
-    _validate_channel_url(provider, webhook_url)
-    content = "春秋元泉 GEO 协作渠道已完成连接测试。"
-    body = (
-        {"msg_type": "text", "content": {"text": content}}
-        if provider == "feishu"
-        else {"msgtype": "text", "text": {"content": content}}
-    )
+    if row is None:
+        raise HTTPException(status_code=409, detail="请先保存渠道配置")
+    credentials = _channel_credentials(db, workspace_id, provider, row.connection_mode)
     try:
-        response = httpx.post(webhook_url, json=body, timeout=8.0)
-        response.raise_for_status()
-        result = response.json()
-        success = (
-            result.get("StatusCode") == 0
-            if provider == "feishu"
-            else result.get("errcode") == 0
-        )
-        if not success:
-            raise RuntimeError("provider_rejected")
-    except Exception as exc:
+        test_office_connection(provider, row.connection_mode, credentials)
+    except OfficeProviderError as exc:
         row.status = "error"
         row.last_tested_at = utcnow()
-        row.last_error_code = type(exc).__name__
+        row.last_error_code = exc.code[:80]
         db.commit()
-        raise HTTPException(status_code=502, detail="官方渠道未确认测试消息") from exc
+        raise _office_http_error(exc) from exc
     row.status = "connected"
     row.last_tested_at = utcnow()
     row.last_error_code = None
     db.commit()
     return next(item for item in _channels(db, workspace_id) if item["provider"] == provider)
+
+
+def _active_member(db: Session, workspace_id: int, user_id: int) -> WorkspaceMembership:
+    membership = db.scalar(
+        select(WorkspaceMembership).where(
+            WorkspaceMembership.workspace_id == workspace_id,
+            WorkspaceMembership.user_id == user_id,
+            WorkspaceMembership.status == "active",
+        )
+    )
+    if membership is None:
+        raise HTTPException(status_code=404, detail="协作成员不存在")
+    return membership
+
+
+@router.put(
+    "/workspaces/{workspace_id}/collaboration/members/{member_id}/bindings/{provider}"
+)
+def bind_collaboration_member(
+    workspace_id: int,
+    member_id: int,
+    provider: str,
+    payload: MemberBindingUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_workspace_manager(db, user, workspace_id)
+    _active_member(db, workspace_id, member_id)
+    if provider not in CHANNEL_PROVIDERS:
+        raise HTTPException(status_code=422, detail="不支持的渠道")
+    channel = db.scalar(
+        select(GeoCollaborationChannel).where(
+            GeoCollaborationChannel.workspace_id == workspace_id,
+            GeoCollaborationChannel.provider == provider,
+        )
+    )
+    if channel is None or channel.status != "connected" or channel.connection_mode != "app":
+        raise HTTPException(status_code=409, detail="请先连接该平台的企业自建应用")
+    credentials = _channel_credentials(db, workspace_id, provider, "app")
+    try:
+        verified = verify_office_member(
+            provider,
+            credentials,
+            payload.external_user_id.strip(),
+            payload.external_id_type,
+        )
+    except OfficeProviderError as exc:
+        raise _office_http_error(exc) from exc
+    row = db.scalar(
+        select(GeoCollaborationMemberBinding).where(
+            GeoCollaborationMemberBinding.workspace_id == workspace_id,
+            GeoCollaborationMemberBinding.user_id == member_id,
+            GeoCollaborationMemberBinding.provider == provider,
+        )
+    )
+    if row is None:
+        row = GeoCollaborationMemberBinding(
+            workspace_id=workspace_id, user_id=member_id, provider=provider
+        )
+        db.add(row)
+    row.external_user_id = str(verified["external_user_id"])
+    row.external_id_type = payload.external_id_type
+    row.external_display_name = verified["external_display_name"]
+    row.status = "verified"
+    row.verified_at = utcnow()
+    row.verified_by_user_id = user.id
+    db.commit()
+    return next(
+        item
+        for item in _members(db, workspace_id, user)
+        if item["id"] == member_id
+    )
+
+
+@router.put(
+    "/workspaces/{workspace_id}/collaboration/members/{member_id}/notification-preferences"
+)
+def update_collaboration_notification_preferences(
+    workspace_id: int,
+    member_id: int,
+    payload: NotificationPreferenceUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_workspace_manager(db, user, workspace_id)
+    _active_member(db, workspace_id, member_id)
+    row = db.scalar(
+        select(GeoCollaborationNotificationPreference).where(
+            GeoCollaborationNotificationPreference.workspace_id == workspace_id,
+            GeoCollaborationNotificationPreference.user_id == member_id,
+        )
+    )
+    if row is None:
+        row = GeoCollaborationNotificationPreference(
+            workspace_id=workspace_id, user_id=member_id
+        )
+        db.add(row)
+    row.provider_settings = dict(payload.provider_settings)
+    row.event_types = list(dict.fromkeys(payload.event_types))
+    row.updated_by_user_id = user.id
+    db.commit()
+    return next(
+        item
+        for item in _members(db, workspace_id, user)
+        if item["id"] == member_id
+    )
+
+
+def _notification_snapshot(
+    db: Session, workspace_id: int, context_type: str, context_id: int, note: str
+) -> dict:
+    context = _context_or_404(db, workspace_id, context_type, context_id)
+    if context_type == "action":
+        progress, completed, total = _action_progress(db, context)
+        snapshot = {
+            "title": context.title,
+            "category": ACTION_TYPE_LABELS.get(context.action_type, "优化行动"),
+            "status": context.stage,
+            "progress": progress,
+            "summary": context.blocked_note or context.rationale or "",
+            "detail": f"{completed}/{total} 个交付对象" if total else f"{progress}% 进度",
+            "relative_url": f"/geo/{workspace_id}/actions?action_id={context.id}",
+        }
+    elif context_type == "alert":
+        snapshot = {
+            "title": context.title,
+            "category": "变化告警",
+            "status": context.status,
+            "progress": 100 if context.status == "resolved" else 0,
+            "summary": context.summary or "",
+            "detail": context.severity,
+            "relative_url": f"/geo/{workspace_id}/alerts",
+        }
+    elif context_type == "question":
+        snapshot = {
+            "title": context.question_text,
+            "category": "问题讨论",
+            "status": context.status,
+            "progress": 0,
+            "summary": context.source_reason or "",
+            "detail": f"重要性 {context.importance}/5",
+            "relative_url": f"/geo/{workspace_id}/questions/{context.id}",
+        }
+    else:
+        question = db.get(GeoQuestionPlan, context.question_plan_id)
+        snapshot = {
+            "title": question.question_text if question else f"观测结果 #{context.id}",
+            "category": f"观测洞察 · {context.model_label}",
+            "status": context.brand_status,
+            "progress": 100,
+            "summary": (context.answer_text or "")[:500],
+            "detail": f"{len(context.source_items or [])} 条引用来源",
+            "relative_url": f"/geo/{workspace_id}/evidence/{context.id}",
+        }
+    snapshot["note"] = note.strip()
+    return snapshot
+
+
+def _preference_for(
+    db: Session, workspace_id: int, user_id: int
+) -> GeoCollaborationNotificationPreference | None:
+    return db.scalar(
+        select(GeoCollaborationNotificationPreference).where(
+            GeoCollaborationNotificationPreference.workspace_id == workspace_id,
+            GeoCollaborationNotificationPreference.user_id == user_id,
+        )
+    )
+
+
+def _binding_for(
+    db: Session, workspace_id: int, user_id: int, provider: str
+) -> GeoCollaborationMemberBinding | None:
+    return db.scalar(
+        select(GeoCollaborationMemberBinding).where(
+            GeoCollaborationMemberBinding.workspace_id == workspace_id,
+            GeoCollaborationMemberBinding.user_id == user_id,
+            GeoCollaborationMemberBinding.provider == provider,
+            GeoCollaborationMemberBinding.status == "verified",
+        )
+    )
+
+
+def _notification_readiness(
+    db: Session,
+    workspace_id: int,
+    recipient_user_id: int,
+    event_type: str,
+    providers: list[str],
+) -> list[dict]:
+    channels = {
+        row.provider: row
+        for row in db.scalars(
+            select(GeoCollaborationChannel).where(
+                GeoCollaborationChannel.workspace_id == workspace_id
+            )
+        )
+    }
+    preference = _preference_for(db, workspace_id, recipient_user_id)
+    provider_settings = dict(preference.provider_settings or {}) if preference else {}
+    event_types = set(preference.event_types or []) if preference else set()
+    result = []
+    for provider in providers:
+        channel = channels.get(provider)
+        reason = None
+        binding = None
+        if channel is None or channel.status != "connected":
+            reason = "平台尚未连接"
+        elif not provider_settings.get(provider, False):
+            reason = "该成员已关闭此平台通知"
+        elif event_type not in event_types:
+            reason = "该成员已关闭此类通知"
+        elif channel.connection_mode == "app":
+            binding = _binding_for(db, workspace_id, recipient_user_id, provider)
+            if binding is None:
+                reason = "成员尚未绑定该平台账号"
+        result.append(
+            {
+                "provider": provider,
+                "label": PROVIDER_LABELS[provider],
+                "ready": reason is None,
+                "reason": reason,
+                "connection_mode": channel.connection_mode if channel else None,
+                "identity_verified": bool(binding) if channel and channel.connection_mode == "app" else None,
+                "status_fact": "发送后仅能确认平台是否接受请求",
+            }
+        )
+    return result
+
+
+def _message_text(snapshot: dict, deep_link_base_url: str | None) -> str:
+    lines = [
+        f"【{snapshot['category']}】{snapshot['title']}",
+        f"状态：{snapshot['status']} · {snapshot['progress']}%",
+    ]
+    if snapshot.get("detail"):
+        lines.append(str(snapshot["detail"]))
+    if snapshot.get("summary"):
+        lines.append(str(snapshot["summary"])[:300])
+    if snapshot.get("note"):
+        lines.append(f"补充：{snapshot['note']}")
+    if deep_link_base_url:
+        lines.append(f"在 GEO 查看详情：{deep_link_base_url}{snapshot['relative_url']}")
+    else:
+        lines.append("请在春秋元泉 GEO 工作区查看详细证据。")
+    return "\n".join(lines)
+
+
+@router.post("/workspaces/{workspace_id}/collaboration/notifications/preview")
+def preview_collaboration_notification(
+    workspace_id: int,
+    payload: NotificationPreviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_workspace_access(db, user, workspace_id)
+    _active_member(db, workspace_id, payload.recipient_user_id)
+    snapshot = _notification_snapshot(
+        db, workspace_id, payload.context_type, payload.context_id, payload.note
+    )
+    providers = list(dict.fromkeys(payload.providers or list(CHANNEL_PROVIDERS)))
+    readiness = _notification_readiness(
+        db, workspace_id, payload.recipient_user_id, payload.event_type, providers
+    )
+    return {
+        "recipient_user_id": payload.recipient_user_id,
+        "event_type": payload.event_type,
+        "snapshot": snapshot,
+        "providers": readiness,
+        "message_preview": _message_text(snapshot, None),
+        "external_write_performed": False,
+    }
+
+
+@router.post("/workspaces/{workspace_id}/collaboration/notifications/send")
+def send_collaboration_notification(
+    workspace_id: int,
+    payload: NotificationSendRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    require_workspace_access(db, user, workspace_id)
+    _active_member(db, workspace_id, payload.recipient_user_id)
+    snapshot = _notification_snapshot(
+        db, workspace_id, payload.context_type, payload.context_id, payload.note
+    )
+    providers = list(dict.fromkeys(payload.providers))
+    if not providers:
+        raise HTTPException(status_code=422, detail="至少选择一个通知平台")
+    readiness = _notification_readiness(
+        db, workspace_id, payload.recipient_user_id, payload.event_type, providers
+    )
+    blockers = [item for item in readiness if not item["ready"]]
+    if blockers:
+        detail = "；".join(f"{item['label']}：{item['reason']}" for item in blockers)
+        raise HTTPException(status_code=409, detail=detail)
+    settings = get_settings()
+    retry_after = consume_security_rate_limit(
+        db,
+        scope="collaboration-notification-sender",
+        identity=f"{workspace_id}:{user.id}:{payload.recipient_user_id}",
+        limit=settings.collaboration_notification_rate_limit_per_hour,
+        window=timedelta(hours=1),
+    )
+    workspace_retry_after = consume_security_rate_limit(
+        db,
+        scope="collaboration-notification-workspace",
+        identity=str(workspace_id),
+        limit=settings.collaboration_notification_daily_workspace_limit,
+        window=timedelta(days=1),
+    )
+    db.commit()
+    blocked_for = max(retry_after, workspace_retry_after)
+    if blocked_for:
+        raise HTTPException(
+            status_code=429,
+            detail="办公平台通知已达到发送上限，请稍后重试",
+            headers={"Retry-After": str(blocked_for)},
+        )
+    channels = {
+        row.provider: row
+        for row in db.scalars(
+            select(GeoCollaborationChannel).where(
+                GeoCollaborationChannel.workspace_id == workspace_id,
+                GeoCollaborationChannel.provider.in_(providers),
+            )
+        )
+    }
+    results = []
+    for provider in providers:
+        duplicate = db.scalar(
+            select(GeoCollaborationDelivery).where(
+                GeoCollaborationDelivery.workspace_id == workspace_id,
+                GeoCollaborationDelivery.provider == provider,
+                GeoCollaborationDelivery.idempotency_key == payload.idempotency_key,
+            )
+        )
+        if duplicate:
+            results.append(_delivery_payload(duplicate))
+            continue
+        channel = channels[provider]
+        binding = _binding_for(db, workspace_id, payload.recipient_user_id, provider)
+        row = GeoCollaborationDelivery(
+            workspace_id=workspace_id,
+            recipient_user_id=payload.recipient_user_id,
+            provider=provider,
+            connection_mode=channel.connection_mode,
+            context_type=payload.context_type,
+            context_id=payload.context_id,
+            event_type=payload.event_type,
+            status="sending",
+            message_snapshot=snapshot,
+            provider_response={},
+            idempotency_key=payload.idempotency_key,
+            requested_by_user_id=user.id,
+            attempted_at=utcnow(),
+        )
+        db.add(row)
+        db.flush()
+        try:
+            result = send_office_message(
+                provider,
+                channel.connection_mode,
+                _channel_credentials(db, workspace_id, provider, channel.connection_mode),
+                text=_message_text(snapshot, channel.deep_link_base_url),
+                external_user_id=binding.external_user_id if binding else None,
+                external_id_type=binding.external_id_type if binding else "user_id",
+            )
+            row.status = "provider_accepted"
+            row.provider_message_ref = result.provider_message_ref
+            row.provider_response = result.evidence
+            row.accepted_at = utcnow()
+        except OfficeProviderError as exc:
+            row.status = "failed"
+            row.error_code = exc.code[:120]
+            row.provider_response = {"message": exc.user_message}
+        db.commit()
+        results.append(_delivery_payload(row))
+    return {
+        "recipient_user_id": payload.recipient_user_id,
+        "results": results,
+        "truth_note": "provider_accepted 仅表示官方平台接受了请求，不代表成员已读。",
+    }

@@ -8,7 +8,7 @@ from app.models import User
 from app.schemas.common import APIMessage
 from app.schemas.user import UserCreate, UserRead, UserUpdate
 from app.services.audit import record_audit_log
-from app.services.auth import hash_password
+from app.services.auth import hash_password, revoke_user_sessions
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -118,6 +118,8 @@ def update_user(
         get_company_or_404(db, update_data["company_id"])
     if "password" in update_data:
         user.password_hash = hash_password(update_data.pop("password"))
+        user.credentials_version += 1
+        revoke_user_sessions(db, user.id)
     for field, value in update_data.items():
         setattr(user, field, value)
 
@@ -148,6 +150,8 @@ def deactivate_user(
     if actor.role != "super_admin" and user.role not in TENANT_CREATABLE_ROLES:
         raise HTTPException(status_code=403, detail="Company admin cannot deactivate this role")
     user.status = "inactive"
+    user.credentials_version += 1
+    revoke_user_sessions(db, user.id)
     record_audit_log(
         db,
         user=actor,

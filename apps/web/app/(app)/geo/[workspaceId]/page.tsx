@@ -386,7 +386,7 @@ async function DecisionMapContent({
 		) as Array<{ value?: string; text?: string }>;
 		const customQuestion = String(formData.get("custom_question") ?? "").trim();
 		const repeatCount = Math.min(
-			5,
+			100,
 			Math.max(1, Number(formData.get("repeat_count")) || 5),
 		);
 		try {
@@ -400,7 +400,7 @@ async function DecisionMapContent({
 			if (!providerIds.length)
 				throw new Error("请至少选择一个已经通过联网测试的模型");
 			const questionIds: number[] = [];
-			for (const item of selectedQuestionItems.slice(0, 5)) {
+			for (const item of selectedQuestionItems.slice(0, 10)) {
 				const id = Number(item.value);
 				if (
 					Number.isInteger(id) &&
@@ -418,11 +418,11 @@ async function DecisionMapContent({
 					);
 				}
 			}
-			if (customQuestion.length >= 4 && questionIds.length < 5)
+			if (customQuestion.length >= 4 && questionIds.length < 10)
 				questionIds.push(
 					(await createCleanroomQuestion(workspaceId, customQuestion)).id,
 				);
-			const uniqueQuestionIds = [...new Set(questionIds)].slice(0, 5);
+			const uniqueQuestionIds = [...new Set(questionIds)].slice(0, 10);
 			if (!uniqueQuestionIds.length)
 				throw new Error("请至少选择或输入一个有效采购问题");
 			const batch = await createOfficialProviderObservationBatch(workspaceId, {
@@ -475,8 +475,8 @@ async function DecisionMapContent({
 		<div className="sy-page">
 			<header className="sy-topbar">
 				<Link className="sy-brand" href={`/geo/${workspaceId}`}>
-					<span>◈</span>
-					<b>春秋元泉 GEO</b>
+					<img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" />
+					<b>入答 AnswerReach</b>
 				</Link>
 				<div className="sy-toplinks">
 					<Link href={`/geo/${workspaceId}/sources`}>信源地图</Link>

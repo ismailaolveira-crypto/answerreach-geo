@@ -50,12 +50,13 @@ import {
   getReviewQueue,
   getTargetQuestions,
   loginUser,
+  logoutUser,
   queueLLMProviderTest,
-  registerUser,
   retryCrawlTask,
   reviseArticleDraft,
   runDiagnostic,
   revokeDeliveryShare,
+  rotateDeliveryConfirmationToken,
   runProjectStageGoalAction,
   runProjectStageGoalReminders,
   runDueCrawlSchedules,
@@ -655,21 +656,9 @@ export async function loginAction(formData: FormData) {
   redirect("/");
 }
 
-export async function registerDemoUserAction(formData: FormData) {
-  const name = String(formData.get("name") ?? "Demo Admin");
-  const email = String(formData.get("email") ?? "demo@geo.local");
-  const password = String(formData.get("password") ?? "geo-demo-123");
-  await registerUser({ name, email, password, role: "super_admin" }).catch(async () => {
-    await registerUser({ name, email, password, role: "company_admin" }).catch(() => null);
-  });
-  const response = await loginUser({ email, password });
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, response.access_token, sessionCookieOptions());
-  redirect("/");
-}
-
 export async function logoutAction() {
   const cookieStore = await cookies();
+  await logoutUser().catch(() => undefined);
   cookieStore.delete(SESSION_COOKIE);
   redirect("/login");
 }
@@ -1958,12 +1947,25 @@ export async function revokeDeliveryShareAction(projectId: string, shareId: numb
   redirect(`/projects/${projectId}/delivery-package?revoked=${shareId}`);
 }
 
+export async function rotateDeliveryConfirmationTokenAction(projectId: string, shareId: number) {
+  await rotateDeliveryConfirmationToken(projectId, shareId);
+  revalidatePath(`/projects/${projectId}/delivery-package`);
+  redirect(`/projects/${projectId}/delivery-package?confirmation_rotated=${shareId}`);
+}
+
 export async function confirmPublicDeliveryAction(token: string, placementId: number, formData: FormData) {
-  await confirmPublicDeliveryReport(token, placementId, {
-    actor_name: String(formData.get("actor_name") ?? "") || undefined,
-    comment: String(formData.get("comment") ?? "") || undefined
-  });
+  let failed = false;
+  try {
+    await confirmPublicDeliveryReport(token, placementId, {
+      confirmation_token: String(formData.get("confirmation_token") ?? "").trim(),
+      actor_name: String(formData.get("actor_name") ?? "").trim(),
+      comment: String(formData.get("comment") ?? "").trim() || undefined
+    });
+  } catch {
+    failed = true;
+  }
   revalidatePath(`/share/delivery/${token}`);
+  if (failed) redirect(`/share/delivery/${token}?confirmation_error=${placementId}`);
   redirect(`/share/delivery/${token}?confirmed=${placementId}`);
 }
 

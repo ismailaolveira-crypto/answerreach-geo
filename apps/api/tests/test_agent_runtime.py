@@ -10,6 +10,7 @@ import pytest
 
 from app.services import agent_runtime
 from app.services.codex_agent_runtime import CodexRunInterrupted, CodexRuntimeUnavailable
+from app.v1 import routes
 from app.v1.schemas import AgentRuntimeRead
 
 
@@ -80,6 +81,23 @@ def test_runtime_catalog_diagnoses_in_parallel_and_keeps_order(monkeypatch) -> N
     diagnostics = agent_runtime.list_agent_runtimes()
 
     assert [item["runtime_key"] for item in diagnostics] == list(agent_runtime.RUNTIME_KEYS)
+
+
+def test_runtime_route_uses_parallel_catalog(monkeypatch) -> None:
+    expected = [{"runtime_key": key} for key in agent_runtime.RUNTIME_KEYS]
+    monkeypatch.setattr(routes, "workspace_or_404", lambda *_args: None)
+    monkeypatch.setattr(routes, "list_agent_runtimes", lambda: expected, raising=False)
+    monkeypatch.setattr(routes, "_agent_capacity", lambda *_args: (10, []))
+    monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(agent_run_timeout_seconds=900))
+    monkeypatch.setattr(
+        routes,
+        "_agent_runtime_diagnostic",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("不应串行诊断")),
+    )
+
+    result = routes.read_agent_runtimes(1, SimpleNamespace(), SimpleNamespace())
+
+    assert [item["runtime_key"] for item in result] == list(agent_runtime.RUNTIME_KEYS)
 
 
 def test_claude_diagnostic_reuses_local_cli_login(monkeypatch) -> None:

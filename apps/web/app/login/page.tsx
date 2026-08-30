@@ -5,6 +5,7 @@ export default async function LoginPage({
   searchParams
 }: Readonly<{ searchParams: Promise<{ expired?: string; error?: string }> }>) {
   const params = await searchParams;
+  const registrationEnabled = process.env.GEO_PUBLIC_REGISTRATION_ENABLED !== "false";
   return (
     <main className="cq-auth-page">
       <section className="cq-auth-intro">
@@ -16,7 +17,7 @@ export default async function LoginPage({
       <section className="cq-auth-panel-wrap">
         <div className="cq-auth-card">
           <div className="cq-auth-card-heading">
-            <div className="cq-auth-panel-brand"><i aria-hidden="true"><b /><b /><b /><b /></i><span>春秋元泉</span></div>
+            <div className="cq-auth-panel-brand"><img alt="" aria-hidden="true" src="/brand/answerreach-mark.svg" /><span><b>入答</b><small>AnswerReach</small></span></div>
             <h2>登录工作台</h2>
             <p>使用工作账号，继续你的 GEO 观测。</p>
           </div>
@@ -33,6 +34,10 @@ export default async function LoginPage({
             <div className="cq-login-notice" role="status">账号服务暂时无法连接，请确认本地 API 已启动。</div>
           ) : null}
 
+          {params.error === "throttled" ? (
+            <div className="cq-login-notice" role="status">登录尝试过多，请稍后再试。</div>
+          ) : null}
+
           <form action="/api/session/login" method="post" className="cq-login-form">
             <div>
               <label htmlFor="login-email">邮箱</label>
@@ -47,9 +52,11 @@ export default async function LoginPage({
             </button>
           </form>
 
-          <div className="cq-demo-form">
-            <Link href="/register">没有账号？创建你的 GEO 工作区 <span>↗</span></Link>
-          </div>
+          {registrationEnabled ? (
+            <div className="cq-demo-form">
+              <Link href="/register">没有账号？创建你的 GEO 工作区 <span>↗</span></Link>
+            </div>
+          ) : null}
         </div>
         <p className="cq-auth-footnote">仅限授权成员访问 · 数据与操作均保留审计记录</p>
       </section>

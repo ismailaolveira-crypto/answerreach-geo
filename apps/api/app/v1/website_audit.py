@@ -57,6 +57,15 @@ class BrandFactSourceVerificationError(ValueError):
 Resolver = Callable[[str, int], list[str]]
 
 
+@dataclass(frozen=True)
+class ResolvedPublicTarget:
+    url: str
+    host: str
+    port: int
+    addresses: tuple[str, ...]
+    authority: str
+
+
 @dataclass
 class _ParsedPage:
     title: str = ""
@@ -183,7 +192,7 @@ def _default_resolver(host: str, port: int) -> list[str]:
     return sorted({item[4][0] for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)})
 
 
-def _validate_public_url(url: str, *, resolver: Resolver) -> str:
+def _resolve_public_target(url: str, *, resolver: Resolver) -> ResolvedPublicTarget:
     parsed = urlsplit(url.strip())
     if parsed.scheme.lower() not in {"http", "https"}:
         raise WebsiteAuditTargetError("website_url_requires_http_or_https")
@@ -204,6 +213,7 @@ def _validate_public_url(url: str, *, resolver: Resolver) -> str:
         raise WebsiteAuditTargetError("website_url_dns_failed") from exc
     if not addresses:
         raise WebsiteAuditTargetError("website_url_dns_empty")
+    validated_addresses: list[str] = []
     for address in addresses:
         try:
             ip = ipaddress.ip_address(address)
@@ -211,8 +221,33 @@ def _validate_public_url(url: str, *, resolver: Resolver) -> str:
             raise WebsiteAuditTargetError("website_url_dns_invalid") from exc
         if not ip.is_global:
             raise WebsiteAuditTargetError("website_url_private_network_blocked")
+        validated_addresses.append(ip.compressed)
     normalized_path = parsed.path or "/"
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc, normalized_path, parsed.query, ""))
+    normalized = urlunsplit(
+        (parsed.scheme.lower(), parsed.netloc, normalized_path, parsed.query, "")
+    )
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    authority = host if port == default_port else f"{host}:{port}"
+    return ResolvedPublicTarget(
+        url=normalized,
+        host=host,
+        port=port,
+        addresses=tuple(sorted(set(validated_addresses))),
+        authority=authority,
+    )
+
+
+def _validate_public_url(url: str, *, resolver: Resolver) -> str:
+    return _resolve_public_target(url, resolver=resolver).url
+
+
+def _pinned_url(target: ResolvedPublicTarget, address: str) -> str:
+    parsed = urlsplit(target.url)
+    ip = ipaddress.ip_address(address)
+    host = f"[{ip.compressed}]" if ip.version == 6 else ip.compressed
+    default_port = 443 if parsed.scheme == "https" else 80
+    netloc = host if target.port == default_port else f"{host}:{target.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path or "/", parsed.query, ""))
 
 
 def _filtered_headers(headers: httpx.Headers) -> dict[str, str]:
@@ -248,8 +283,16 @@ def _fetch(
     current = url
     redirects: list[dict[str, Any]] = []
     for _ in range(max_redirects + 1):
-        current = _validate_public_url(current, resolver=resolver)
-        with client.stream("GET", current, follow_redirects=False) as response:
+        target = _resolve_public_target(current, resolver=resolver)
+        current = target.url
+        approved_address = target.addresses[0]
+        with client.stream(
+            "GET",
+            _pinned_url(target, approved_address),
+            headers={"Host": target.authority},
+            extensions={"sni_hostname": target.host},
+            follow_redirects=False,
+        ) as response:
             if response.status_code in {301, 302, 303, 307, 308}:
                 location = response.headers.get("location")
                 if not location:
@@ -298,6 +341,7 @@ def verify_publication_page(
         headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
         timeout=httpx.Timeout(12.0, connect=8.0),
         follow_redirects=False,
+        trust_env=False,
     )
     try:
         document = _fetch(
@@ -347,6 +391,7 @@ def verify_structured_data_page(
         headers={"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml"},
         timeout=httpx.Timeout(12.0, connect=8.0),
         follow_redirects=False,
+        trust_env=False,
     )
     try:
         document = _fetch(
