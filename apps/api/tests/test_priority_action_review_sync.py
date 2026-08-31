@@ -41,13 +41,13 @@ from app.models.job import QueueJob
 from app.models.user import User
 from app.services.workspace_access import add_membership
 from app.services.codex_agent_runtime import CodexRunTimedOut
-from app.v1 import agent_orchestration, routes
+from app.v1 import agent_orchestration, agent_run_routes, content_delivery_routes
 
 
 @pytest.fixture
 def review_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
     monkeypatch.setattr(
-        routes,
+        content_delivery_routes,
         "verify_publication_page",
         lambda url: {
             "status": "publicly_verified",
@@ -348,21 +348,21 @@ def test_review_gate_and_browser_client_draft_readback(
     )
     assert platform_homepage.status_code == 422
 
-    successful_verifier = routes.verify_publication_page
+    successful_verifier = content_delivery_routes.verify_publication_page
 
     def unavailable_page(_url: str) -> dict:
         from app.v1.website_audit import PublicationVerificationError
 
         raise PublicationVerificationError("public_page_request_failed")
 
-    monkeypatch.setattr(routes, "verify_publication_page", unavailable_page)
+    monkeypatch.setattr(content_delivery_routes, "verify_publication_page", unavailable_page)
     unreachable = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
         json={"public_url": "https://zhuanlan.zhihu.com/p/123456789"},
     )
     assert unreachable.status_code == 409
     assert "不会记录" in unreachable.json()["detail"]
-    monkeypatch.setattr(routes, "verify_publication_page", successful_verifier)
+    monkeypatch.setattr(content_delivery_routes, "verify_publication_page", successful_verifier)
 
     published = review_client.post(
         f"/api/v1/workspaces/1/distribution-runs/{run_id}/targets/{target_id}/human-publication",
@@ -602,7 +602,7 @@ def test_four_technical_platform_publication_urls_are_scoped(
     public_url: str,
 ) -> None:
     workspace = SimpleNamespace(website_url="https://brand.example.com/")
-    assert routes._validated_publication_url(workspace, platform_key, public_url) == public_url
+    assert content_delivery_routes._validated_publication_url(workspace, platform_key, public_url) == public_url
 
 
 def test_agent_result_requires_rule_sources_and_variants_for_every_platform() -> None:
@@ -1060,7 +1060,7 @@ def test_native_geo_article_assistant_uses_expiring_one_time_task(
     assert task["targets"][0]["title"] == "知乎版标题"
     assert "cookie" not in json.dumps(task).lower()
     with review_client.app.state.review_session_factory() as db:
-        run = db.get(routes.GeoDistributionRun, run_id)
+        run = db.get(content_delivery_routes.GeoDistributionRun, run_id)
         assert run is not None
         assert run.assistant_task_nonce_hash == sha256(task["task_token"].encode()).hexdigest()
         assert run.assistant_task_nonce_hash != task["task_token"]
@@ -1149,7 +1149,7 @@ def test_article_assistant_delivers_only_reviewed_media_with_task_token(
             }
         ]
         db.commit()
-    monkeypatch.setattr(routes, "AGENT_ARTIFACT_ROOT", root)
+    monkeypatch.setattr(content_delivery_routes, "AGENT_ARTIFACT_ROOT", root)
 
     approved = review_client.post(
         "/api/v1/workspaces/1/content-assets/1/reviews",
@@ -1227,17 +1227,17 @@ def test_article_assistant_platform_catalog_urls_are_scoped(
     draft_url: str,
     public_url: str,
 ) -> None:
-    assert routes._validated_draft_url(platform_key, draft_url) == draft_url
+    assert content_delivery_routes._validated_draft_url(platform_key, draft_url) == draft_url
     workspace = SimpleNamespace(website_url="https://brand.example.com/")
-    assert routes._validated_publication_url(workspace, platform_key, public_url) == public_url
+    assert content_delivery_routes._validated_publication_url(workspace, platform_key, public_url) == public_url
 
     with pytest.raises(HTTPException) as exc:
-        routes._validated_draft_url(platform_key, "https://attacker.example/draft/1")
+        content_delivery_routes._validated_draft_url(platform_key, "https://attacker.example/draft/1")
     assert exc.value.status_code == 422
 
 
 def test_article_assistant_platform_catalog_has_all_upstream_content_platforms() -> None:
-    assert routes.ARTICLE_ASSISTANT_PLATFORMS == {
+    assert content_delivery_routes.ARTICLE_ASSISTANT_PLATFORMS == {
         "wechat", "zhihu", "juejin", "51cto", "csdn", "bilibili", "baijiahao",
         "weibo", "yuque", "douban", "sohu", "xueqiu", "cnblogs", "oschina",
         "segmentfault", "imooc", "woshipm", "eastmoney",
@@ -1545,7 +1545,7 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
         db.commit()
 
     monkeypatch.setattr(
-        routes,
+        agent_run_routes,
         "diagnose_local_codex",
         lambda: {
             "runtime_key": "local_codex",
@@ -1641,17 +1641,17 @@ def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
         )
         db.commit()
 
-        limit, active = routes._agent_capacity(db, 1)
+        limit, active = agent_run_routes._agent_capacity(db, 1)
         assert limit == 10
         assert len(active) == 10
         with pytest.raises(HTTPException) as blocked:
-            routes._assert_agent_capacity(db, 1)
+            agent_run_routes._assert_agent_capacity(db, 1)
         assert blocked.value.status_code == 409
         assert "10/10" in str(blocked.value.detail)
 
         db.get(GeoAgentRun, 100).status = "completed"
         db.commit()
-        routes._assert_agent_capacity(db, 1)
+        agent_run_routes._assert_agent_capacity(db, 1)
 
 
 def test_worker_honors_cancellation_won_during_queue_handoff(review_client: TestClient) -> None:
@@ -1695,7 +1695,7 @@ def test_visual_artifact_content_is_scoped_and_integrity_checked(
             )
         )
         db.commit()
-    monkeypatch.setattr(routes, "AGENT_ARTIFACT_ROOT", root)
+    monkeypatch.setattr(agent_run_routes, "AGENT_ARTIFACT_ROOT", root)
 
     response = review_client.get("/api/v1/workspaces/1/agent-artifacts/1/content")
     assert response.status_code == 200

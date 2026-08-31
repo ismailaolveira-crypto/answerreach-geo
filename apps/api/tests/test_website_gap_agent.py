@@ -19,7 +19,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.services.codex_agent_runtime import CodexTurnResult
-from app.v1 import routes, website_gap_agent
+from app.v1 import agent_run_routes, routes, website_gap_agent
 from app.v1.schemas import WebsiteGapAnalysisRequest
 
 
@@ -299,11 +299,11 @@ def test_route_queues_selected_scope_with_skill_hash(monkeypatch) -> None:
     with Session(engine) as db:
         _seed(db)
         monkeypatch.setattr(
-            routes,
+            agent_run_routes,
             "diagnose_local_codex",
             lambda: {"ready": True, "default_model": "gpt-test", "available_models": ["gpt-test"]},
         )
-        monkeypatch.setattr(routes, "invalidate_local_codex_diagnostic_cache", lambda: None)
+        monkeypatch.setattr(agent_run_routes, "invalidate_local_codex_diagnostic_cache", lambda: None)
         monkeypatch.setattr(routes, "_assert_agent_capacity", lambda *_args, **_kwargs: None)
         user = SimpleNamespace(id=1, role="super_admin", company_id=1)
 

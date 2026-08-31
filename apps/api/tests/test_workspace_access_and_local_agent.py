@@ -244,7 +244,7 @@ def test_queue_worker_repair_requires_manager_and_records_result(
         message="Worker 已由系统守护。",
     )
     monkeypatch.setattr(
-        "app.v1.routes.repair_managed_worker_service",
+        "app.v1.observation_alert_routes.repair_managed_worker_service",
         lambda: ManagedWorkerRepairResult(
             attempted=True,
             action="restarted",
@@ -253,7 +253,7 @@ def test_queue_worker_repair_requires_manager_and_records_result(
         ),
     )
     monkeypatch.setattr(
-        "app.v1.routes.process_observation_schedules",
+        "app.v1.observation_alert_routes.process_observation_schedules",
         lambda _db, workspace_id: {
             "checked_at": now.isoformat(),
             "dispatched": 0,
@@ -262,7 +262,7 @@ def test_queue_worker_repair_requires_manager_and_records_result(
         },
     )
     monkeypatch.setattr(
-        "app.v1.routes.retry_worker_interrupted_schedule_runs",
+        "app.v1.observation_alert_routes.retry_worker_interrupted_schedule_runs",
         lambda _db, workspace_id, actor: {
             "checked_at": now.isoformat(),
             "retried": 1,
@@ -439,7 +439,7 @@ def test_observation_batch_capacity_blocks_repeated_queue_expansion(
 ) -> None:
     client, testing_session, ids = access_api
     monkeypatch.setattr(
-        "app.v1.routes.get_settings",
+            "app.v1.observation_routes.get_settings",
         lambda: Settings(
             _env_file=None,
             observation_active_batch_limit=1,

@@ -380,10 +380,13 @@ def run_stage_goal_flow(db: Session, project: Project, user: User) -> dict[str, 
         db=db,
         user=user,
     )
+    if not share.confirmation_token:
+        raise RuntimeError("Delivery share did not return its one-time confirmation token")
     access_log = confirm_public_delivery_report(
         share.token,
         placement_id,
         PublicDeliveryConfirmRequest(
+            confirmation_token=share.confirmation_token,
             actor_name="演示客户",
             comment="已确认收到 GEO MVP 闭环演示交付报告。",
         ),

@@ -31,6 +31,10 @@ else
   echo
 fi
 
+echo "Checking database migration revision (read-only)..."
+UV_CACHE_DIR=.uv-cache uv --directory apps/api run python -m app.db.migration_guard
+echo
+
 cleanup() {
   if [[ -n "${API_PID:-}" ]]; then
     kill "$API_PID" 2>/dev/null || true

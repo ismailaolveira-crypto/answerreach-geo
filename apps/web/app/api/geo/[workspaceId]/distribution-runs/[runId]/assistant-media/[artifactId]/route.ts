@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-
-const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { internalApiUrl } from "@/lib/api-config";
 
 export async function GET(
 	request: Request,
@@ -12,7 +11,7 @@ export async function GET(
 		return NextResponse.json({ detail: "Article assistant task credential is invalid" }, { status: 403 });
 	}
 	const upstream = new URL(
-		`${API_BASE_URL}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/distribution-runs/${encodeURIComponent(runId)}/assistant-media/${encodeURIComponent(artifactId)}`,
+		internalApiUrl(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/distribution-runs/${encodeURIComponent(runId)}/assistant-media/${encodeURIComponent(artifactId)}`),
 	);
 	upstream.searchParams.set("task_token", taskToken);
 	const response = await fetch(upstream, { cache: "no-store" });

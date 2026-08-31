@@ -1,7 +1,6 @@
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
@@ -9,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
-from app.models import Company, CrawlResult, CrawlTask, LLMProvider, LLMProviderTestRun, Project, QueueJob, UsageRecord, User
+from app.models import CrawlResult, CrawlTask, LLMProvider, LLMProviderTestRun, QueueJob, UsageRecord, User
 from app.schemas.common import APIMessage
 from app.schemas.search import (
     LLMProviderCreate,
@@ -24,9 +23,8 @@ from app.schemas.search import (
     QueueJobRead,
 )
 from app.services.audit import record_audit_log
-from app.services.alert import create_provider_failure_alert
-from app.services.llm_provider import diagnose_provider, get_provider_onboarding, get_search_provider
-from app.services.usage import enforce_monthly_search_budget, record_usage
+from app.services.llm_provider import diagnose_provider, get_provider_onboarding
+from app.services.provider_testing import run_provider_test
 from app.services.workspace_secrets import normalize_provider_auth_config
 
 router = APIRouter(prefix="/llm-providers", tags=["llm-providers"])
@@ -329,134 +327,7 @@ def test_provider(
     user: User = Depends(require_roles("super_admin")),
 ) -> LLMProviderTestResult:
     provider = get_provider_or_404(db, provider_id)
-    company = Company(
-        name=payload.company_name,
-        industry=payload.industry,
-        website_url="https://example.com",
-        brand_aliases=[],
-    )
-    project = Project(
-        company_id=0,
-        name="Provider smoke test",
-        target_industry=payload.industry,
-        target_audience="企业采购决策者",
-    )
-    started_at = perf_counter()
-    try:
-        enforce_monthly_search_budget(db, provider)
-        search_provider = get_search_provider(provider)
-        if hasattr(search_provider, "timeout_seconds"):
-            # Real provider-side Web Search regularly takes longer than 45 seconds.
-            # Respect the saved channel timeout while keeping a bounded server maximum.
-            search_provider.timeout_seconds = max(
-                30.0,
-                min(float(search_provider.timeout_seconds), 180.0),
-            )
-        answer = search_provider.answer(payload.prompt_text, company, project, [])
-        latency_ms = int((perf_counter() - started_at) * 1000)
-        test_run = LLMProviderTestRun(
-            provider_id=provider.id,
-            actor_user_id=user.id,
-            ok=True,
-            prompt_text=answer.prompt_text,
-            company_name=payload.company_name,
-            industry=payload.industry,
-            answer_summary=answer.answer_summary,
-            raw_answer_preview=answer.raw_answer[:1000],
-            latency_ms=latency_ms,
-        )
-        db.add(test_run)
-        db.flush()
-        record_usage(
-            db,
-            provider=provider,
-            action="provider.test",
-            prompt_text=payload.prompt_text,
-            completion_text=answer.raw_answer,
-            provider_test_run_id=test_run.id,
-            detail={"ok": True},
-        )
-        record_audit_log(
-            db,
-            user=user,
-            action="provider.test",
-            resource_type="llm_provider",
-            resource_id=provider.id,
-            detail={"ok": True, "prompt_text": payload.prompt_text, "test_run_id": test_run.id},
-        )
-        db.commit()
-        db.refresh(test_run)
-        return LLMProviderTestResult(
-            id=test_run.id,
-            provider_id=provider.id,
-            actor_user_id=user.id,
-            ok=True,
-            prompt_text=answer.prompt_text,
-            company_name=payload.company_name,
-            industry=payload.industry,
-            answer_summary=answer.answer_summary,
-            raw_answer_preview=answer.raw_answer[:1000],
-            latency_ms=latency_ms,
-            created_at=test_run.created_at,
-        )
-    except Exception as exc:
-        latency_ms = int((perf_counter() - started_at) * 1000)
-        test_run = LLMProviderTestRun(
-            provider_id=provider.id,
-            actor_user_id=user.id,
-            ok=False,
-            prompt_text=payload.prompt_text,
-            company_name=payload.company_name,
-            industry=payload.industry,
-            error_message=str(exc),
-            latency_ms=latency_ms,
-        )
-        db.add(test_run)
-        db.flush()
-        record_usage(
-            db,
-            provider=provider,
-            action="provider.test",
-            prompt_text=payload.prompt_text,
-            completion_text="",
-            provider_test_run_id=test_run.id,
-            detail={"ok": False, "error": str(exc)},
-        )
-        alert = create_provider_failure_alert(
-            db,
-            provider=provider,
-            provider_test_run_id=test_run.id,
-            prompt_text=payload.prompt_text,
-            error_message=str(exc),
-        )
-        record_audit_log(
-            db,
-            user=user,
-            action="provider.test",
-            resource_type="llm_provider",
-            resource_id=provider.id,
-            detail={
-                "ok": False,
-                "prompt_text": payload.prompt_text,
-                "error": str(exc),
-                "test_run_id": test_run.id,
-                "alert_id": alert.id,
-            },
-        )
-        db.commit()
-        db.refresh(test_run)
-        return LLMProviderTestResult(
-            id=test_run.id,
-            provider_id=provider.id,
-            actor_user_id=user.id,
-            ok=False,
-            prompt_text=payload.prompt_text,
-            company_name=payload.company_name,
-            industry=payload.industry,
-            error_message=str(exc),
-            latency_ms=latency_ms,
-            created_at=test_run.created_at,
-        )
+    return run_provider_test(db, provider=provider, payload=payload, user=user)
 
 
 @router.post("/{provider_id}/test-jobs", response_model=QueueJobRead, status_code=202)

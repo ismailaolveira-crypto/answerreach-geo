@@ -31,18 +31,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 		: {};
 }
 
-function statusText(node: LocalAgentNode) {
-	const health = asRecord(node.health);
-	const egolite = asRecord(health.egolite);
-	const codex = asRecord(health.codex);
-	const items = [
-		node.online ? "在线" : "离线",
-		egolite.running === true ? "EgoLite 运行中" : "EgoLite 未运行",
-		codex.logged_in === true ? "Codex 已登录" : "Codex 未确认登录",
-	];
-	return items.join(" · ");
-}
-
 function formatLastSeen(value: string) {
 	const date = new Date(value);
 	if (Number.isNaN(date.getTime())) return "尚未上报";

@@ -200,7 +200,6 @@ export default async function ProviderTestPage({ params, searchParams }: PagePro
   const updated = result.updated === "1";
   const createdFromTemplate = result.created === "template";
   const promptText = result.prompt ?? "网络安全培训公司哪家好？";
-  const isDeepSeek = provider.provider_type === "deepseek_web_search";
   const quickConnector = resolveQuickConnector(provider);
   const currentCatalog = catalogForProvider(provider);
   const quickPrompt = currentCatalog?.key === "qwen"

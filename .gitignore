@@ -44,6 +44,9 @@ coverage/
 *.tsbuildinfo
 work/
 outputs/
+output/
+playwright-report/
+test-results/
 apps/api/outputs/
 apps/api/demo_outputs/
 apps/api/private_artifacts/

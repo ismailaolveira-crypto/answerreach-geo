@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { BrandLogo } from "@/components/brand-logo";
 import { GeoGlobalScopeBar } from "@/components/geo-global-scope-bar";
 import type {
 	AgentRuntime,
@@ -29,9 +28,36 @@ import {
 	getGeoArticleAssistantApi,
 	type GeoArticleAssistantAccount,
 } from "@/lib/geo-article-assistant-bridge";
-import { capturedVisualPurpose } from "@/lib/captured-visual";
 import { markdownToSafeHtml } from "@/lib/markdown-html";
 import type { PriorityActionOpportunity } from "./priority-action-opportunities";
+import {
+	ActionStage,
+	Icon,
+	ModelBadge,
+	actionStage,
+	agentArtifactLabel,
+	agentExecutionLabel,
+	agentProgressStateLabels,
+	agentStageLabels,
+	articleHtmlWithVisuals,
+	formatAgentDuration,
+	formatArtifactSize,
+	formatEventTime,
+	formatReviewTime,
+	groupAgentEvents,
+	initialSelectedOpportunityId,
+	platformDisplayName,
+	platformOptions,
+	priorityLabel,
+	reasoningEffortLabels,
+	reviewVisualAssets,
+	runtimeConnectionLabel,
+	runtimeVersionLabel,
+	suggestedCarrier,
+	suggestedSources,
+	syncablePlatformKeys,
+	visualPlacementLabel,
+} from "./priority-actions-workbench-ui";
 
 type Props = {
 	workspaceId: string;
@@ -73,283 +99,6 @@ type Props = {
 	readWebsiteGapAnalysis: (jobId: number) => Promise<WebsiteGapAnalysisRun>;
 	readAgentRuntimes: () => Promise<AgentRuntime[]>;
 };
-
-const priorityLabel = { high: "高优先级", medium: "中优先级", low: "持续观察" } as const;
-const typeLabel = { visibility: "候选缺口", citation: "引用缺口", competitor: "竞品领先", website: "官网审计" } as const;
-const reasoningEffortLabels: Record<CodexReasoningEffort, string> = {
-	none: "关闭",
-	minimal: "极低",
-	low: "低",
-	medium: "中",
-	high: "高",
-	xhigh: "超高",
-	max: "最高",
-	ultra: "极致",
-};
-
-function agentExecutionLabel(model?: string | null, effort?: CodexReasoningEffort | null) {
-	return [model, effort ? `${reasoningEffortLabels[effort]}推理` : null].filter(Boolean).join(" · ");
-}
-
-function runtimeConnectionLabel(runtime: AgentRuntime, long = false) {
-	if (!runtime.ready) return "未配置";
-	if (runtime.connection_status === "warm") return long ? "常驻已连接" : "已连接";
-	if (runtime.connection_status === "configured") return "已配置";
-	return "已就绪";
-}
-
-type ReviewVisualAsset = {
-	artifactId: number;
-	altText: string;
-	purpose: string;
-	sourceHost: string;
-	sourceUrl: string;
-	sha256: string;
-	strategy: "generate" | "web_search";
-	decisionReason: string;
-	caption: string;
-	placement: string;
-	licenseName: string;
-	recommendedPlatforms: string[];
-};
-
-function reviewVisualAssets(variants: CleanroomPlatformVariant[]): ReviewVisualAsset[] {
-	const items = new Map<number, ReviewVisualAsset>();
-	for (const variant of variants) {
-		for (const manifest of variant.image_manifest) {
-			const artifactId = Number(manifest.artifact_id || 0);
-			const sourceUrl = typeof manifest.source_url === "string" ? manifest.source_url : "";
-			const generated = manifest.strategy === "generate";
-			if (artifactId < 1 || manifest.quality_gate !== "passed" || (!generated && !sourceUrl)) continue;
-			let sourceHost = generated ? "Codex Image2" : sourceUrl;
-			if (!generated) {
-				try {
-					sourceHost = new URL(sourceUrl).hostname;
-				} catch {
-					continue;
-				}
-			}
-			items.set(artifactId, {
-				artifactId,
-				altText: typeof manifest.alt_text === "string" ? manifest.alt_text : "官网归档素材",
-				purpose: capturedVisualPurpose(manifest.purpose),
-				sourceHost,
-				sourceUrl,
-				sha256: typeof manifest.sha256 === "string" ? manifest.sha256 : "",
-				strategy: manifest.strategy === "generate" ? "generate" : "web_search",
-				decisionReason: typeof manifest.decision_reason === "string" ? manifest.decision_reason : "已按内容类型自动选择配图方式",
-				caption: typeof manifest.caption === "string" ? manifest.caption : "",
-				placement: typeof manifest.placement === "string" ? manifest.placement : "after_intro",
-				licenseName: typeof manifest.license_name === "string" ? manifest.license_name : "",
-				recommendedPlatforms: Array.isArray(manifest.recommended_platforms) ? manifest.recommended_platforms.map(String) : [],
-			});
-		}
-	}
-	return [...items.values()];
-}
-
-function escapeInlineHtml(value: string) {
-	return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-}
-
-function articleHtmlWithVisuals(body: string, visuals: ReviewVisualAsset[], workspaceId: string) {
-	let html = markdownToSafeHtml(body);
-	for (const visual of visuals) {
-		const image = `<figure class="pa-article-visual"><img src="/api/geo/${encodeURIComponent(workspaceId)}/agent-artifacts/${visual.artifactId}/content" alt="${escapeInlineHtml(visual.altText)}" />${visual.caption ? `<figcaption>图注：${escapeInlineHtml(visual.caption)}</figcaption>` : ""}</figure>`;
-		if (visual.placement === "cover") {
-			html = `${image}${html}`;
-			continue;
-		}
-		const paragraphEnds = [...html.matchAll(/<\/p>/gi)];
-		const sectionMatch = visual.placement.match(/^after_section_(\d+)$/);
-		const requestedIndex = sectionMatch ? Math.max(0, Number(sectionMatch[1])) : 0;
-		const match = paragraphEnds[Math.min(requestedIndex, Math.max(0, paragraphEnds.length - 1))];
-		if (!match || match.index === undefined) {
-			html = `${html}${image}`;
-			continue;
-		}
-		const offset = match.index + match[0].length;
-		html = `${html.slice(0, offset)}${image}${html.slice(offset)}`;
-	}
-	return html;
-}
-
-function visualPlacementLabel(placement: string) {
-	if (placement === "cover") return "首图";
-	if (placement === "after_intro") return "导语后";
-	const sectionMatch = placement.match(/^after_section_(\d+)$/);
-	return sectionMatch ? `正文第 ${sectionMatch[1]} 节后` : "正文中";
-}
-
-function suggestedSources(type: PriorityActionOpportunity["type"]) {
-	if (type === "website") return ["服务端正文", "页面标题结构", "结构化数据"];
-	if (type === "citation") return ["关键指标释义", "应用场景说明", "行业解决方案"];
-	if (type === "competitor") return ["客户证言", "权威媒体报道", "第三方评测"];
-	return ["企业选型对比", "私有化部署说明", "真实客户案例"];
-}
-
-function suggestedCarrier(type: PriorityActionOpportunity["type"]) {
-	if (type === "website") return "官网服务端正文 + FAQ";
-	if (type === "citation") return "官网解决方案页 + 技术文章";
-	if (type === "competitor") return "深度回答 + 媒体稿件";
-	return "官网专题页 + 深度回答";
-}
-
-function modelBrand(label: string) {
-	const value = label.toLowerCase();
-	if (value.includes("deepseek")) return "deepseek";
-	if (value.includes("doubao") || value.includes("豆包")) return "doubao";
-	if (value.includes("qwen") || value.includes("qianwen") || value.includes("千问")) return "qwen";
-	if (value.includes("glm") || value.includes("智谱")) return "glm";
-	if (value.includes("kimi") || value.includes("moonshot")) return "kimi";
-	if (value.includes("hunyuan") || value.includes("混元")) return "hunyuan";
-	return null;
-}
-
-function ModelBadge({ label }: { label: string }) {
-	const brand = modelBrand(label);
-	return <span className="pa-model-badge">{brand ? <BrandLogo brand={brand} label={label} className="pa-model-logo" /> : <i>AI</i>}<b>{label}</b></span>;
-}
-
-function Icon({ name }: { name: "warning" | "trend" | "draft" | "check" | "chevron" | "arrow" | "quote" | "spark" | "calendar" | "filter" | "eye" }) {
-	const common = { fill: "none", stroke: "currentColor", strokeWidth: 1.8, strokeLinecap: "round" as const, strokeLinejoin: "round" as const };
-	return <svg viewBox="0 0 24 24" aria-hidden="true">
-		{name === "warning" && <><path {...common} d="M12 4 3.8 19h16.4L12 4Z" /><path {...common} d="M12 9v4.3M12 16.8h.01" /></>}
-		{name === "trend" && <><path {...common} d="M4 18V6M4 18h16" /><path {...common} d="m7 14 3.5-3.4 2.7 1.8L18 7" /></>}
-		{name === "draft" && <><path {...common} d="M6 3.8h8l4 4V20H6z" /><path {...common} d="M14 3.8V8h4M9 12h6M9 15.5h4" /></>}
-		{name === "check" && <path {...common} d="m5 12.5 4.2 4.2L19 7" />}
-		{name === "chevron" && <path {...common} d="m8 10 4 4 4-4" />}
-		{name === "arrow" && <path {...common} d="M5 12h13M13 7l5 5-5 5" />}
-		{name === "quote" && <path {...common} d="M7.8 10H4.5v3.2h3.1c0 2-1 3.6-2.8 4.5m12.7-7.7h-3.3v3.2h3.1c0 2-1 3.6-2.8 4.5" />}
-		{name === "spark" && <path {...common} d="m12 3 1.5 5.8L19 10.5l-5.5 1.7L12 18l-1.5-5.8L5 10.5l5.5-1.7z" />}
-		{name === "calendar" && <><rect {...common} x="4" y="5.5" width="16" height="14" rx="2" /><path {...common} d="M8 3.5v4M16 3.5v4M4 10h16" /></>}
-		{name === "filter" && <><path {...common} d="M4 6h16M7 12h10M10 18h4" /></>}
-		{name === "eye" && <><path {...common} d="M2.7 12s3.3-5.1 9.3-5.1 9.3 5.1 9.3 5.1-3.3 5.1-9.3 5.1S2.7 12 2.7 12Z" /><circle {...common} cx="12" cy="12" r="2" /></>}
-	</svg>;
-}
-
-function actionStage(action?: CleanroomAction) {
-	if (!action) return 0;
-	if (["verified", "closed"].includes(action.status)) return 4;
-	// Legacy actions marked in_progress only prove that an action was selected.
-	// Agent generation is driven exclusively by persisted GeoAgentRun records.
-	return 1;
-}
-
-function initialSelectedOpportunityId(opportunities: PriorityActionOpportunity[]) {
-	const latestAction = opportunities
-		.filter((item) => item.existingAction)
-		.sort((left, right) => (right.existingAction?.id ?? 0) - (left.existingAction?.id ?? 0))[0];
-	return latestAction?.id ?? opportunities[0]?.id ?? "";
-}
-
-function ActionStage({ index, label, state, children }: { index: number; label: string; state: "done" | "active" | "idle"; children?: React.ReactNode }) {
-	return <li className={`pa-stage is-${state}`}>
-		<span>{state === "done" ? <Icon name="check" /> : index}</span>
-		<div><header><b>{label}</b><small>{state === "done" ? "已完成" : state === "active" ? "进行中" : "待处理"}</small></header>{children}</div>
-	</li>;
-}
-
-const agentStageLabels: Record<string, string> = {
-	queued: "等待本机 worker",
-	preparing_context: "整理真实证据",
-	researching_platform: "查阅平台规则",
-	researching_brand: "核对品牌事实",
-	adapting_platforms: "生成平台差异稿",
-	awaiting_review: "等待人工审核",
-	resuming: "正在恢复原任务",
-	running: "正在执行",
-	cancelling: "正在中止",
-	cancelled: "已中止",
-	timed_out: "运行超时",
-	failed: "运行失败",
-};
-
-const platformOptions = [
-	{ key: "official_site", label: "春秋元泉官网", logo: "/brand/spring-yuan-workspace.svg" },
-	{ key: "zhihu", label: "知乎", logo: "/brand/zhihu.svg" },
-	{ key: "juejin", label: "掘金", logo: "/brand/platforms/juejin.png" },
-	{ key: "csdn", label: "CSDN", logo: "/brand/platforms/csdn.ico" },
-	{ key: "51cto", label: "51CTO", logo: "/brand/platforms/51cto.png" },
-	{ key: "wechat", label: "公众号", logo: "/brand/wechat.svg" },
-	{ key: "bilibili", label: "哔哩哔哩", logo: "/brand/platforms/bilibili.ico" },
-	{ key: "baijiahao", label: "百家号", logo: "/brand/platforms/baijiahao.ico" },
-	{ key: "weibo", label: "微博", logo: "/brand/platforms/weibo.ico" },
-	{ key: "yuque", label: "语雀", logo: "/brand/platforms/yuque.png" },
-	{ key: "douban", label: "豆瓣", logo: "/brand/platforms/douban.ico" },
-	{ key: "sohu", label: "搜狐号", logo: "/brand/platforms/sohu.ico" },
-	{ key: "xueqiu", label: "雪球", logo: "/brand/platforms/xueqiu.ico" },
-	{ key: "cnblogs", label: "博客园", logo: "/brand/platforms/cnblogs.ico" },
-	{ key: "oschina", label: "开源中国", logo: "/brand/platforms/oschina.ico" },
-	{ key: "segmentfault", label: "思否", logo: "/brand/platforms/segmentfault.png" },
-	{ key: "imooc", label: "慕课手记", logo: "/brand/platforms/imooc.ico" },
-	{ key: "woshipm", label: "人人都是产品经理", logo: "/brand/platforms/woshipm.ico" },
-	{ key: "eastmoney", label: "东方财富", logo: "/brand/platforms/eastmoney.ico" },
-] as const;
-
-const syncablePlatformKeys = new Set<string>(platformOptions.filter((platform) => platform.key !== "official_site").map((platform) => platform.key));
-
-function platformDisplayName(platformKey: string) {
-	return platformOptions.find((platform) => platform.key === platformKey)?.label || platformKey;
-}
-
-function runtimeVersionLabel(value?: string | null) {
-	if (!value) return "Codex 运行时已检测";
-	const desktopVersion = value.match(/Codex Desktop\/([^\s;]+)/i)?.[1];
-	if (desktopVersion) return `Codex Desktop ${desktopVersion}`;
-	const cliVersion = value.match(/codex(?:-cli)?\s+([^\s;]+)/i)?.[1];
-	return cliVersion ? `Codex CLI ${cliVersion}` : "Codex 运行时已检测";
-}
-
-function formatAgentDuration(totalSeconds: number) {
-	const seconds = Math.max(0, Math.floor(totalSeconds));
-	const minutes = Math.floor(seconds / 60);
-	const remainder = seconds % 60;
-	return minutes ? `${minutes} 分 ${remainder} 秒` : `${remainder} 秒`;
-}
-
-function formatArtifactSize(size: number) {
-	if (size < 1024) return `${size} B`;
-	if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-	return `${(size / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function agentArtifactLabel(kind: string) {
-	if (kind === "official_page_screenshot") return "官网截图";
-	if (kind === "invalid_page_screenshot") return "无效截图（未使用）";
-	if (kind === "structured_result") return "结构化结果";
-	return "Agent 工件";
-}
-
-function formatEventTime(value: string) {
-	return value.replace("T", " ").slice(11, 19);
-}
-
-function formatReviewTime(value?: string | null) {
-	if (!value) return "时间待回读";
-	return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
-function groupAgentEvents(events: CleanroomAgentEvent[]) {
-	return events.reduce<Array<{ key: number; stage: string; message: string; count: number; firstAt: string; lastAt: string }>>((groups, event) => {
-		const previous = groups.at(-1);
-		if (previous && previous.stage === event.stage && previous.message === event.message) {
-			previous.count += 1;
-			previous.lastAt = event.created_at;
-			return groups;
-		}
-		groups.push({ key: event.id, stage: event.stage, message: event.message, count: 1, firstAt: event.created_at, lastAt: event.created_at });
-		return groups;
-	}, []);
-}
-
-const agentProgressStateLabels = {
-	waiting: "等待",
-	running: "进行中",
-	done: "已完成",
-	waiting_human: "待你审核",
-	failed: "未完成",
-} as const;
 
 export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false, opportunities, scopeOpportunityIds, opportunityScope, initialScope, initialSelectedId, actions, initialAgentRuntimes, activeSourcedBrandFactCount, websiteUrl, initialOpportunityAnalysis, initialWebsiteGapAnalysis, initialAgentRuns, initialReviewPackages, initialDistributionRuns, initialRetests, createAction, startAgent, interruptAgent, resumeAgent, reviseAgent, captureAgentVisuals, readAgentProgress, decideReview, savePlatformVariant, createDistribution, issueArticleAssistantTask, recordArticleAssistantResults, confirmDraftReadback, recordHumanPublication, createRetest, refreshRetestRequest, discoverActions, readOpportunityAnalysis, analyzeWebsiteGap, readWebsiteGapAnalysis, readAgentRuntimes }: Props) {
 	const router = useRouter();
@@ -447,7 +196,6 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 	}
 	const [isSaving, startSaving] = useTransition();
 	const [isVariantSaving, startVariantSaving] = useTransition();
-	const [isScopePending, startScopeTransition] = useTransition();
 	const [isWebsiteGapPending, startWebsiteGapTransition] = useTransition();
 	const reviewDialogRef = useRef<HTMLElement | null>(null);
 	const syncDialogRef = useRef<HTMLElement | null>(null);
@@ -462,7 +210,7 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 		? "全部问题"
 		: questions.find((question) => String(question.id) === selectedQuestion)?.label ?? `问题 #${selectedQuestion}`;
 	const agentRuntime = agentRuntimes.find((runtime) => runtime.runtime_key === selectedRuntimeKey) ?? initialAgentRuntime;
-	const agentModels = agentRuntime?.model_options?.length
+	const agentModels = useMemo(() => agentRuntime?.model_options?.length
 		? agentRuntime.model_options
 		: (agentRuntime?.available_models ?? []).map((model) => ({
 			id: model,
@@ -470,9 +218,12 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			description: "",
 			default_reasoning_effort: agentRuntime?.default_reasoning_effort,
 			supported_reasoning_efforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as CodexReasoningEffort[],
-		}));
+		})), [agentRuntime]);
 	const selectedAgentModelOption = agentModels.find((model) => model.id === selectedAgentModel) ?? agentModels[0];
-	const supportedReasoningEfforts = selectedAgentModelOption?.supported_reasoning_efforts ?? [];
+	const supportedReasoningEfforts = useMemo(
+		() => selectedAgentModelOption?.supported_reasoning_efforts ?? [],
+		[selectedAgentModelOption],
+	);
 	const executionSelection: AgentExecutionSelection = {
 		runtime_key: selectedRuntimeKey,
 		model: selectedAgentModel || null,
@@ -537,9 +288,7 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 	const agentCapacityAvailable = agentCapacityUsed < agentCapacityLimit;
 	const agentCanStart = Boolean(agentRuntime?.ready && agentCapacityAvailable);
 	const websiteRecommendations = websiteGapAnalysis?.recommendations ?? [];
-	const websiteAnalysisState = isScopePending
-		? "switching"
-		: isWebsiteGapPending
+	const websiteAnalysisState = isWebsiteGapPending
 			? "submitting"
 			: websiteGapAnalysisActive
 				? "running"
@@ -719,13 +468,16 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 	}, [initialScope.batchId, initialScope.modelKey, initialScope.questionPlanId]);
 	useEffect(() => setOpportunityAnalysis(initialOpportunityAnalysis), [initialOpportunityAnalysis]);
 	useEffect(() => setWebsiteGapAnalysis(initialWebsiteGapAnalysis), [initialWebsiteGapAnalysis]);
+	const opportunityAnalysisJobId = opportunityAnalysisActive ? opportunityAnalysis?.job_id : undefined;
 	useEffect(() => {
-		if (!opportunityAnalysisActive || !opportunityAnalysis) return;
+		const jobId = opportunityAnalysisJobId;
+		if (!jobId) return;
+		const activeJobId: number = jobId;
 		let cancelled = false;
 		async function refreshAnalysis() {
 			if (document.visibilityState !== "visible") return;
 			try {
-				const result = await readOpportunityAnalysis(opportunityAnalysis!.job_id);
+				const result = await readOpportunityAnalysis(activeJobId);
 				if (cancelled) return;
 				setOpportunityAnalysis(result);
 				if (result.status === "succeeded") {
@@ -749,14 +501,17 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			window.clearInterval(timer);
 			document.removeEventListener("visibilitychange", handleVisibility);
 		};
-	}, [opportunityAnalysis?.job_id, opportunityAnalysisActive, readOpportunityAnalysis, router]);
+	}, [opportunityAnalysisJobId, readOpportunityAnalysis, router]);
+	const websiteGapAnalysisJobId = websiteGapAnalysisActive ? websiteGapAnalysis?.job_id : undefined;
 	useEffect(() => {
-		if (!websiteGapAnalysisActive || !websiteGapAnalysis) return;
+		const jobId = websiteGapAnalysisJobId;
+		if (!jobId) return;
+		const activeJobId: number = jobId;
 		let cancelled = false;
 		async function refreshAnalysis() {
 			if (document.visibilityState !== "visible") return;
 			try {
-				const result = await readWebsiteGapAnalysis(websiteGapAnalysis!.job_id);
+				const result = await readWebsiteGapAnalysis(activeJobId);
 				if (cancelled) return;
 				setWebsiteGapAnalysis(result);
 				if (result.status === "succeeded") {
@@ -780,7 +535,7 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			window.clearInterval(timer);
 			document.removeEventListener("visibilitychange", handleVisibility);
 		};
-	}, [websiteGapAnalysis?.job_id, websiteGapAnalysisActive, readWebsiteGapAnalysis, router]);
+	}, [readWebsiteGapAnalysis, router, websiteGapAnalysisJobId]);
 
 	useEffect(() => setReviewPackages(initialReviewPackages), [initialReviewPackages]);
 	useEffect(() => setDistributionRuns(initialDistributionRuns), [initialDistributionRuns]);
@@ -793,7 +548,7 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 		setTargetPlatforms(selected.type === "website"
 			? ["official_site"]
 			: (recommended.length ? recommended.slice(0, 2) : ["zhihu", "juejin"]));
-	}, [selected?.id, selected?.type]);
+	}, [selected]);
 	useEffect(() => {
 		if (!reviewOpen && !syncOpen) return;
 		const previousOverflow = document.body.style.overflow;
@@ -966,28 +721,6 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 		};
 	}, [refreshRetestRequest, retestActive, router, selected?.existingAction?.id]);
 
-	function changeScope(next: { batchId?: number | null; modelKey?: string; questionPlanId?: number | null }) {
-		const batchId = next.batchId !== undefined ? next.batchId : selectedBatchId;
-		const batchChanged = next.batchId !== undefined && next.batchId !== selectedBatchId;
-		const modelKey = batchChanged ? "all" : next.modelKey ?? selectedModel;
-		const questionPlanId = batchChanged
-			? null
-			: next.questionPlanId !== undefined
-				? next.questionPlanId
-				: selectedQuestion === "all" ? null : Number(selectedQuestion);
-		setDiscoveryFeedback("");
-		setWebsiteGapFeedback("");
-		setWebsiteGapAnalysis(null);
-		setSelectedBatchId(batchId);
-		setSelectedModel(modelKey);
-		setSelectedQuestion(questionPlanId ? String(questionPlanId) : "all");
-		const params = new URLSearchParams();
-		if (batchId) params.set("batch", String(batchId));
-		if (modelKey !== "all") params.set("model", modelKey);
-		if (questionPlanId) params.set("question", String(questionPlanId));
-		startScopeTransition(() => router.push(`/geo/${workspaceId}/actions?${params.toString()}`, { scroll: false }));
-	}
-
 	function refreshOpportunities() {
 		setDiscoveryFeedback("");
 		startSaving(async () => {
@@ -1118,19 +851,6 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 	function openPlatformReview(platformKey: string) {
 		setReviewTab(platformKey);
 		setViewedPlatformKeys((current) => [...new Set([...current, platformKey])]);
-	}
-
-	function beginVariantEdit(variant: CleanroomPlatformVariant) {
-		setEditingVariantId(variant.id);
-		setVariantEdits((current) => ({
-			...current,
-			[variant.id]: current[variant.id] ?? {
-				title: variant.title,
-				summary: variant.summary,
-				body_markdown: variant.body_markdown,
-			},
-		}));
-		setReviewFeedback("");
 	}
 
 	function updateVariantEdit(variantId: number, field: "title" | "summary" | "body_markdown", value: string) {
@@ -1459,8 +1179,8 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			{hideGlobalScope ? null : <GeoGlobalScopeBar workspaceId={workspaceId} support="single-batch" />}
 
 			<section className="pa-summary" aria-label="行动状态摘要">
-				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>未闭环机会</small><strong>{isScopePending ? "—" : unresolved.length}</strong></div></article>
-				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>其中高优先级</small><strong>{isScopePending ? "—" : high}</strong></div></article>
+				<article><span className="pa-summary-icon is-warning"><Icon name="warning" /></span><div><small>未闭环机会</small><strong>{unresolved.length}</strong></div></article>
+				<article><span className="pa-summary-icon is-trend"><Icon name="trend" /></span><div><small>其中高优先级</small><strong>{high}</strong></div></article>
 				<article><span className="pa-summary-icon is-draft"><Icon name="draft" /></span><div><small>待处理稿件</small><strong>{pendingDraftPackages.length}</strong><em>待审 {reviewReadyDraftCount} · 重生成 {regenerationDraftCount}</em></div></article>
 				<article><span className="pa-summary-icon is-check"><Icon name="check" /></span><div><small>复测已完成</small><strong>{retestReady}</strong></div></article>
 			</section>
@@ -1471,7 +1191,7 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 					<label><small>模型</small><select aria-label="Agent 执行模型" value={selectedAgentModel} disabled={!agentRuntime?.ready || !agentModels.length} onChange={(event) => setSelectedAgentModel(event.target.value)}>{agentModels.map((model) => <option key={model.id} value={model.id}>{model.display_name}</option>)}</select></label>
 					<label><small>推理强度</small><select aria-label="Agent 推理强度" value={selectedReasoningEffort} disabled={!agentRuntime?.ready || !supportedReasoningEfforts.length} onChange={(event) => setSelectedReasoningEffort(event.target.value as CodexReasoningEffort)}>{supportedReasoningEfforts.length ? supportedReasoningEfforts.map((effort) => <option key={effort} value={effort}>{reasoningEffortLabels[effort]}</option>) : <option value="">使用 Agent 本机配置</option>}</select></label>
 				</div>
-				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || isScopePending || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready || !executionSelection.model}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Agent 等待执行…" : "Agent 正在判断…" : `让 ${agentRuntime?.display_name || "Agent"} 分析当前批次`}</button><span>{isScopePending ? "正在切换范围，不显示旧结果…" : discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Agent Run #${opportunityAnalysis.job_id} · ${agentExecutionLabel(opportunityAnalysis.model, opportunityAnalysis.reasoning_effort)} · 批次 #${opportunityAnalysis.batch_id}` : opportunityAnalysisFailed ? opportunityFailureMessage : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Agent 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
+				<div className="pa-discovery-row"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready || !executionSelection.model}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? opportunityAnalysis?.status === "queued" ? "Agent 等待执行…" : "Agent 正在判断…" : `让 ${agentRuntime?.display_name || "Agent"} 分析当前批次`}</button><span>{discoveryFeedback || (opportunityAnalysis?.status === "succeeded" ? `Agent Run #${opportunityAnalysis.job_id} · ${agentExecutionLabel(opportunityAnalysis.model, opportunityAnalysis.reasoning_effort)} · 批次 #${opportunityAnalysis.batch_id}` : opportunityAnalysisFailed ? opportunityFailureMessage : selectedBatch ? `选定批次 #${selectedBatch.id}；点击后 Agent 才会发现机会` : "需要先完成一次真实联网观测")}</span></div>
 			</div>
 		</section>
 
@@ -1479,8 +1199,8 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			<div className="pa-website-analysis-inner">
 				<span className="pa-website-analysis-icon"><Icon name={websiteAnalysisState === "success" ? "check" : websiteAnalysisState === "failed" ? "warning" : "spark"} /></span>
 				<small>{agentRuntime?.display_name || "Agent"} 官网差距分析 · 强制 Skill · 独立诊断</small>
-				<h2 id="website-analysis-title">{websiteAnalysisState === "switching" ? "正在切换官网分析范围" : ["submitting", "running"].includes(websiteAnalysisState) ? "Agent 正在分析官网差距" : websiteAnalysisState === "failed" ? "官网分析未完成" : websiteAnalysisState === "success" ? "官网差距分析已完成" : websiteAnalysisState === "empty" ? "当前范围未发现官网差距" : websiteAnalysisState === "missing-batch" ? "请先选择真实观测批次" : websiteAnalysisState === "missing-website" ? "请先配置官网地址" : websiteAnalysisState === "not-ready" ? `${agentRuntime?.display_name || "Agent"} 尚未就绪` : websiteAnalysisState === "busy" ? "Agent 正在处理其他任务" : "让 Agent 分析官网差距"}</h2>
-				<p>{websiteAnalysisState === "switching" ? "新范围返回前不展示旧结果。" : ["submitting", "running"].includes(websiteAnalysisState) ? websiteGapFeedback || `正在读取 ${websiteGapAnalysis?.evidence_count ?? 0} 条真实证据；诊断不会进入内容发布流程。` : websiteAnalysisState === "failed" ? websiteGapFeedback || websiteGapAnalysis?.error_message || "Agent 未能返回通过证据校验的官网诊断。" : websiteAnalysisState === "success" ? `已形成 ${websiteGapAnalysis?.recommendation_count ?? 0} 项官网诊断建议；它们不会变成优先机会，也不会启动写稿和发布。` : websiteAnalysisState === "empty" ? "Agent 已完成分析，但当前数据不支持具体官网改进结论。" : websiteAnalysisState === "missing-batch" ? "官网分析只使用你选定的批次、模型和问题数据。" : websiteAnalysisState === "missing-website" ? "官网地址用来限定诊断边界，系统不会接受任意站点。" : websiteAnalysisState === "not-ready" ? agentRuntime?.configuration_hint || "请先完成本机 Agent 配置与自检。" : websiteAnalysisState === "busy" ? `当前运行容量 ${agentCapacityUsed}/${agentCapacityLimit}，有空位后可继续。` : "只有你点击后，Agent 才会读取当前范围的官网表现和竞品内容。"}</p>
+				<h2 id="website-analysis-title">{["submitting", "running"].includes(websiteAnalysisState) ? "Agent 正在分析官网差距" : websiteAnalysisState === "failed" ? "官网分析未完成" : websiteAnalysisState === "success" ? "官网差距分析已完成" : websiteAnalysisState === "empty" ? "当前范围未发现官网差距" : websiteAnalysisState === "missing-batch" ? "请先选择真实观测批次" : websiteAnalysisState === "missing-website" ? "请先配置官网地址" : websiteAnalysisState === "not-ready" ? `${agentRuntime?.display_name || "Agent"} 尚未就绪` : websiteAnalysisState === "busy" ? "Agent 正在处理其他任务" : "让 Agent 分析官网差距"}</h2>
+				<p>{["submitting", "running"].includes(websiteAnalysisState) ? websiteGapFeedback || `正在读取 ${websiteGapAnalysis?.evidence_count ?? 0} 条真实证据；诊断不会进入内容发布流程。` : websiteAnalysisState === "failed" ? websiteGapFeedback || websiteGapAnalysis?.error_message || "Agent 未能返回通过证据校验的官网诊断。" : websiteAnalysisState === "success" ? `已形成 ${websiteGapAnalysis?.recommendation_count ?? 0} 项官网诊断建议；它们不会变成优先机会，也不会启动写稿和发布。` : websiteAnalysisState === "empty" ? "Agent 已完成分析，但当前数据不支持具体官网改进结论。" : websiteAnalysisState === "missing-batch" ? "官网分析只使用你选定的批次、模型和问题数据。" : websiteAnalysisState === "missing-website" ? "官网地址用来限定诊断边界，系统不会接受任意站点。" : websiteAnalysisState === "not-ready" ? agentRuntime?.configuration_hint || "请先完成本机 Agent 配置与自检。" : websiteAnalysisState === "busy" ? `当前运行容量 ${agentCapacityUsed}/${agentCapacityLimit}，有空位后可继续。` : "只有你点击后，Agent 才会读取当前范围的官网表现和竞品内容。"}</p>
 				{selectedBatchId ? <span className="pa-website-analysis-scope">批次 #{selectedBatchId} · {selectedModelLabel} · {selectedQuestionLabel} · {agentExecutionLabel(websiteGapAnalysis?.model || executionSelection.model, websiteGapAnalysis?.reasoning_effort || executionSelection.reasoning_effort)}</span> : null}
 				{websiteAnalysisState === "success" ? <div className="pa-website-analysis-results">
 					<div className="pa-website-analysis-metric"><b>官网引用 {websiteCitationCount}/{websiteEligibleCount}</b><span>{websiteGapAnalysis?.recommendation_count ?? 0} 项诊断建议</span></div>
@@ -1493,12 +1213,12 @@ export function PriorityActionsWorkbench({ workspaceId, hideGlobalScope = false,
 			</div>
 		</section>
 
-			{isScopePending ? <section className="pa-scope-loading" role="status" aria-live="polite"><div><i /><b>正在切换真实数据范围</b><span>新范围返回前不会继续展示旧机会。</span></div><div className="pa-scope-skeleton"><i /><i /><i /></div></section> : filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>{opportunityAnalysisActive ? "Agent 正在判断优先机会" : opportunityAnalysis?.status === "succeeded" ? "Agent 未发现足够可靠的优先机会" : opportunityAnalysisFailed ? "Agent 未完成本次分析" : "尚未让 Agent 分析这个批次"}</h2><p>{opportunityAnalysisActive ? `正在阅读批次 #${opportunityAnalysis?.batch_id} 的 ${opportunityAnalysis?.evidence_count ?? 0} 条真实证据；完成并通过证据校验前，这里保持为空。` : opportunityAnalysis?.status === "succeeded" ? opportunityAnalysis.analysis_summary || "Agent 已完成分析，但当前数据不足以支持具体行动。" : opportunityAnalysisFailed ? opportunityFailureMessage : selectedBatch ? `已选定批次 #${selectedBatch.id}。只有你点击后，Agent 才会阅读该批次的回答、信源和竞品内容并给出判断。` : "请先完成一次真实联网观测。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? "Agent 正在判断…" : `让 ${agentRuntime?.display_name || "Agent"} 分析当前批次`}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
+			{filtered.length === 0 ? <section className="pa-empty"><span><Icon name="spark" /></span><h2>{opportunityAnalysisActive ? "Agent 正在判断优先机会" : opportunityAnalysis?.status === "succeeded" ? "Agent 未发现足够可靠的优先机会" : opportunityAnalysisFailed ? "Agent 未完成本次分析" : "尚未让 Agent 分析这个批次"}</h2><p>{opportunityAnalysisActive ? `正在阅读批次 #${opportunityAnalysis?.batch_id} 的 ${opportunityAnalysis?.evidence_count ?? 0} 条真实证据；完成并通过证据校验前，这里保持为空。` : opportunityAnalysis?.status === "succeeded" ? opportunityAnalysis.analysis_summary || "Agent 已完成分析，但当前数据不足以支持具体行动。" : opportunityAnalysisFailed ? opportunityFailureMessage : selectedBatch ? `已选定批次 #${selectedBatch.id}。只有你点击后，Agent 才会阅读该批次的回答、信源和竞品内容并给出判断。` : "请先完成一次真实联网观测。"}</p><div className="pa-empty-actions"><button type="button" onClick={refreshOpportunities} disabled={isSaving || opportunityAnalysisActive || !selectedBatchId || !agentRuntime?.ready}>{isSaving ? "正在提交…" : opportunityAnalysisActive ? "Agent 正在判断…" : `让 ${agentRuntime?.display_name || "Agent"} 分析当前批次`}</button><Link href={`/geo/${workspaceId}`}>发起真实观测 <Icon name="arrow" /></Link></div></section> : <>
 			<section className="pa-workspace">
 				<div className="pa-opportunity-panel">
 					<header><div><h2>系统发现的优先机会</h2><p>仅显示真实观测形成的运营机会；点击卡片查看详细判断。</p></div><small>{unselected} 待选择 · {inProgress} 进行中</small></header>
 					<div className="pa-opportunity-list">
-						{filtered.map((item) => <article id={`opportunity-card-${item.id}`} key={item.id} tabIndex={0} aria-expanded={expandedOpportunityId === item.id} aria-label={`${item.title}，点击查看详细判断`} className={selected?.id === item.id ? "is-selected" : ""} onClick={() => { setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return; event.preventDefault(); setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }}>
+						{filtered.map((item) => <article id={`opportunity-card-${item.id}`} key={item.id} role="button" tabIndex={0} aria-expanded={expandedOpportunityId === item.id} aria-label={`${item.title}，点击查看详细判断`} className={selected?.id === item.id ? "is-selected" : ""} onClick={() => { setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget || !["Enter", " "].includes(event.key)) return; event.preventDefault(); setSelectedId(item.id); setExpandedOpportunityId((current) => current === item.id ? null : item.id); }}>
 							<div className="pa-opportunity-main"><span className={`pa-priority ${item.priority}`}>{priorityLabel[item.priority]}</span><h3>{item.title}</h3>{item.sourceType === "website_audit" ? <div className="pa-opportunity-source"><img src="/brand/spring-yuan-workspace.svg" alt="春秋元泉工作区标志" /><span><b>官网原始响应</b><small>审计 #{item.websiteAuditId} · 不计为模型观测</small></span></div> : <div className="pa-models">{item.modelLabels.slice(0, 4).map((label) => <ModelBadge key={label} label={label} />)}</div>}<small className="pa-opportunity-proof">{item.proof}</small></div>
 							<div className="pa-gap"><small>{item.type === "website" ? "开发团队待补齐" : item.sourceStrategy === "direct_operable_source" ? "可直接运营的信源" : item.sourceStrategy === "build_controlled_alternative" ? "外部参考 → 建立可控信源" : "建议补齐的信源"}</small><div className="pa-source-tags">{item.sourceTargetLabel ? <span>{item.sourceTargetLabel}</span> : suggestedSources(item.type).map((source) => <span key={source}>{source}</span>)}{item.type !== "website" ? item.recommendedPlatforms.slice(0, 3).map((platformKey) => <span key={platformKey}>{platformDisplayName(platformKey)}</span>) : null}</div><em>{item.sourceTargetDetail || `建议载体 · ${suggestedCarrier(item.type)}`}</em></div>
 							<div className="pa-opportunity-actions" onClick={(event) => event.stopPropagation()}><span className={item.existingAction ? "pa-action-current" : item.generationReady ? "pa-evidence-ok" : "pa-action-blocked"}><Icon name={item.existingAction ? "arrow" : item.generationReady ? "check" : "warning"} />{item.existingAction ? "行动进行中" : item.generationReady ? "证据充分" : "检查受阻"}</span><button type="button" onClick={() => setSelectedId(item.id)}>{item.existingAction ? "继续行动" : "选择并开始"}</button>{item.websiteAuditId ? <a href="#website-audit">查看官网证据 <Icon name="arrow" /></a> : item.evidenceIds[0] ? <Link href={`/geo/${workspaceId}/evidence/${item.evidenceIds[0]}`}>查看 {item.evidenceIds.length} 条证据 <Icon name="arrow" /></Link> : null}</div>

@@ -12,7 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 tracked = subprocess.run(
     ["git", "ls-files"], cwd=ROOT, check=True, capture_output=True, text=True
 ).stdout.splitlines()
-forbidden_path = re.compile(r"(^|/)(\.env[^/]*|geo_platform\.db|private_artifacts|node_modules|\.next)(/|$)|\.log$")
+forbidden_path = re.compile(
+    r"(^|/)(\.env[^/]*|geo_platform\.db|private_artifacts|node_modules|\.next|"
+    r"output|outputs|playwright-report|test-results)(/|$)|\.log$"
+)
 bad_paths = [path for path in tracked if forbidden_path.search(path)]
 if bad_paths:
     raise SystemExit("forbidden tracked paths: " + ", ".join(bad_paths))

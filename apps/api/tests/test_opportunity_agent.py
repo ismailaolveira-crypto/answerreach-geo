@@ -22,7 +22,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.services.codex_agent_runtime import CodexTurnResult
 from app.v1 import opportunity_agent
-from app.v1 import routes
+from app.v1 import agent_run_routes, routes
 from app.v1.schemas import ActionOpportunityDiscoverRequest
 
 
@@ -40,7 +40,7 @@ def test_runtime_selection_rejects_effort_not_supported_by_model() -> None:
     }
 
     with pytest.raises(HTTPException) as exc_info:
-        routes._resolve_codex_execution(
+        agent_run_routes._resolve_codex_execution(
             diagnostic,
             requested_model="gpt-fast",
             requested_reasoning_effort="ultra",
@@ -336,7 +336,7 @@ def test_route_queues_codex_before_any_opportunity_is_visible(monkeypatch) -> No
         db.commit()
         user = SimpleNamespace(id=1, role="super_admin", company_id=1)
         monkeypatch.setattr(
-            routes,
+            agent_run_routes,
             "diagnose_local_codex",
             lambda: {
                 "ready": True,
@@ -344,7 +344,7 @@ def test_route_queues_codex_before_any_opportunity_is_visible(monkeypatch) -> No
                 "available_models": ["gpt-test"],
             },
         )
-        monkeypatch.setattr(routes, "invalidate_local_codex_diagnostic_cache", lambda: None)
+        monkeypatch.setattr(agent_run_routes, "invalidate_local_codex_diagnostic_cache", lambda: None)
         monkeypatch.setattr(routes, "_assert_agent_capacity", lambda *_args, **_kwargs: None)
 
         run = routes.discover_action_opportunities(

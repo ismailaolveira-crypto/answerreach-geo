@@ -2,8 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requestPublicUrl } from "@/lib/request-url";
 import { isTrustedFormOrigin, SESSION_COOKIE, sessionCookieOptions } from "@/lib/session-security";
 import { internalApiClientHeaders } from "@/lib/internal-api-security";
-
-const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { internalApiUrl } from "@/lib/api-config";
 export async function POST(request: NextRequest) {
   if (!isTrustedFormOrigin(request)) {
     return NextResponse.json({ detail: "Untrusted form origin" }, { status: 403 });
@@ -14,7 +13,7 @@ export async function POST(request: NextRequest) {
   ].map((key) => [key, String(form.get(key) ?? "").trim()]));
   let registration: Response;
   try {
-    registration = await fetch(`${API_BASE_URL}/api/auth/register-tenant`, {
+    registration = await fetch(internalApiUrl("/api/auth/register-tenant"), {
       method: "POST",
       headers: { "Content-Type": "application/json", ...internalApiClientHeaders(request) },
       body: JSON.stringify(payload),

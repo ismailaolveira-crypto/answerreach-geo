@@ -2,7 +2,7 @@
 name = "geo-platform-api"
 version = "0.2.0"
 description = "FastAPI backend for the GEO optimization platform."
-requires-python = ">=3.11"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "alembic>=1.13.0",
   "cryptography>=43.0.0",
@@ -28,4 +28,4 @@ dev = [
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"

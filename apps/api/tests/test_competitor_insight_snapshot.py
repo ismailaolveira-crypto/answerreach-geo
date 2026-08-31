@@ -22,7 +22,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.services.workspace_access import add_membership
-from app.v1 import routes
+from app.v1 import insight_routes
 
 
 def _evidence(evidence_id: int, answer: str) -> GeoEvidence:
@@ -154,7 +154,7 @@ def competitor_report_api(
             },
         }
 
-    monkeypatch.setattr(routes, "generate_competitor_insight", fake_generate)
+    monkeypatch.setattr(insight_routes, "generate_competitor_insight", fake_generate)
     app = create_app()
 
     def override_get_db() -> Generator[Session, None, None]:

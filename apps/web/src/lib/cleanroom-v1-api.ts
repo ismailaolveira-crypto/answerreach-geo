@@ -1,10 +1,4 @@
-import { cookies } from "next/headers";
-
-const API_BASE_URL =
-	process.env.INTERNAL_API_BASE_URL ??
-	process.env.NEXT_PUBLIC_API_BASE_URL ??
-	"http://localhost:8000";
-const SESSION_COOKIE = "geo_session";
+import { internalApiJson } from "@/lib/server-api";
 
 export type CleanroomWorkspace = {
 	id: number;
@@ -1898,25 +1892,7 @@ export type WebsiteAuditOverview = {
 };
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-	const token = (await cookies()).get(SESSION_COOKIE)?.value;
-	const response = await fetch(`${API_BASE_URL}/api/v1${path}`, {
-		...init,
-		cache: "no-store",
-		headers: {
-			"Content-Type": "application/json",
-			...(token ? { Authorization: `Bearer ${token}` } : {}),
-			...(init?.headers ?? {}),
-		},
-	});
-	if (!response.ok) {
-		const errorBody = (await response.json().catch(() => null)) as {
-			detail?: string;
-		} | null;
-		throw new Error(
-			errorBody?.detail || `Clean-room GEO API ${response.status}`,
-		);
-	}
-	return response.json() as Promise<T>;
+	return internalApiJson<T>(`/api/v1${path}`, init);
 }
 
 export function getCleanroomWorkspaces() {

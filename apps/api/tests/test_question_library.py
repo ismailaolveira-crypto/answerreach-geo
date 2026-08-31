@@ -17,7 +17,7 @@ from app.models.cleanroom_v1 import GeoQuestionPlan, GeoQuestionReview
 from app.models.cleanroom_v1 import GeoWorkspace
 from app.models.user import User
 from app.services.workspace_access import add_membership
-from app.v1.routes import _question_sampling_eligible
+from app.v1.observation_service import question_sampling_eligible as _question_sampling_eligible
 
 
 @pytest.fixture

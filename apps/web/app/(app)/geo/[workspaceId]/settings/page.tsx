@@ -2,7 +2,6 @@ import Link from "next/link";
 import type { Route } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import { logoutAction } from "@/app/actions";
 import { getCleanroomWorkspaces } from "@/lib/cleanroom-v1-api";
 import { getCurrentUser } from "@/lib/session";
 import { WorkspaceSettingsForm } from "./workspace-settings-form";
@@ -11,6 +10,7 @@ import { BrandFactsSettingsForm } from "./brand-facts-settings-form";
 import { CollaborationSettings } from "./collaboration-settings";
 import { SettingsSectionSwitcher } from "./settings-section-switcher";
 import {
+	logoutAction,
 	readAgentRuntime,
 	readBrandFacts,
 	readLocalAgentNodes,

@@ -1,6 +1,6 @@
 import { LoginShowcaseCarousel } from "@/app/login/login-showcase-carousel";
 
-const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { internalApiUrl } from "@/lib/api-config";
 
 type InvitePreview = {
 	workspace_id: number;
@@ -28,7 +28,7 @@ export default async function InvitePage({
 }) {
 	const { token } = await params;
 	const query = await searchParams;
-	const response = await fetch(`${API_BASE_URL}/api/auth/invitations/${encodeURIComponent(token)}`, { cache: "no-store" });
+	const response = await fetch(internalApiUrl(`/api/auth/invitations/${encodeURIComponent(token)}`), { cache: "no-store" });
 	const invitation = response.ok ? await response.json() as InvitePreview : null;
 	return <main className="cq-auth-page">
 		<section className="cq-auth-intro"><div className="cq-auth-grain" aria-hidden="true" /><div className="cq-auth-carousel-stage"><LoginShowcaseCarousel /></div></section>
