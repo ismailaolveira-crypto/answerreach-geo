@@ -10,7 +10,7 @@ import pytest
 
 from app.services import agent_runtime
 from app.services.codex_agent_runtime import CodexRunInterrupted, CodexRuntimeUnavailable
-from app.v1 import routes
+from app.v1 import agent_run_routes as routes
 from app.v1.schemas import AgentRuntimeRead
 
 

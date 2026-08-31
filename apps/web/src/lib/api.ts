@@ -1,6 +1,6 @@
-export const API_BASE_URL = typeof window === "undefined"
-  ? process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000"
-  : process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
+export { API_BASE_URL } from "@/lib/api-config";
+import { API_BASE_URL } from "@/lib/api-config";
+import { SESSION_COOKIE } from "@/lib/session-security";
 
 export type Company = {
   id: number;
@@ -1390,7 +1390,7 @@ async function apiFetch<T>(path: string, init?: RequestInit & { token?: string }
   if (!token && typeof window === "undefined") {
     const { cookies } = await import("next/headers");
     const cookieStore = await cookies();
-    token = cookieStore.get("geo_session")?.value;
+    token = cookieStore.get(SESSION_COOKIE)?.value;
   }
   const res = await fetch(`${API_BASE_URL}${path}`, {
     ...init,

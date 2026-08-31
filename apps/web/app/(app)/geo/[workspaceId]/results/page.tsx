@@ -31,19 +31,6 @@ function first(value: string | string[] | undefined) {
 	return Array.isArray(value) ? value[0] : value;
 }
 
-function money(minor: number, currency = "CNY") {
-	return new Intl.NumberFormat("zh-CN", { style: "currency", currency, maximumFractionDigits: 2 }).format(minor / 100);
-}
-
-function percent(value?: number | null) {
-	return value == null ? "—" : `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
-}
-
-function formatDate(value?: string | null) {
-	if (!value) return "尚未完成";
-	return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
-}
-
 function statusTone(status: string) {
 	if (status === "stable_improvement" || status === "history_up") return styles.positive;
 	if (status === "observed_improvement") return styles.signal;
@@ -136,12 +123,10 @@ export default async function ResultsPage({ params, searchParams }: PageProps) {
 	const rangeDays = String(first(query.range) || "").replace("d", "");
 	const periodDays = [7, 30, 90, 365].includes(Number(rangeDays)) ? Number(rangeDays) : [30, 90, 365].includes(Number(first(query.period))) ? Number(first(query.period)) : 30;
 	const modelKeys = [...new Set((Array.isArray(query.model) ? query.model : query.model ? [query.model] : []).filter((value) => value && value !== "all"))];
-	const modelKey = modelKeys.length === 1 ? modelKeys[0] : null;
 	const rawQuestions = Array.isArray(query.question) ? query.question : String(first(query.question) || "").split(",");
 	const questionPlanIds = [...new Set(rawQuestions.map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
 	const batchIds = [...new Set((Array.isArray(query.batch) ? query.batch : query.batch ? [query.batch] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0))];
 	const roiActionIds = [...new Set((Array.isArray(query.roi_action) ? query.roi_action : query.roi_action ? [query.roi_action] : []).map(Number).filter((value) => Number.isInteger(value) && value > 0))];
-	const roiActionId = roiActionIds.length === 1 ? roiActionIds[0] : null;
 	const roiRecordOpen = first(query.record) === "1";
 	const tab = first(query.tab) === "roi" ? "roi" : "effect";
 	const roiImportOpen = first(query.import) === "1";

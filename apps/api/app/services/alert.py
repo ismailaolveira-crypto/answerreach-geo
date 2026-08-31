@@ -3,39 +3,11 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import LLMProvider, MaturityReport, PlacementRecord, Project, SystemAlert
+from app.models import MaturityReport, PlacementRecord, Project, SystemAlert
 from app.schemas.search import CrawlTaskCreate
 from app.services.auth import utcnow
 from app.services.crawl_runner import create_crawl_task
 from app.services.job_queue import enqueue_crawl_task_job
-
-
-def create_provider_failure_alert(
-    db: Session,
-    *,
-    provider: LLMProvider,
-    provider_test_run_id: int,
-    prompt_text: str,
-    error_message: str,
-) -> SystemAlert:
-    title = f"模型渠道测试失败：{provider.name}"
-    alert = SystemAlert(
-        provider_id=provider.id,
-        provider_test_run_id=provider_test_run_id,
-        alert_type="provider.test_failed",
-        severity="critical",
-        status="open",
-        title=title,
-        message=error_message[:1000],
-        detail_json={
-            "provider_type": provider.provider_type,
-            "model_name": provider.model_name,
-            "prompt_text": prompt_text,
-        },
-    )
-    db.add(alert)
-    db.flush()
-    return alert
 
 
 def _has_open_placement_alert(

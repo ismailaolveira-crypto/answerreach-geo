@@ -242,17 +242,10 @@ pnpm run dev:web
 打开 `http://127.0.0.1:39003`。提交前至少运行：
 
 ```bash
-pnpm run check:api
-cd apps/api && PYTHONPATH=. uv run pytest -q
-cd ../..
-pnpm run build:web
-pnpm run check:web
-python3 scripts/acceptance_privacy_audit.py
-python3 scripts/acceptance_db_audit.py
-git diff --check
+pnpm run verify
 ```
 
-`build:web` 和 `check:web` 应顺序执行，避免争抢 `.next/types`。更多说明见 [`docs/development.md`](docs/development.md)。
+该命令按顺序完成 API、Web、审计、扩展与隔离浏览器验证，不发起付费 Provider 调用。EgoLite 实际点击和人工验收仍需独立完成。更多说明见 [`docs/development.md`](docs/development.md)。
 
 ## <a id="license"></a>开源许可
 

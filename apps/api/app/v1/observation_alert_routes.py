@@ -23,7 +23,12 @@ from app.models.cleanroom_v1 import (
     GeoQuestionPlan,
 )
 from app.models.user import User
-from app.services.workspace_access import require_workspace_access
+from app.services.audit import record_audit_log
+from app.services.job_queue import recover_orphaned_jobs
+from app.services.worker_heartbeat import get_workspace_worker_status
+from app.services.worker_service import repair_managed_worker_service
+from app.services.workspace_access import require_workspace_access, require_workspace_manager
+from app.v1.schemas import QueueWorkerRepairRead
 from app.v1.observation_alerts import (
     canonical_fingerprint,
     evaluate_change_alerts,
@@ -261,7 +266,8 @@ def _create_run_receipt(
 
 
 def _dispatch_run(db: Session, run: GeoObservationScheduleRun, schedule: GeoObservationSchedule, user: User) -> None:
-    from app.v1.routes import OfficialApiObservationBatchCreate, create_provider_web_search_batch
+    from app.v1.observation_routes import create_provider_web_search_batch
+    from app.v1.schemas import OfficialApiObservationBatchCreate
 
     run.started_at = datetime.now(UTC)
     run.status = "dispatching"
@@ -517,6 +523,85 @@ def retry_worker_interrupted_schedule_runs(
         "retried": retried,
         "failed": failed,
         "skipped_scope_changed": skipped_scope_changed,
+    }
+
+
+@router.post(
+    "/workspaces/{workspace_id}/queue-worker-repair",
+    response_model=QueueWorkerRepairRead,
+)
+def repair_queue_worker(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    workspace, _membership = require_workspace_manager(db, user, workspace_id)
+    service_result = repair_managed_worker_service()
+    recovery = recover_orphaned_jobs(db, workspace_id=workspace_id)
+    schedule_retries = (
+        retry_worker_interrupted_schedule_runs(
+            db,
+            workspace_id=workspace_id,
+            actor=user,
+        )
+        if service_result.status.running
+        else {"retried": 0, "failed": 0, "skipped_scope_changed": 0}
+    )
+    schedules = process_observation_schedules(db, workspace_id=workspace_id)
+    worker = get_workspace_worker_status(db, workspace_id)
+    worker["managed_service"] = service_result.status.as_dict()
+    worker["last_repair"] = None
+
+    if worker["online"] and service_result.status.running:
+        status = "online"
+        message = "Worker 已恢复在线，符合条件的中断任务和到期计划已完成检查。"
+    elif service_result.action == "unsupported":
+        status = "unsupported"
+        message = "当前部署方式不由 macOS 常驻服务管理，已完成队列状态检查。"
+    elif service_result.action in {"failed", "repository_conflict"}:
+        status = "needs_attention"
+        message = service_result.message
+    else:
+        status = "recovering"
+        message = "系统已发起 Worker 恢复，心跳可能需要数秒后显示在线。"
+
+    repair_summary = {
+        "status": status,
+        "action": service_result.action,
+        "recovered_jobs": recovery["recovered"],
+        "exhausted_jobs": recovery["failed"],
+        "schedules_dispatched": schedules["dispatched"],
+        "schedules_failed": schedules["failed"],
+        "schedule_retries": schedule_retries["retried"],
+        "schedule_retry_failures": schedule_retries["failed"],
+        "message": message,
+    }
+    record_audit_log(
+        db,
+        user=user,
+        action="queue_worker.repair",
+        resource_type="geo_workspace",
+        resource_id=workspace_id,
+        company_id=workspace.company_id,
+        detail=repair_summary,
+    )
+    db.commit()
+    worker["last_repair"] = {
+        **repair_summary,
+        "repaired_at": datetime.now(UTC),
+    }
+    return {
+        "status": status,
+        "service_action": service_result.action,
+        "managed_service": service_result.status.as_dict(),
+        "recovered_jobs": recovery["recovered"],
+        "exhausted_jobs": recovery["failed"],
+        "schedules_dispatched": schedules["dispatched"],
+        "schedules_failed": schedules["failed"],
+        "schedule_retries": schedule_retries["retried"],
+        "schedule_retry_failures": schedule_retries["failed"],
+        "worker": worker,
+        "message": message,
     }
 
 

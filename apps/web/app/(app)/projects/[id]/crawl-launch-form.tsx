@@ -28,7 +28,6 @@ type Props = {
   keywords: KeywordOption[];
 };
 
-const KEYWORD_PROMPT_VARIANT_COUNT = 3;
 const ESTIMATED_COMPLETION_TOKENS_PER_CALL = 900;
 
 function estimateTokens(text: string) {
@@ -121,7 +120,7 @@ export function CrawlLaunchForm({ action, providers, questions, keywords }: Prop
       costConfigured,
       warnings
     };
-  }, [keywordId, keywords.length, providerId, providers, questionId, questions.length]);
+  }, [keywordId, keywords, providerId, providers, questionId, questions]);
 
   return (
     <form action={action} className="crawl-launch-form">

@@ -22,10 +22,11 @@
     "deploy:cloud:backup": "bash scripts/geo-cloud.sh backup",
     "deploy:cloud:verify-backup": "bash scripts/geo-cloud.sh verify-backup",
     "check:api": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run ruff check app scripts",
-    "check:web": "pnpm --dir apps/web exec tsc --noEmit",
+    "check:web": "pnpm --dir apps/web run check",
+    "lint:web": "pnpm --dir apps/web run lint",
     "check:architecture": "python3 scripts/acceptance_architecture_audit.py",
     "build:web": "pnpm --dir apps/web build",
-    "test:api": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run pytest -q",
+    "test:api": "PYTHONPATH=. UV_CACHE_DIR=.uv-cache uv --directory apps/api run pytest -q",
     "test:browser:ci": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python ../../scripts/ci_browser_smoke.py",
     "worker:crawl": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python ../../scripts/run_crawl_worker.py",
     "worker:crawl:once": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python ../../scripts/run_crawl_worker.py --once",
@@ -64,6 +65,8 @@
     "worker:deepseek-profiles:once": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_deepseek_profile_worker.py --once",
     "worker:local-agent": "UV_CACHE_DIR=.uv-cache uv --directory apps/api run python scripts/run_local_agent.py run",
     "verify:cleanroom-web-boundary": "node scripts/verify_cleanroom_frontend_boundary.mjs",
-    "verify": "pnpm run check:api && pnpm run check:web && pnpm run build:web && pnpm run verify:local"
+    "verify:browser:no-cost": "bash scripts/verify_no_cost_browser.sh",
+    "verify:static": "pnpm run check:api && pnpm run test:api && pnpm run check:architecture && python3 scripts/acceptance_privacy_audit.py && python3 scripts/acceptance_db_audit.py && python3 scripts/acceptance_extension_artifact.py && node apps/geo-article-assistant-extension/tests/smoke.mjs && pnpm run build:web && pnpm run check:web && git diff --check",
+    "verify": "pnpm run verify:static && pnpm run verify:browser:no-cost"
   }
 }

@@ -1,9 +1,5 @@
 import { getSessionToken } from "@/lib/session";
-
-const API_BASE_URL =
-	process.env.INTERNAL_API_BASE_URL ??
-	process.env.NEXT_PUBLIC_API_BASE_URL ??
-	"http://localhost:8000";
+import { internalApiUrl } from "@/lib/api-config";
 
 export async function GET(
 	_request: Request,
@@ -13,7 +9,7 @@ export async function GET(
 	if (!token) return new Response("未登录", { status: 401 });
 	if (!/^\d+$/.test(batchId)) return new Response("无效批次", { status: 400 });
 	const response = await fetch(
-		`${API_BASE_URL}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/business-metric-imports/${batchId}/errors.csv`,
+		internalApiUrl(`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/business-metric-imports/${batchId}/errors.csv`),
 		{ cache: "no-store", headers: { Authorization: `Bearer ${token}` } },
 	);
 	if (!response.ok) return new Response("错误清单下载失败", { status: response.status });

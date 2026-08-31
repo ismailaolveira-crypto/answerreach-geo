@@ -374,7 +374,6 @@ export function ActionCommandCenter({ workspaceId, initialActions, initialSelect
 									.find((item) => item.target.platform_key === target.platform_key);
 								const confirmedDraftUrl = distributionMatch?.target.draft_url || null;
 								const candidateDraftUrl = distributionMatch?.target.candidate_draft_url || null;
-								const draftUrl = confirmedDraftUrl || candidateDraftUrl;
 								const sourceUrl = sourceUrls[target.id] || "";
 								const isArticle = selected.action_type === "article";
 								const preparingArticle = ["target_selected", "variant_generating"].includes(target.delivery_status);

@@ -31,6 +31,9 @@ importers:
         specifier: 16.28.0
         version: 16.28.0
     devDependencies:
+      '@eslint/eslintrc':
+        specifier: 3.3.5
+        version: 3.3.5
       '@types/node':
         specifier: ^22.0.0
         version: 22.20.0

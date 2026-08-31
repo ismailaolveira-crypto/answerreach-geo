@@ -15,12 +15,12 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.services.workspace_access import add_membership
-from app.v1.routes import (
-    get_decision_map,
+from app.v1.observation_routes import (
     get_latest_provider_web_search_batch,
     get_provider_web_search_batch,
     list_provider_web_search_batches,
 )
+from app.v1.insight_routes import get_decision_map
 from app.v1.schemas import (
     OfficialApiObservationBatchListRead,
     OfficialApiObservationBatchRead,

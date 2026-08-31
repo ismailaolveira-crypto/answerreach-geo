@@ -21,6 +21,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           version: "0.8.15"
+          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
       - name: Install API dependencies
@@ -62,6 +63,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           version: "0.8.15"
+          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
       - name: Install migration runtime
@@ -144,6 +146,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0d8abe699bfb85fec6de9f7adb5ae17292296ff # v6
         with:
           version: "0.8.15"
+          python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
       - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4

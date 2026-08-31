@@ -85,11 +85,12 @@ export function AgentWorkspace({ workspaceId, initialSidebarCollapsed, initialCo
 		return () => { cancelled = true; };
 	}, [workspaceId]);
 
+	const activeConversationId = selected && hasActiveMessage(selected) ? selected.id : null;
 	useEffect(() => {
-		if (!selected || !hasActiveMessage(selected)) return;
+		if (!activeConversationId) return;
 		let cancelled = false;
 		const timer = window.setInterval(async () => {
-			const result = await loadAgentConversation(workspaceId, selected.id);
+			const result = await loadAgentConversation(workspaceId, activeConversationId);
 			if (cancelled || !result.ok) return;
 			setSelected(result.data);
 			setProcessMessage((current) => current ? result.data.messages.find((item) => item.id === current.id) ?? current : null);
@@ -97,7 +98,7 @@ export function AgentWorkspace({ workspaceId, initialSidebarCollapsed, initialCo
 			if (!cancelled && list.ok) setConversations(list.data);
 		}, 1800);
 		return () => { cancelled = true; window.clearInterval(timer); };
-	}, [selected?.id, selected?.last_message_status, workspaceId]);
+	}, [activeConversationId, workspaceId]);
 
 	const selectConversation = (conversationId: number) => startTransition(async () => {
 		setError("");

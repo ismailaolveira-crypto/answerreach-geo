@@ -273,7 +273,7 @@ def test_schedule_api_persists_scope_and_dashboard_reads_it(alert_api: TestClien
 def test_manual_schedule_run_accepts_dict_batch_and_never_sticks_dispatching(
     alert_api: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.v1 import routes as observation_routes
+    from app.v1 import observation_routes
 
     created = alert_api.post(
         "/api/v1/workspaces/1/observation-schedules",
@@ -334,7 +334,7 @@ def test_manual_schedule_run_accepts_dict_batch_and_never_sticks_dispatching(
 def test_repair_retries_only_latest_worker_interruption_once(
     alert_api: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.v1 import routes as observation_routes
+    from app.v1 import observation_routes
 
     created = alert_api.post(
         "/api/v1/workspaces/1/observation-schedules",

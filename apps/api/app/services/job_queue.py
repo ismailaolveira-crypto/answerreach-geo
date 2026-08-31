@@ -428,33 +428,27 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             job.status = "success" if task.status == "success" else "failed"
             job.error_message = task.error_message
         elif job.job_type == "geo_observation.collect":
-            # Local import avoids coupling the generic queue module to the v1 route at startup.
             from app.models import User
-            from app.v1.routes import observe_provider_web_search
+            from app.v1.observation_service import collect_provider_web_search
             from app.v1.schemas import OfficialApiObservationRequest
 
             payload_json = dict(job.payload_json or {})
             user = db.get(User, int(payload_json["actor_user_id"]))
             if user is None:
                 raise ValueError("Observation job actor no longer exists")
-            db.info["geo_observation_task_id"] = int(
-                payload_json.get("observation_task_id") or 0
+            result = collect_provider_web_search(
+                db,
+                workspace_id=int(payload_json["workspace_id"]),
+                payload=OfficialApiObservationRequest(
+                    question_plan_id=int(payload_json["question_plan_id"]),
+                    provider_id=int(payload_json["provider_id"]),
+                    repeat_index=int(payload_json.get("repeat_index") or 1),
+                    repeat_count=int(payload_json.get("repeat_count") or 1),
+                    observation_group_id=payload_json.get("observation_group_id"),
+                ),
+                user=user,
+                observation_task_id=int(payload_json.get("observation_task_id") or 0),
             )
-            try:
-                result = observe_provider_web_search(
-                    int(payload_json["workspace_id"]),
-                    OfficialApiObservationRequest(
-                        question_plan_id=int(payload_json["question_plan_id"]),
-                        provider_id=int(payload_json["provider_id"]),
-                        repeat_index=int(payload_json.get("repeat_index") or 1),
-                        repeat_count=int(payload_json.get("repeat_count") or 1),
-                        observation_group_id=payload_json.get("observation_group_id"),
-                    ),
-                    db,
-                    user,
-                )
-            finally:
-                db.info.pop("geo_observation_task_id", None)
             job.payload_json = {
                 **payload_json,
                 "run_id": result["run"].id,
@@ -466,27 +460,30 @@ def run_job(db: Session, job: QueueJob) -> QueueJob:
             # Provider tests can take tens of seconds because the model must
             # execute a real web search. Run them durably in the worker so the
             # configuration page never blocks the user's navigation.
-            from app.api.routes.providers import test_provider
-            from app.models import User
+            from app.models import LLMProvider, User
             from app.schemas.search import LLMProviderTestRequest
+            from app.services.provider_testing import run_provider_test
 
             payload_json = dict(job.payload_json or {})
             user = db.get(User, int(payload_json["actor_user_id"]))
             if user is None:
                 raise ValueError("Provider test job actor no longer exists")
+            provider = db.get(LLMProvider, int(payload_json["provider_id"]))
+            if provider is None:
+                raise ValueError("Provider test job channel no longer exists")
             job.payload_json = {**payload_json, "stage": "testing"}
             db.add(job)
             db.commit()
             db.refresh(job)
-            result = test_provider(
-                int(payload_json["provider_id"]),
-                LLMProviderTestRequest(
+            result = run_provider_test(
+                db,
+                provider=provider,
+                payload=LLMProviderTestRequest(
                     prompt_text=str(payload_json.get("prompt_text") or "企业级大模型治理平台怎么选？"),
                     company_name=str(payload_json.get("company_name") or "示例企业"),
                     industry=str(payload_json.get("industry") or "网络安全"),
                 ),
-                db,
-                user,
+                user=user,
             )
             job.payload_json = {
                 **payload_json,

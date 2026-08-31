@@ -5,7 +5,6 @@ import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { revalidatePath } from "next/cache";
 import type { Route } from "next";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   bulkCreateKeywords,
@@ -49,8 +48,6 @@ import {
   getBrowserObservations,
   getReviewQueue,
   getTargetQuestions,
-  loginUser,
-  logoutUser,
   queueLLMProviderTest,
   retryCrawlTask,
   reviseArticleDraft,
@@ -59,7 +56,6 @@ import {
   rotateDeliveryConfirmationToken,
   runProjectStageGoalAction,
   runProjectStageGoalReminders,
-  runDueCrawlSchedules,
   runMonitoringAlerts,
   runNextQueueJob,
   runReadyQueueJobs,
@@ -73,8 +69,6 @@ import {
   updateProjectStageGoal,
   updateAlert
 } from "@/lib/api";
-import { SESSION_COOKIE } from "@/lib/session";
-import { sessionCookieOptions } from "@/lib/session-security";
 import { PROVIDER_CATALOG, isOfficialProvider, providerMatchesCatalog, type ProviderCatalogKey } from "@/lib/provider-catalog";
 
 function lines(value: FormDataEntryValue | null): string[] {
@@ -109,10 +103,6 @@ function actionErrorTarget(path: string, error: unknown) {
   return asRoute(
     `${basePath}${separator}action_error=${encodeURIComponent(normalized.slice(0, 240))}${hash ? `#${hash}` : ""}`
   );
-}
-
-function dueInDays(days: number) {
-  return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 }
 
 function missingTemplates(existing: string[], templates: string[], targetCount = 10) {
@@ -645,22 +635,6 @@ function providerCostRule(formData: FormData) {
   if (Number.isFinite(monthlySearchLimit) && monthlySearchLimit > 0) rule.monthly_search_limit = Math.floor(monthlySearchLimit);
   if (checkboxValue(formData, "enable_search")) rule.enable_search = true;
   return rule;
-}
-
-export async function loginAction(formData: FormData) {
-  const email = String(formData.get("email") ?? "");
-  const password = String(formData.get("password") ?? "");
-  const response = await loginUser({ email, password });
-  const cookieStore = await cookies();
-  cookieStore.set(SESSION_COOKIE, response.access_token, sessionCookieOptions());
-  redirect("/");
-}
-
-export async function logoutAction() {
-  const cookieStore = await cookies();
-  await logoutUser().catch(() => undefined);
-  cookieStore.delete(SESSION_COOKIE);
-  redirect("/login");
 }
 
 export async function createProjectAction(formData: FormData) {

@@ -30,9 +30,10 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.services.workspace_access import add_membership
-from app.v1 import routes
+from app.v1 import agent_run_routes, routes
 from app.v1.action_opportunities import materialize_website_opportunity
 from app.v1.agent_orchestration import _build_context
+from app.v1.content_delivery_routes import _website_requires_sourced_brand_facts
 from app.v1.website_audit import (
     BrandFactSourceVerificationError,
     PublicationVerificationError,
@@ -488,8 +489,8 @@ def test_brand_fact_gate_only_applies_when_server_visible_product_copy_is_missin
         scope_snapshot={"finding_codes": ["client_rendering_required"]},
     )
 
-    assert routes._website_requires_sourced_brand_facts(readable_opportunity) is False
-    assert routes._website_requires_sourced_brand_facts(js_shell_opportunity) is True
+    assert _website_requires_sourced_brand_facts(readable_opportunity) is False
+    assert _website_requires_sourced_brand_facts(js_shell_opportunity) is True
 
 
 def test_audit_blocks_private_network_targets_before_request() -> None:
@@ -754,7 +755,7 @@ def test_legacy_website_draft_requires_active_sourced_brand_fact(
     captured["checked_at"] = datetime.now(timezone.utc)
     monkeypatch.setattr(routes, "audit_website", lambda _url, *, brand_name: dict(captured))
     monkeypatch.setattr(
-        routes,
+        agent_run_routes,
         "diagnose_local_codex",
         lambda: {
             "runtime_key": "local_codex",

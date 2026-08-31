@@ -53,6 +53,16 @@ pnpm run dev:web
 
 ## 必跑验证
 
+完整的无付费调用本地门禁只有一个入口：
+
+```bash
+pnpm run verify
+```
+
+它使用 Python 3.12，依次运行 API lint/全量测试、架构/隐私/数据库审计、扩展工件检查、Web 构建/类型/代码 lint 与真实 Chromium 浏览器 smoke。浏览器数据库和账号位于临时目录，不启动 Worker，不发起 Provider 或办公平台请求。
+
+需要分项排查时，可以运行下列底层命令：
+
 ```bash
 pnpm run check:api
 cd apps/api && PYTHONPATH=. uv run pytest -q
@@ -67,6 +77,10 @@ git diff --check
 ```
 
 `build:web` 和 `check:web` 必须串行，否则可能争抢 `.next/types`。最后还要用 EgoLite 检查受影响页面、登录态、加载、保存回读和错误提示。
+
+`pnpm run verify` 只是机器验证；EgoLite 实际点击与人工代码架构确认仍然是独立的交付门禁。
+
+当前代码边界和兼容层说明见 [`docs/architecture/codebase-boundaries.md`](architecture/codebase-boundaries.md)。
 
 ## 当前维护债务
 

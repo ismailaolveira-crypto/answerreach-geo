@@ -8,11 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from app.api.router import api_router
-from app import models  # noqa: F401
 from app.core.config import get_settings
-from app.db.session import Base, SessionLocal, engine
+from app.db.migration_guard import assert_database_at_head
 from app.services.article_sync_adapter import shutdown_article_sync_runtime
-from app.services.workspace_access import backfill_legacy_workspace_memberships
 
 
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$")
@@ -22,14 +20,7 @@ REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{7,79}$")
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     settings.validate_deployment()
-    if settings.auto_create_tables:
-        if settings.is_production:
-            raise RuntimeError(
-                "AUTO_CREATE_TABLES must be disabled in production. Run Alembic migrations instead."
-            )
-        Base.metadata.create_all(bind=engine)
-        with SessionLocal() as db:
-            backfill_legacy_workspace_memberships(db)
+    assert_database_at_head(settings.database_url)
     try:
         yield
     finally:

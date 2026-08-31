@@ -1,6 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { logoutUser } from "@/lib/api";
+import { SESSION_COOKIE } from "@/lib/session-security";
 import {
 	createCleanroomBrandFact,
 	createLocalAgentEnrollment,
@@ -33,6 +37,12 @@ import {
 } from "@/lib/cleanroom-v1-api";
 
 export type SettingsActionState = { status: "idle" | "success" | "error"; message?: string };
+
+export async function logoutAction() {
+	await logoutUser().catch(() => undefined);
+	(await cookies()).delete(SESSION_COOKIE);
+	redirect("/login");
+}
 
 export async function readWorkspaceIntegrations(workspaceId: number): Promise<WorkspaceIntegrationSettings | null> {
 	try {

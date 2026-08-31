@@ -2,8 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { requestPublicUrl } from "@/lib/request-url";
 import { SESSION_COOKIE, sessionCookieOptions } from "@/lib/session-security";
-
-const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { internalApiUrl } from "@/lib/api-config";
 
 export async function GET(request: NextRequest) {
   const email = process.env.GEO_DEMO_EMAIL?.trim();
@@ -24,7 +23,7 @@ export async function GET(request: NextRequest) {
   }
   let login: Response;
   try {
-    login = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    login = await fetch(internalApiUrl("/api/auth/login"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),

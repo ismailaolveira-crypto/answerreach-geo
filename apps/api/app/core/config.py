@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     agent_run_timeout_seconds: int = 900
     auth_secret: str = "dev-secret-change-me"
     internal_proxy_secret: str | None = None
-    auto_create_tables: bool = True
+    auto_create_tables: bool = False
     public_registration_enabled: bool = True
     registration_rate_limit_per_hour: int = 5
     login_rate_limit_per_15_minutes: int = 30
@@ -64,6 +64,11 @@ class Settings(BaseSettings):
         mode = self.deployment_mode.strip().lower()
         if mode not in {"personal", "lan", "cloud"}:
             raise RuntimeError("DEPLOYMENT_MODE must be personal, lan, or cloud")
+        if self.auto_create_tables:
+            raise RuntimeError(
+                "AUTO_CREATE_TABLES=true is no longer supported. "
+                "Back up the database and run Alembic migrations explicitly."
+            )
         if mode == "lan" and self.database_url.startswith("sqlite"):
             raise RuntimeError("LAN deployment requires PostgreSQL; SQLite is personal mode only")
         if mode == "cloud" and self.database_url.startswith("sqlite"):
@@ -87,8 +92,6 @@ class Settings(BaseSettings):
         if self.is_production:
             if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
                 raise RuntimeError("Production deployment requires PostgreSQL")
-            if self.auto_create_tables:
-                raise RuntimeError("Production deployment requires AUTO_CREATE_TABLES=false")
             if self.auth_secret == "dev-secret-change-me" or len(self.auth_secret) < 32:
                 raise RuntimeError("Production deployment requires an AUTH_SECRET of at least 32 characters")
             if not self.internal_proxy_secret or len(self.internal_proxy_secret) < 32:

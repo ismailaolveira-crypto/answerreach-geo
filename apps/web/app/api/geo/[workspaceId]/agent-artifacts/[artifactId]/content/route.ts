@@ -1,21 +1,13 @@
-import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
-const API_BASE_URL = process.env.INTERNAL_API_BASE_URL ?? process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-const SESSION_COOKIE = "geo_session";
+import { internalApiFetch } from "@/lib/server-api";
 
 export async function GET(
 	_request: Request,
 	{ params }: { params: Promise<{ workspaceId: string; artifactId: string }> },
 ) {
 	const { workspaceId, artifactId } = await params;
-	const token = (await cookies()).get(SESSION_COOKIE)?.value;
-	const response = await fetch(
-		`${API_BASE_URL}/api/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-artifacts/${encodeURIComponent(artifactId)}/content`,
-		{
-			cache: "no-store",
-			headers: token ? { Authorization: `Bearer ${token}` } : {},
-		},
+	const response = await internalApiFetch(
+		`/api/v1/workspaces/${encodeURIComponent(workspaceId)}/agent-artifacts/${encodeURIComponent(artifactId)}/content`,
 	);
 	if (!response.ok || !response.body) {
 		const detail = await response.text().catch(() => "Visual artifact unavailable");
