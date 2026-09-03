@@ -1,6 +1,6 @@
 # 春秋元泉 GEO Agent 仓库指南
 
-本仓库为独立项目 `chunqiu-yuanquan-geo`。所有 Agent 在修改「优先行动、内容生成、平台适配、草稿同步、复测」前，必须先完整阅读：
+本仓库为独立产品 `answerreach-geo`；「春秋元泉」是示例工作区及历史兼容数据，不是全局品牌默认值。所有 Agent 在修改「优先行动、内容生成、平台适配、草稿同步、复测」前，必须先完整阅读：
 
 - [`docs/agent/CODEX_AGENT_EXECUTION_RUNBOOK.md`](docs/agent/CODEX_AGENT_EXECUTION_RUNBOOK.md)
 - [`docs/product/CODEX_AGENT_INTEGRATION_IMPLEMENTATION.md`](docs/product/CODEX_AGENT_INTEGRATION_IMPLEMENTATION.md)

@@ -1147,7 +1147,7 @@ def audit_website(
             "medium",
             "页面摘要缺失",
             "原始 HTML 未找到 meta description。",
-            "增加准确描述春秋元泉产品与适用场景的页面摘要。",
+            f"增加准确描述{brand_name}产品与适用场景的页面摘要。",
         )
     if not canonical:
         finding(

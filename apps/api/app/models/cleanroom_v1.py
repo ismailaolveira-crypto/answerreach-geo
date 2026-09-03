@@ -6,6 +6,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    Index,
     JSON,
     String,
     Text,
@@ -651,6 +652,16 @@ class GeoReobservationTarget(CleanRoomTimestamp, Base):
 
 class GeoAgentRun(CleanRoomTimestamp, Base):
     __tablename__ = "geo_agent_runs_v1"
+    __table_args__ = (
+        Index(
+            "uq_geo_agent_run_active_action_v1",
+            "workspace_id",
+            "action_id",
+            unique=True,
+            sqlite_where=text("status IN ('queued', 'resuming', 'running', 'cancelling')"),
+            postgresql_where=text("status IN ('queued', 'resuming', 'running', 'cancelling')"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(
