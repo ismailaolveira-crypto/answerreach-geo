@@ -30,7 +30,7 @@ from app.models.cleanroom_v1 import (
 )
 from app.models.user import User
 from app.services.workspace_access import add_membership
-from app.v1 import action_workflow_routes
+from app.v1 import action_workflow, action_workflow_routes
 
 
 @pytest.fixture
@@ -160,6 +160,65 @@ def workflow_client(
 
 def _set_user(client: TestClient, user: SimpleNamespace) -> None:
     client.app.state.current_user["user"] = user
+
+
+def test_stale_issued_distribution_does_not_mask_newer_retry_ready_state(
+    workflow_client: tuple[TestClient, dict[str, SimpleNamespace]],
+) -> None:
+    client, _users = workflow_client
+    sessions = client.app.state.workflow_sessions
+    issued_at = datetime.now(UTC) - timedelta(hours=1)
+    with sessions() as db:
+        action = db.get(GeoOptimizationAction, 1)
+        target = db.get(GeoActionTarget, 1)
+        db.add_all(
+            [
+                GeoDistributionRun(
+                    id=1,
+                    workspace_id=1,
+                    action_id=1,
+                    requested_platforms=["zhihu"],
+                    stage="failed",
+                    idempotency_key="stale-issued-run",
+                    status="failed",
+                    requested_by_user_id=1,
+                    assistant_task_issued_at=issued_at,
+                ),
+                GeoDistributionTarget(
+                    id=1,
+                    distribution_run_id=1,
+                    platform_key="zhihu",
+                    request_status="failed",
+                    draft_readback_status="not_checked",
+                ),
+                GeoDistributionRun(
+                    id=2,
+                    workspace_id=1,
+                    action_id=1,
+                    requested_platforms=["zhihu"],
+                    stage="requested",
+                    idempotency_key="new-retry-run",
+                    status="pending",
+                    requested_by_user_id=1,
+                ),
+                GeoDistributionTarget(
+                    id=2,
+                    distribution_run_id=2,
+                    platform_key="zhihu",
+                    request_status="not_started",
+                    draft_readback_status="not_checked",
+                ),
+            ]
+        )
+        db.commit()
+
+        delivery_status, source, _message, target_id = action_workflow._article_target_truth(
+            db, action, target
+        )
+
+    assert delivery_status == "draft_ready"
+    assert source == "distribution_target"
+    assert target_id == 2
 
 
 def _transition(client: TestClient, to_status: str, key: str) -> dict:

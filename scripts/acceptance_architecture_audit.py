@@ -209,6 +209,14 @@ for name in ("personal", "lan", "cloud"):
 
 db_audit = (ROOT / "scripts/acceptance_db_audit.py").read_text(encoding="utf-8")
 require("20260903_0042" in db_audit, "database audit is not aligned with migration 0042")
+require(
+    "uq_geo_agent_run_active_action_v1" in db_audit,
+    "database audit must verify the active Agent run index",
+)
+require(
+    "supported_versions.add" not in db_audit,
+    "database audit must not accept a pre-0042 live database",
+)
 
 print(
     "architecture audit: ok · acyclic app imports · service/route boundary · immutable deployment"

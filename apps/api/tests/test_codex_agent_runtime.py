@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
+from time import monotonic
 from types import SimpleNamespace
 
 import pytest
@@ -194,6 +195,53 @@ def test_runtime_catalog_exposes_model_specific_reasoning_efforts(
             "supported_reasoning_efforts": ["low", "ultra"],
         }
     ]
+
+
+def test_runtime_probe_reports_busy_pool_without_waiting_for_login_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import openai_codex
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BusyCodex:
+        metadata = SimpleNamespace(userAgent="Codex Desktop/test")
+
+        def account(self):
+            return SimpleNamespace(account=SimpleNamespace(type="chatgpt"))
+
+        def models(self):
+            return SimpleNamespace(data=[SimpleNamespace(id="gpt-test", is_default=True)])
+
+        def close(self) -> None:
+            return None
+
+    pool = codex_agent_runtime._WarmCodexClientPool(max_size=1)
+    monkeypatch.setattr(openai_codex, "Codex", BusyCodex)
+    monkeypatch.setattr(codex_agent_runtime, "_warm_codex_client", pool)
+
+    def occupy_pool() -> None:
+        with pool.use():
+            entered.set()
+            assert release.wait(timeout=2)
+
+    worker = threading.Thread(target=occupy_pool)
+    worker.start()
+    assert entered.wait(timeout=1)
+    codex_agent_runtime.invalidate_local_codex_diagnostic_cache()
+    started = monotonic()
+    try:
+        diagnostic = codex_agent_runtime.diagnose_local_codex()
+    finally:
+        release.set()
+        worker.join(timeout=2)
+
+    assert monotonic() - started < 1
+    assert diagnostic["ready"] is False
+    assert diagnostic["login_status"] == "capacity_busy"
+    assert diagnostic["pool_busy"] == 1
+    assert codex_agent_runtime.diagnose_local_codex()["ready"] is True
 
 
 def test_timeout_interrupts_the_real_turn_handle_and_surfaces_timeout(

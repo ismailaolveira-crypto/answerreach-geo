@@ -321,7 +321,26 @@ def test_route_queues_selected_scope_with_skill_hash(monkeypatch) -> None:
         )
         job = db.get(QueueJob, run["job_id"])
 
+        monkeypatch.setattr(
+            routes,
+            "_assert_agent_capacity",
+            lambda *_args, **_kwargs: pytest.fail("capacity checked before idempotent replay"),
+        )
+        replay = routes.create_website_gap_analysis(
+            1,
+            WebsiteGapAnalysisRequest(
+                batch_id=1,
+                model_keys=["qianwen"],
+                question_plan_ids=[1],
+                codex_model="gpt-test",
+                reasoning_effort="high",
+            ),
+            db,
+            user,
+        )
+
     assert run["status"] == "queued"
+    assert replay["job_id"] == run["job_id"]
     assert run["model_keys"] == ["qianwen"]
     assert run["question_plan_ids"] == [1]
     assert run["model"] == "gpt-test"

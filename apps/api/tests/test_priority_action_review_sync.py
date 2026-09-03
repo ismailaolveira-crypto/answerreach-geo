@@ -1663,6 +1663,30 @@ def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
         agent_run_routes._assert_agent_capacity(db, 1)
 
 
+def test_runtime_capacity_probe_busy_returns_stable_user_message(
+    review_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        agent_run_routes,
+        "_diagnose_runtime_for_request",
+        lambda *_args, **_kwargs: {
+            "runtime_key": "local_codex",
+            "sdk_installed": True,
+            "ready": False,
+            "login_status": "capacity_busy",
+            "error": "Codex client capacity remained busy for 0.1 seconds",
+        },
+    )
+
+    response = review_client.post("/api/v1/workspaces/1/agent-runtime/test")
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is False
+    assert response.json()["error"] == "Agent 当前客户端容量繁忙，请等待正在运行的任务结束"
+    assert "0.1 seconds" not in response.json()["error"]
+
+
 def test_active_agent_run_uniqueness_is_enforced_by_the_database(
     review_client: TestClient,
 ) -> None:
@@ -1695,6 +1719,100 @@ def test_active_agent_run_uniqueness_is_enforced_by_the_database(
         )
         with pytest.raises(IntegrityError):
             db.commit()
+
+
+def test_resume_returns_conflict_when_another_run_for_the_action_is_active(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        run.status = "failed"
+        db.add(
+            GeoAgentRun(
+                id=202,
+                workspace_id=1,
+                action_id=1,
+                status="running",
+                stage="researching",
+                selected_platforms=["zhihu"],
+                request_snapshot={},
+                result_snapshot={},
+            )
+        )
+        db.commit()
+
+    response = review_client.post("/api/v1/workspaces/1/agent-runs/1/resume")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent run 202 is already active"
+
+
+def test_revision_returns_conflict_when_another_run_for_the_action_is_active(
+    review_client: TestClient,
+) -> None:
+    rejected = review_client.post(
+        "/api/v1/workspaces/1/content-assets/1/reviews",
+        json={
+            "verdict": "changes_requested",
+            "confirmed_claim_ids": [],
+            "platform_keys": ["zhihu"],
+            "note": "请补充可核验的适用边界。",
+        },
+    )
+    assert rejected.status_code == 201
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add(
+            GeoAgentRun(
+                id=203,
+                workspace_id=1,
+                action_id=1,
+                status="queued",
+                stage="queued",
+                selected_platforms=["zhihu"],
+                request_snapshot={},
+                result_snapshot={},
+            )
+        )
+        db.commit()
+
+    response = review_client.post(
+        "/api/v1/workspaces/1/agent-runs/1/revise",
+        json={"content_asset_id": 1},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Agent run 203 is already active"
+
+
+def test_transition_commit_converts_unique_index_race_to_conflict(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        run = db.get(GeoAgentRun, 1)
+        run.status = "failed"
+        db.add(
+            GeoAgentRun(
+                id=204,
+                workspace_id=1,
+                action_id=1,
+                status="running",
+                stage="researching",
+                selected_platforms=["zhihu"],
+                request_snapshot={},
+                result_snapshot={},
+            )
+        )
+        db.commit()
+        run.status = "resuming"
+
+        with pytest.raises(HTTPException) as conflict:
+            agent_run_routes._commit_agent_run_transition(db, run, exclude_run_id=run.id)
+
+    assert conflict.value.status_code == 409
+    assert conflict.value.detail == "Agent run 204 is already active"
 
 
 def test_agent_capacity_counts_only_this_workspaces_discovery_jobs(

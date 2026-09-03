@@ -18,6 +18,27 @@ ACTIVE_RUN_PREDICATE = "status IN ('queued', 'resuming', 'running', 'cancelling'
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    duplicates = bind.execute(
+        sa.text(
+            f"""
+            SELECT workspace_id, action_id, COUNT(*) AS active_count
+            FROM geo_agent_runs_v1
+            WHERE {ACTIVE_RUN_PREDICATE}
+            GROUP BY workspace_id, action_id
+            HAVING COUNT(*) > 1
+            LIMIT 10
+            """
+        )
+    ).fetchall()
+    if duplicates:
+        sample = ", ".join(
+            f"workspace_id={row[0]} action_id={row[1]} count={row[2]}" for row in duplicates
+        )
+        raise RuntimeError(
+            "Cannot create uq_geo_agent_run_active_action_v1: duplicate active Agent runs exist; "
+            f"resolve them before retrying the migration ({sample})"
+        )
     op.create_index(
         "uq_geo_agent_run_active_action_v1",
         "geo_agent_runs_v1",

@@ -460,13 +460,17 @@ def _article_target_truth(
                 "助手已返回候选草稿地址，仍需用户打开并确认正文可见。",
                 distribution_target_id,
             )
-    for distribution_target, distribution_run in distribution_rows:
+    if distribution_rows:
+        distribution_target, distribution_run = distribution_rows[0]
         distribution_target_id = int(distribution_target.id)
         if distribution_target.request_status in {
             "mcp_request_accepted",
             "request_accepted",
             "pending",
-        } or distribution_run.assistant_task_issued_at is not None:
+        } or (
+            distribution_run.assistant_task_issued_at is not None
+            and distribution_run.status in {"pending", "partial"}
+        ):
             return (
                 "draft_write_requested",
                 "distribution_request",

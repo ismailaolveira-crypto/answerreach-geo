@@ -35,6 +35,10 @@ try:
     integrity = connection.execute("PRAGMA integrity_check").fetchall()
     foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
     version = connection.execute("SELECT version_num FROM alembic_version").fetchone()
+    active_run_index = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        ("uq_geo_agent_run_active_action_v1",),
+    ).fetchone()
 finally:
     connection.close()
 
@@ -42,11 +46,10 @@ if integrity != [("ok",)]:
     raise SystemExit(f"database integrity failed: {integrity!r}")
 if foreign_keys:
     raise SystemExit(f"foreign key violations: {len(foreign_keys)}")
-supported_versions = {("20260903_0042",)}
-if temporary_database is None:
-    supported_versions.add(("20260830_0041",))
-if version not in supported_versions:
+if version != ("20260903_0042",):
     raise SystemExit(f"unexpected migration version: {version!r}")
+if active_run_index is None:
+    raise SystemExit("required active Agent run index is missing")
 
 source = "disposable migration" if temporary_database else "read-only local database"
 print(f"database audit: ok · {version[0]} · {source}")

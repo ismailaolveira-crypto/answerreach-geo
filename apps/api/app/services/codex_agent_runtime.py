@@ -18,6 +18,10 @@ class CodexRuntimeUnavailable(RuntimeError):
     pass
 
 
+class CodexRuntimeCapacityBusy(CodexRuntimeUnavailable):
+    pass
+
+
 class CodexRunInterrupted(RuntimeError):
     pass
 
@@ -67,7 +71,7 @@ class _WarmCodexClientPool:
                     break
                 remaining = deadline - monotonic()
                 if remaining <= 0:
-                    raise CodexRuntimeUnavailable(
+                    raise CodexRuntimeCapacityBusy(
                         f"Codex client capacity remained busy for {timeout_seconds:g} seconds"
                     )
                 self._condition.wait(remaining)
@@ -176,7 +180,7 @@ def _probe_local_codex() -> dict:
         }
 
     try:
-        with _warm_codex_client.use() as codex:
+        with _warm_codex_client.use(timeout_seconds=0.1) as codex:
             account_response = codex.account()
             model_response = codex.models()
             account = getattr(account_response, "account", None)
@@ -231,6 +235,16 @@ def _probe_local_codex() -> dict:
                 "error": None,
                 **_warm_codex_client.snapshot(),
             }
+    except CodexRuntimeCapacityBusy as exc:
+        return {
+            "runtime_key": "local_codex",
+            "sdk_installed": True,
+            "sdk_version": openai_codex.__version__,
+            "ready": False,
+            "login_status": "capacity_busy",
+            "error": str(exc),
+            **_warm_codex_client.snapshot(),
+        }
     except Exception as exc:
         return {
             "runtime_key": "local_codex",
@@ -270,6 +284,8 @@ def diagnose_local_codex() -> dict:
         if cached and now - cached[0] < _DIAGNOSTIC_CACHE_TTL_SECONDS:
             return dict(cached[1])
         result = _probe_local_codex()
+        if result.get("login_status") == "capacity_busy":
+            return dict(result)
         _diagnostic_cache = (monotonic(), dict(result))
         return dict(result)
 
