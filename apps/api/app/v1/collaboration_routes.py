@@ -1878,7 +1878,7 @@ def _message_text(snapshot: dict, deep_link_base_url: str | None) -> str:
     if deep_link_base_url:
         lines.append(f"在 GEO 查看详情：{deep_link_base_url}{snapshot['relative_url']}")
     else:
-        lines.append("请在春秋元泉 GEO 工作区查看详细证据。")
+        lines.append("请在当前 GEO 工作区查看详细证据。")
     return "\n".join(lines)
 
 

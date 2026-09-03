@@ -208,7 +208,7 @@ for name in ("personal", "lan", "cloud"):
     require("--no-access-log" in compose, f"{name} API must not log secret-bearing URLs")
 
 db_audit = (ROOT / "scripts/acceptance_db_audit.py").read_text(encoding="utf-8")
-require("20260830_0041" in db_audit, "database audit is not aligned with migration 0041")
+require("20260903_0042" in db_audit, "database audit is not aligned with migration 0042")
 
 print(
     "architecture audit: ok · acyclic app imports · service/route boundary · immutable deployment"

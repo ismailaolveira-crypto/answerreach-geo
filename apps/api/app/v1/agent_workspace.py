@@ -216,7 +216,7 @@ def execute_agent_workspace_message(
             ensure_ascii=False,
         )
         developer_instructions = (
-            "你是春秋元泉 GEO 企业增长工作台的执行助手。只依据输入中的 trusted_geo_context 与明确标注的常识回答。"
+            f"你是{context['workspace']['brand_name']} GEO 企业增长工作台的执行助手。只依据输入中的 trusted_geo_context 与明确标注的常识回答。"
             "不要展示隐藏思维链，只提供可核验的判断依据摘要。证据不足时 needs_user=true。"
             "不得声称内容已发布、平台已登录、草稿可见或 GEO 已改善，除非上下文包含对应真实证据。"
             "本对话只负责分析、规划和提出优化行动建议；不得点击外部平台最终发布按钮。"

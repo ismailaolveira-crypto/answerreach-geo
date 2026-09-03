@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.services.codex_agent_runtime import (
+    CodexRuntimeUnavailable,
     CodexRunTimedOut,
     LocalCodexRuntime,
     reset_local_codex_client,
@@ -450,6 +451,20 @@ def test_failed_lease_closes_only_its_client_while_other_lease_keeps_running(
     assert after["pool_busy"] == 0
     pool.reset()
     assert sorted(lifecycle["closed"]) == [1, 2]
+
+
+def test_client_pool_wait_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    import openai_codex
+
+    monkeypatch.setattr(openai_codex, "Codex", lambda: SimpleNamespace(close=lambda: None))
+    pool = codex_agent_runtime._WarmCodexClientPool(max_size=1)
+
+    with pool.use():
+        with pytest.raises(CodexRuntimeUnavailable, match="capacity remained busy"):
+            with pool.use(timeout_seconds=0.01):
+                pass
+
+    pool.reset()
 
 
 def test_verified_brand_claims_must_copy_stored_statement_exactly() -> None:

@@ -63,7 +63,7 @@ export function mapBackendPriorityActionOpportunities(
 		const primaryHost = String(primarySource?.host ?? "");
 		const primaryPlatform = String(primarySource?.platform_key ?? "");
 		const platformLabel: Record<string, string> = {
-			official_site: "春秋元泉官网",
+			official_site: "品牌官网",
 			zhihu: "知乎",
 			juejin: "掘金",
 			csdn: "CSDN",
@@ -191,7 +191,7 @@ export function derivePriorityActionOpportunities({
 				requiresSourcedBrandFacts: false,
 				missingContent: [], competitorContentPatterns: [], uncertainties: [],
 				title: "补齐采购决策入口", recommendedAsset: "采购选型 FAQ + 对比页",
-				summary: `在 ${absentRows.length}/${rows.length} 条真实回答中，春秋元泉未进入候选；同题已出现 ${competitors.slice(0, 2).join("、")} 等竞品。`,
+				summary: `在 ${absentRows.length}/${rows.length} 条真实回答中，当前品牌未进入候选；同题已出现 ${competitors.slice(0, 2).join("、")} 等竞品。`,
 				proof: `依据 ${evidenceIds.length} 条已归档回答 · 覆盖 ${modelLabels.join("、")}`,
 				existingAction,
 			});
@@ -207,7 +207,7 @@ export function derivePriorityActionOpportunities({
 				requiresSourcedBrandFacts: false,
 				missingContent: [], competitorContentPatterns: [], uncertainties: [],
 				title: "补齐可被引用的依据", recommendedAsset: "可引用的数据说明 / FAQ",
-				summary: `模型在该问题中引用了 ${uniqueSources.slice(0, 2).join("、")} 等来源，但尚未引用春秋元泉的可控内容。`,
+				summary: `模型在该问题中引用了 ${uniqueSources.slice(0, 2).join("、")} 等来源，但尚未引用当前品牌的可控内容。`,
 				proof: `依据 ${uniqueSources.length} 个真实引用来源 · ${rows.length} 条回答`,
 				existingAction,
 			});

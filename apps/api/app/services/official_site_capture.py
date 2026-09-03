@@ -179,7 +179,7 @@ class OfficialSiteCapture:
                     "approved_host": public_target.host,
                     "approved_address": approved_address,
                     "approved_port": public_target.port,
-                    "alt_text": str(candidate.get("alt_text") or "春秋元泉官网页面截图").strip()[:300],
+                    "alt_text": str(candidate.get("alt_text") or "品牌官网页面截图").strip()[:300],
                     "purpose": str(candidate.get("purpose") or "内容审核参考").strip()[:500],
                     "recommended_platforms": list(
                         dict.fromkeys(

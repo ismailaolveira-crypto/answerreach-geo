@@ -10,6 +10,7 @@ from PIL import Image
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -1574,6 +1575,13 @@ def test_agent_capacity_and_pending_job_cancellation_are_truthful(
     run_id = queued.json()["id"]
     job_id = queued.json()["job_id"]
 
+    duplicate = review_client.post(
+        "/api/v1/workspaces/1/actions/2/agent-runs",
+        json={"selected_platforms": ["zhihu"]},
+    )
+    assert duplicate.status_code == 409
+    assert f"Agent run {run_id} is already active" in duplicate.json()["detail"]
+
     runtime = review_client.get("/api/v1/workspaces/1/agent-runtime")
     assert runtime.status_code == 200
     assert runtime.json()["active_run_count"] == 1
@@ -1629,7 +1637,7 @@ def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
                 GeoAgentRun(
                     id=100 + index,
                     workspace_id=1,
-                    action_id=1,
+                    action_id=100 + index,
                     status="running",
                     stage="researching",
                     selected_platforms=["zhihu"],
@@ -1641,9 +1649,10 @@ def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
         )
         db.commit()
 
-        limit, active = agent_run_routes._agent_capacity(db, 1)
+        limit, active_count, busy = agent_run_routes._agent_capacity(db, 1)
         assert limit == 10
-        assert len(active) == 10
+        assert active_count == 10
+        assert busy is not None
         with pytest.raises(HTTPException) as blocked:
             agent_run_routes._assert_agent_capacity(db, 1)
         assert blocked.value.status_code == 409
@@ -1652,6 +1661,68 @@ def test_agent_capacity_allows_ten_and_blocks_the_eleventh(
         db.get(GeoAgentRun, 100).status = "completed"
         db.commit()
         agent_run_routes._assert_agent_capacity(db, 1)
+
+
+def test_active_agent_run_uniqueness_is_enforced_by_the_database(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add(
+            GeoAgentRun(
+                id=200,
+                workspace_id=1,
+                action_id=200,
+                status="queued",
+                stage="queued",
+                selected_platforms=["zhihu"],
+                request_snapshot={},
+                result_snapshot={},
+            )
+        )
+        db.commit()
+        db.add(
+            GeoAgentRun(
+                id=201,
+                workspace_id=1,
+                action_id=200,
+                status="running",
+                stage="researching",
+                selected_platforms=["zhihu"],
+                request_snapshot={},
+                result_snapshot={},
+            )
+        )
+        with pytest.raises(IntegrityError):
+            db.commit()
+
+
+def test_agent_capacity_counts_only_this_workspaces_discovery_jobs(
+    review_client: TestClient,
+) -> None:
+    session_factory = review_client.app.state.review_session_factory
+    with session_factory() as db:
+        db.add_all(
+            [
+                QueueJob(
+                    job_type="geo_opportunity.discover",
+                    status="pending",
+                    payload_json={"workspace_id": 1},
+                ),
+                QueueJob(
+                    job_type="geo_opportunity.discover",
+                    status="pending",
+                    payload_json={"workspace_id": 2},
+                ),
+            ]
+        )
+        db.commit()
+
+        limit, active_count, busy = agent_run_routes._agent_capacity(db, 1)
+
+        assert limit == 10
+        assert active_count == 1
+        assert busy is None
 
 
 def test_worker_honors_cancellation_won_during_queue_handoff(review_client: TestClient) -> None:

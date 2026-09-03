@@ -351,6 +351,33 @@ def test_article_action_uses_content_distribution_and_publication_as_authoritati
                 final_action_clicked=False,
             )
         )
+        db.add(
+            GeoDistributionRun(
+                id=2,
+                workspace_id=1,
+                action_id=1,
+                content_asset_id=1,
+                requested_platforms=["zhihu"],
+                stage="queued",
+                idempotency_key="test-newer-weaker-article-state",
+                status="pending",
+                requested_by_user_id=1,
+            )
+        )
+        db.add(
+            GeoDistributionTarget(
+                id=2,
+                distribution_run_id=2,
+                platform_variant_id=1,
+                platform_key="zhihu",
+                adapter_version="browser-extension.v1",
+                request_status="not_started",
+                draft_readback_status="not_checked",
+                human_publish_status="not_published",
+                publication_verification_status="not_checked",
+                final_action_clicked=False,
+            )
+        )
         db.commit()
 
     draft_ready = client.get("/api/v1/workspaces/1/actions/1").json()

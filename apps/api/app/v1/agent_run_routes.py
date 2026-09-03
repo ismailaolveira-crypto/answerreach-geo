@@ -7,7 +7,8 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, get_current_user, require_roles
@@ -83,7 +84,7 @@ def _agent_capacity(
     workspace_id: int,
     *,
     exclude_run_id: int | None = None,
-) -> tuple[int, list[object]]:
+) -> tuple[int, int, object | None]:
     limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 10))
     query = select(GeoAgentRun).where(
         GeoAgentRun.workspace_id == workspace_id,
@@ -91,18 +92,20 @@ def _agent_capacity(
     )
     if exclude_run_id is not None:
         query = query.where(GeoAgentRun.id != exclude_run_id)
-    active_runs: list[object] = list(db.scalars(query.order_by(GeoAgentRun.id.desc())))
-    active_discovery_jobs = [
-        job
-        for job in db.scalars(
-            select(QueueJob).where(
-                QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
-                QueueJob.status.in_(("pending", "running")),
-            )
-        )
-        if int((job.payload_json or {}).get("workspace_id") or 0) == workspace_id
-    ]
-    return limit, [*active_runs, *active_discovery_jobs]
+    active_run_count = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
+    job_query = select(QueueJob).where(
+        QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
+        QueueJob.status.in_(("pending", "running")),
+        QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
+    )
+    active_job_count = int(db.scalar(select(func.count()).select_from(job_query.subquery())) or 0)
+    active_count = active_run_count + active_job_count
+    busy = None
+    if active_count >= limit:
+        busy = db.scalar(query.order_by(GeoAgentRun.id.desc()).limit(1))
+        if busy is None:
+            busy = db.scalar(job_query.order_by(QueueJob.id.desc()).limit(1))
+    return limit, active_count, busy
 
 
 def _agent_runtime_diagnostic(
@@ -116,12 +119,12 @@ def _agent_runtime_diagnostic(
         diagnostic = _diagnose_runtime_for_request(runtime_key, invalidate=invalidate)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent runtime not found") from exc
-    limit, active_runs = _agent_capacity(db, workspace_id)
+    limit, active_count, _busy = _agent_capacity(db, workspace_id)
     return {
         **diagnostic,
-        "active_run_count": len(active_runs),
+        "active_run_count": active_count,
         "max_concurrent_runs": limit,
-        "capacity_available": len(active_runs) < limit,
+        "capacity_available": active_count < limit,
         "run_timeout_seconds": max(
             60,
             min(int(get_settings().agent_run_timeout_seconds), 3600),
@@ -192,14 +195,13 @@ def _assert_agent_capacity(
     *,
     exclude_run_id: int | None = None,
 ) -> None:
-    limit, active_runs = _agent_capacity(db, workspace_id, exclude_run_id=exclude_run_id)
-    if len(active_runs) < limit:
+    limit, active_count, busy = _agent_capacity(db, workspace_id, exclude_run_id=exclude_run_id)
+    if active_count < limit:
         return
-    busy = active_runs[0]
     raise HTTPException(
         status_code=409,
         detail=(
-            f"Workspace Agent capacity is busy ({len(active_runs)}/{limit}) with run {busy.id}; "
+            f"Workspace Agent capacity is busy ({active_count}/{limit}) with run {getattr(busy, 'id', 'unknown')}; "
             "wait for it to finish or interrupt it before starting another run"
         ),
     )
@@ -228,11 +230,11 @@ def read_agent_runtimes(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    limit, active_runs = _agent_capacity(db, workspace_id)
+    limit, active_count, _busy = _agent_capacity(db, workspace_id)
     shared = {
-        "active_run_count": len(active_runs),
+        "active_run_count": active_count,
         "max_concurrent_runs": limit,
-        "capacity_available": len(active_runs) < limit,
+        "capacity_available": active_count < limit,
         "run_timeout_seconds": max(60, min(int(get_settings().agent_run_timeout_seconds), 3600)),
     }
     return [{**diagnostic, **shared} for diagnostic in list_agent_runtimes()]
@@ -495,7 +497,21 @@ def create_agent_run(
         },
     )
     db.add(run)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        active = db.scalar(
+            select(GeoAgentRun)
+            .where(
+                GeoAgentRun.workspace_id == workspace_id,
+                GeoAgentRun.action_id == action_id,
+                GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),
+            )
+            .order_by(GeoAgentRun.id.desc())
+        )
+        detail = f"Agent run {active.id} is already active" if active else "Agent run is already active"
+        raise HTTPException(status_code=409, detail=detail) from exc
     job = QueueJob(
         job_type="geo_agent.run",
         status="pending",

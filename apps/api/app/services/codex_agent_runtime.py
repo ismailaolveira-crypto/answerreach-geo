@@ -48,8 +48,9 @@ class _WarmCodexClientPool:
         self._slots: list[_WarmCodexSlot] = []
 
     @contextmanager
-    def use(self):
+    def use(self, *, timeout_seconds: float = 30.0):
         slot: _WarmCodexSlot
+        deadline = monotonic() + max(0.1, float(timeout_seconds))
         with self._condition:
             while True:
                 slot = next((candidate for candidate in self._slots if not candidate.in_use), None)
@@ -64,7 +65,12 @@ class _WarmCodexClientPool:
                     )
                     self._slots.append(slot)
                     break
-                self._condition.wait()
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    raise CodexRuntimeUnavailable(
+                        f"Codex client capacity remained busy for {timeout_seconds:g} seconds"
+                    )
+                self._condition.wait(remaining)
             slot.in_use = True
             slot.reuse_count += 1
 
@@ -296,7 +302,11 @@ class LocalCodexRuntime:
         compact_events: list[dict] = []
         interrupted = False
 
-        with _warm_codex_client.use() as codex:
+        with _warm_codex_client.use(
+            timeout_seconds=min(float(timeout_seconds), 30.0)
+            if timeout_seconds and timeout_seconds > 0
+            else 30.0
+        ) as codex:
             if thread_id:
                 thread = codex.thread_resume(
                     thread_id,
@@ -445,7 +455,7 @@ class LocalCodexRuntime:
         revised_prompt: str | None = None
         usage: dict = {}
         completed_status = ""
-        with _warm_codex_client.use() as codex:
+        with _warm_codex_client.use(timeout_seconds=min(float(timeout_seconds), 30.0)) as codex:
             thread = codex.thread_start(
                 cwd=str(task_directory),
                 developer_instructions=(
