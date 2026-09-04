@@ -457,7 +457,7 @@ def test_article_action_uses_content_distribution_and_publication_as_authoritati
     assert evidence.json()["sha256"] == "b" * 64
 
     completed = client.get("/api/v1/workspaces/1/actions/1").json()
-    assert completed["stage"] == "completed"
+    assert completed["stage"] == "ready_for_retest"
     assert completed["measurement_status"] == "eligible"
     assert completed["completed_target_count"] == 1
     assert completed["retest_eligible_target_count"] == 1
@@ -690,7 +690,7 @@ def test_non_article_actions_keep_distinct_workflows_and_real_completion_evidenc
     third_party = _transition_target(client, 4, 4, "public_readback_verified", "source-04")
 
     for completed in (official, structured, third_party):
-        assert completed["stage"] == "completed"
+        assert completed["stage"] == "ready_for_retest"
         assert completed["measurement_status"] == "eligible"
         assert completed["completed_target_count"] == 1
         assert completed["retest_eligible_target_count"] == 1

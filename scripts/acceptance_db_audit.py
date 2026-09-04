@@ -39,6 +39,10 @@ try:
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
         ("uq_geo_agent_run_active_action_v1",),
     ).fetchone()
+    active_fingerprint_index = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+        ("uq_queue_job_active_fingerprint",),
+    ).fetchone()
 finally:
     connection.close()
 
@@ -46,10 +50,12 @@ if integrity != [("ok",)]:
     raise SystemExit(f"database integrity failed: {integrity!r}")
 if foreign_keys:
     raise SystemExit(f"foreign key violations: {len(foreign_keys)}")
-if version != ("20260903_0042",):
+if version != ("20260904_0043",):
     raise SystemExit(f"unexpected migration version: {version!r}")
 if active_run_index is None:
     raise SystemExit("required active Agent run index is missing")
+if active_fingerprint_index is None:
+    raise SystemExit("required active queue fingerprint index is missing")
 
 source = "disposable migration" if temporary_database else "read-only local database"
 print(f"database audit: ok · {version[0]} · {source}")

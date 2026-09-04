@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import assert_company_access, get_project_or_404, require_roles
 from app.db.session import get_db
 from app.models import Project, QueueJob, User
+from app.models.cleanroom_v1 import GeoWorkspace
 from app.schemas.search import (
     QueueJobListResponse,
     QueueJobRead,
@@ -16,7 +17,7 @@ from app.schemas.search import (
 )
 from app.services.audit import record_audit_log
 from app.services.crawl_scheduler import run_due_crawl_schedules
-from app.services.job_queue import run_next_job
+from app.services.job_queue import apply_queue_tenant_filter, run_next_job
 
 router = APIRouter(prefix="/queue", tags=["queue"])
 
@@ -46,26 +47,32 @@ def _queue_summary(db: Session) -> QueueJobSummary:
     )
 
 
-def _accessible_project_ids(db: Session, user: User) -> list[int] | None:
+def _queue_tenant_scope(db: Session, user: User) -> dict:
     if user.role == "super_admin":
-        return None
+        return {}
     if user.company_id is None:
-        return []
-    return list(db.scalars(select(Project.id).where(Project.company_id == user.company_id)))
+        return {"company_id": -1, "project_ids": [], "workspace_ids": []}
+    return {
+        "company_id": user.company_id,
+        "project_ids": list(
+            db.scalars(select(Project.id).where(Project.company_id == user.company_id))
+        ),
+        "workspace_ids": list(
+            db.scalars(select(GeoWorkspace.id).where(GeoWorkspace.company_id == user.company_id))
+        ),
+    }
 
 
-def _queue_project_filter(stmt, project_ids: list[int] | None):
-    if project_ids is None:
+def _queue_tenant_filter(stmt, scope: dict):
+    if not scope:
         return stmt
-    if not project_ids:
-        return stmt.where(False)
-    return stmt.where(QueueJob.payload_json["project_id"].as_integer().in_(project_ids))
+    return apply_queue_tenant_filter(stmt, **scope)
 
 
 def _queue_summary_for_user(db: Session, user: User) -> QueueJobSummary:
-    project_ids = _accessible_project_ids(db, user)
+    scope = _queue_tenant_scope(db, user)
     stmt = select(QueueJob.status, func.count()).group_by(QueueJob.status)
-    stmt = _queue_project_filter(stmt, project_ids)
+    stmt = _queue_tenant_filter(stmt, scope)
     stmt = _exclude_non_dispatchable_history(stmt)
     rows = db.execute(stmt).all()
     counts = {status: count for status, count in rows}
@@ -86,8 +93,7 @@ def list_queue_jobs(
     user: User = Depends(require_roles("super_admin", "company_admin")),
 ) -> QueueJobListResponse:
     stmt = select(QueueJob).order_by(QueueJob.created_at.desc(), QueueJob.id.desc()).limit(limit)
-    project_ids = _accessible_project_ids(db, user)
-    stmt = _queue_project_filter(stmt, project_ids)
+    stmt = _queue_tenant_filter(stmt, _queue_tenant_scope(db, user))
     stmt = _exclude_non_dispatchable_history(stmt)
     if status:
         stmt = stmt.where(QueueJob.status == status)
@@ -99,8 +105,7 @@ def run_next_queue_job(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles("super_admin", "company_admin")),
 ) -> QueueJobRunResult:
-    project_ids = _accessible_project_ids(db, user)
-    job = run_next_job(db, project_ids=project_ids)
+    job = run_next_job(db, **_queue_tenant_scope(db, user))
     record_audit_log(
         db,
         user=user,
@@ -130,14 +135,18 @@ def run_ready_queue_jobs(
     if project_id is not None:
         project = get_project_or_404(db, project_id)
         assert_company_access(user, project.company_id)
-    project_ids = _accessible_project_ids(db, user)
+    scope = _queue_tenant_scope(db, user)
+    project_ids = scope.get("project_ids")
     checked_at = datetime.now(UTC)
     _, tasks = run_due_crawl_schedules(db, project_id=project_id, project_ids=project_ids, now=checked_at)
     created_task_ids = [task.id for task in tasks]
 
     ran_jobs: list[QueueJob] = []
     for _ in range(max_jobs):
-        job = run_next_job(db, project_id=project_id, project_ids=None if project_id is not None else project_ids)
+        if project_id is not None:
+            job = run_next_job(db, project_id=project_id)
+        else:
+            job = run_next_job(db, **scope)
         if job is None:
             break
         ran_jobs.append(job)
@@ -151,9 +160,12 @@ def run_ready_queue_jobs(
     )
     pending_stmt = _exclude_non_dispatchable_history(pending_stmt)
     if project_id is not None:
-        pending_stmt = pending_stmt.where(QueueJob.payload_json["project_id"].as_integer() == project_id)
+        pending_stmt = pending_stmt.where(
+            QueueJob.payload_json["workspace_id"].as_integer().is_(None),
+            QueueJob.payload_json["project_id"].as_integer() == project_id,
+        )
     else:
-        pending_stmt = _queue_project_filter(pending_stmt, project_ids)
+        pending_stmt = _queue_tenant_filter(pending_stmt, scope)
     pending_job_count = db.scalar(pending_stmt) or 0
     success_job_count = sum(1 for job in ran_jobs if job.status == "success")
     failed_job_count = sum(1 for job in ran_jobs if job.status == "failed")

@@ -7,7 +7,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -15,6 +15,11 @@ from app.api.deps import WRITE_ROLES, get_current_user, require_roles
 from app.core.config import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import QueueJob
+from app.services.job_queue import (
+    cancel_pending_queue_job,
+    count_workspace_agent_reservations,
+    geo_job_payload,
+)
 from app.models.cleanroom_v1 import (
     GeoActionOpportunity,
     GeoAgentArtifact,
@@ -92,19 +97,23 @@ def _agent_capacity(
     )
     if exclude_run_id is not None:
         query = query.where(GeoAgentRun.id != exclude_run_id)
-    active_run_count = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
-    job_query = select(QueueJob).where(
-        QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
-        QueueJob.status.in_(("pending", "running")),
-        QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
+    active_count = count_workspace_agent_reservations(
+        db, workspace_id, exclude_run_id=exclude_run_id
     )
-    active_job_count = int(db.scalar(select(func.count()).select_from(job_query.subquery())) or 0)
-    active_count = active_run_count + active_job_count
     busy = None
     if active_count >= limit:
         busy = db.scalar(query.order_by(GeoAgentRun.id.desc()).limit(1))
         if busy is None:
-            busy = db.scalar(job_query.order_by(QueueJob.id.desc()).limit(1))
+            busy = db.scalar(
+                select(QueueJob)
+                .where(
+                    QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
+                    QueueJob.status.in_(("pending", "running", "recovering")),
+                    QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
+                )
+                .order_by(QueueJob.id.desc())
+                .limit(1)
+            )
     return limit, active_count, busy
 
 
@@ -446,7 +455,7 @@ def create_agent_run(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
     opportunity = db.get(GeoActionOpportunity, action.opportunity_id) if action.opportunity_id else None
     if opportunity is None or opportunity.workspace_id != workspace_id:
@@ -551,13 +560,13 @@ def create_agent_run(
         priority=20,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "action_id": action_id,
-            "agent_run_id": run.id,
-            "actor_user_id": user.id,
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            action_id=action_id,
+            agent_run_id=run.id,
+        ),
     )
     db.add(job)
     db.flush()
@@ -1083,22 +1092,49 @@ def interrupt_agent_run(
         raise HTTPException(status_code=409, detail=f"Cannot interrupt Agent run in {run.status}")
     now = datetime.now(timezone.utc)
     job = db.get(QueueJob, run.job_id) if run.job_id else None
-    if run.status in {"queued", "resuming"} and job is not None and job.status == "pending":
-        run.status = "cancelled"
-        run.stage = "cancelled"
+    if run.status in {"queued", "resuming"} and job is not None:
+        cancelled = cancel_pending_queue_job(
+            db,
+            job.id,
+            now=now,
+            payload_update={
+                "stage": "cancelled",
+                "agent_status": "cancelled",
+                "cancelled_before_start": True,
+            },
+        )
+        if cancelled:
+            db.refresh(job)
+            run.status = "cancelled"
+            run.stage = "cancelled"
+            run.cancel_requested_at = now
+            run.error_code = "user_interrupted"
+            run.error_message = "Agent run was cancelled before the worker started"
+            run.finished_at = now
+            action = db.get(GeoOptimizationAction, run.action_id)
+            if action is not None:
+                action.stage = "reviewing" if (run.result_snapshot or {}).get("asset_id") else "selected"
+                action.blocked_reason = None
+            db.commit()
+            append_agent_event(
+                db,
+                run,
+                event_type="run_cancelled",
+                stage="cancelled",
+                message="Agent 尚未开始执行，排队任务已立即取消",
+                detail={"requested_by_user_id": user.id, "job_id": job.id},
+            )
+            return run
+        db.refresh(job)
+    if job is None or job.status not in {"pending", "running"}:
+        run.status = "cancelled" if job is None or job.status == "success" else "failed"
+        run.stage = run.status
         run.cancel_requested_at = now
-        run.error_code = "user_interrupted"
-        run.error_message = "Agent run was cancelled before the worker started"
+        run.error_code = "user_interrupted" if run.status == "cancelled" else "worker_interrupted"
+        run.error_message = (
+            "Agent run was cancelled because the linked queue job is no longer executable"
+        )
         run.finished_at = now
-        job.status = "success"
-        job.finished_at = now
-        job.error_message = None
-        job.payload_json = {
-            **dict(job.payload_json or {}),
-            "stage": "cancelled",
-            "agent_status": "cancelled",
-            "cancelled_before_start": True,
-        }
         action = db.get(GeoOptimizationAction, run.action_id)
         if action is not None:
             action.stage = "reviewing" if (run.result_snapshot or {}).get("asset_id") else "selected"
@@ -1108,9 +1144,9 @@ def interrupt_agent_run(
             db,
             run,
             event_type="run_cancelled",
-            stage="cancelled",
-            message="Agent 尚未开始执行，排队任务已立即取消",
-            detail={"requested_by_user_id": user.id, "job_id": job.id},
+            stage=run.stage,
+            message="关联队列任务已不在执行中，中止已立即生效",
+            detail={"requested_by_user_id": user.id, "job_id": job.id if job else None},
         )
         return run
     if run.cancel_requested_at is None:
@@ -1139,7 +1175,7 @@ def resume_agent_run(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     run = _agent_run_or_404(db, workspace_id, run_id)
     if run.status not in {"cancelled", "failed"} or not _agent_run_session_id(run):
         raise HTTPException(status_code=409, detail="Only an interrupted/failed run with an Agent session can resume")
@@ -1153,14 +1189,14 @@ def resume_agent_run(
         priority=20,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "action_id": run.action_id,
-            "agent_run_id": run.id,
-            "actor_user_id": user.id,
-            "resume": True,
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            action_id=run.action_id,
+            agent_run_id=run.id,
+            resume=True,
+        ),
     )
     db.add(job)
     db.flush()
@@ -1194,7 +1230,7 @@ def revise_agent_run(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     run = _agent_run_or_404(db, workspace_id, run_id)
     asset = scoped_or_404(db, GeoContentAsset, workspace_id, payload.content_asset_id)
     brief = scoped_or_404(db, GeoContentBrief, workspace_id, asset.brief_id)
@@ -1232,15 +1268,15 @@ def revise_agent_run(
         priority=20,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "action_id": run.action_id,
-            "agent_run_id": run.id,
-            "actor_user_id": user.id,
-            "resume": True,
-            "revision_of_asset_id": asset.id,
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            action_id=run.action_id,
+            agent_run_id=run.id,
+            resume=True,
+            revision_of_asset_id=asset.id,
+        ),
     )
     db.add(job)
     db.flush()

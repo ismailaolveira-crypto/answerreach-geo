@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -1037,11 +1037,42 @@ def execute_agent_run(
     resume_asset_id = int(run.result_snapshot.get("asset_id") or 0)
     resume_asset = db.get(GeoContentAsset, resume_asset_id) if resume_asset_id else None
     is_revision = bool(is_resume and resume_asset and resume_asset.status == "changes_requested")
-    run.status = "running"
-    run.started_at = run.started_at or datetime.now(timezone.utc)
-    run.error_code = None
-    run.error_message = None
+    claimed = db.execute(
+        update(GeoAgentRun)
+        .where(
+            GeoAgentRun.id == run.id,
+            GeoAgentRun.status.in_(("queued", "resuming")),
+        )
+        .values(
+            status="running",
+            started_at=run.started_at or datetime.now(timezone.utc),
+            error_code=None,
+            error_message=None,
+        )
+    )
     db.commit()
+    if claimed.rowcount != 1:
+        db.refresh(run)
+        if run.status == "cancelling":
+            run.status = "cancelled"
+            run.stage = "cancelled"
+            run.error_code = "user_interrupted"
+            run.error_message = "Agent run was cancelled before execution began"
+            run.finished_at = datetime.now(timezone.utc)
+            action = db.get(GeoOptimizationAction, run.action_id)
+            if action:
+                action.stage = "reviewing" if (run.result_snapshot or {}).get("asset_id") else "selected"
+                action.blocked_reason = None
+            db.commit()
+            append_agent_event(
+                db,
+                run,
+                event_type="run_cancelled",
+                stage="cancelled",
+                message="Agent 在 worker 接受后、实际执行前已取消",
+            )
+        return run
+    db.refresh(run)
     try:
         append_agent_event(
             db,

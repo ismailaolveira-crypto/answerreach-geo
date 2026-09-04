@@ -303,6 +303,8 @@ class StdioMcpArticleSyncAdapter:
         }
 
     def request_draft(self, *, platform_key: str, title: str, body_markdown: str) -> dict:
+        if platform_key in {"official_site"}:
+            raise RuntimeError("article_sync_official_site_unsupported")
         platforms = self._wait_for_extension(force_refresh=True)
         matching_platform = next(
             (item for item in platforms if item.get("id") == platform_key),
@@ -314,7 +316,12 @@ class StdioMcpArticleSyncAdapter:
             raise RuntimeError("article_sync_platform_not_authenticated")
         result = self._call_tool(
             "sync_article",
-            {"platforms": [platform_key], "title": title, "markdown": body_markdown},
+            {
+                "platforms": [platform_key],
+                "title": title,
+                "markdown": body_markdown,
+                "draftOnly": True,
+            },
         )
         if result.get("isError") is True:
             raise RuntimeError(_classify_tool_error(result))
@@ -335,14 +342,17 @@ class StdioMcpArticleSyncAdapter:
             if "登录态超时" in error_text or "重新登录" in error_text or "请先登录" in error_text:
                 raise RuntimeError("article_sync_platform_session_expired")
             raise RuntimeError("article_sync_draft_write_failed")
+        draft_only = platform_result.get("draftOnly", True)
+        if draft_only is False:
+            raise RuntimeError("article_sync_draft_only_required")
         return {
             "request_status": "mcp_request_accepted",
             "platform": platform_key,
             "platform_name": matching_platform.get("name") or platform_key,
             "sync_id": payload.get("syncId") if isinstance(payload, dict) else None,
-            "draft_only": platform_result.get("draftOnly", True),
+            "draft_only": True,
             "post_id": platform_result.get("postId"),
-            "post_url": platform_result.get("postUrl"),
+            "post_url": None,
         }
 
     def read_draft(self, *, platform_key: str, candidate_url: str | None = None) -> dict:

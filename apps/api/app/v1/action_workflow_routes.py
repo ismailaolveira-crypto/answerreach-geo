@@ -35,6 +35,7 @@ from app.v1.action_workflow import (
     effective_target_truth,
     next_target_status,
     next_approval_version,
+    mark_matching_distribution_published,
     refresh_action_delivery_stage,
     require_manager,
     target_is_final,
@@ -781,6 +782,19 @@ def submit_action_evidence(
         target.verified_at = evidence.verified_at
         required = REQUIRED_EVIDENCE_BY_ACTION[action.action_type]
         if required.issubset(_verified_evidence_types(db, action.id, target.id)):
+            if action.action_type == "article":
+                receipt = mark_matching_distribution_published(
+                    db,
+                    action,
+                    target,
+                    public_url=payload.source_url,
+                    user_id=user.id,
+                )
+                if receipt is None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="文章发布必须先有分发回执，请通过工作台记录发布结果",
+                    )
             previous_target_status = target.delivery_status
             previous_action_stage = action.stage
             target.delivery_status = FINAL_TARGET_STATUS[action.action_type]

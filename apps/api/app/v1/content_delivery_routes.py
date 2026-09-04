@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, get_current_user, require_roles
+from app.services.job_queue import geo_job_payload
 from app.db.session import get_db
 from app.models import LLMProvider, QueueJob
 from app.models.cleanroom_v1 import (
@@ -2123,6 +2124,11 @@ def request_distribution_run(
             .order_by(GeoDistributionTarget.id.asc())
         )
     )
+    if any(target.platform_key == "official_site" for target in targets):
+        raise HTTPException(
+            status_code=409,
+            detail="官网稿不得通过文章同步助手或 MCP 请求写入",
+        )
     accepted = 0
     for target in targets:
         variant = db.get(GeoPlatformVariant, target.platform_variant_id) if target.platform_variant_id else None
@@ -2238,7 +2244,7 @@ def enqueue_content_generation(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, action_id)
     brief = scoped_or_404(db, GeoContentBrief, workspace_id, brief_id)
     if brief.action_id != action_id:
@@ -2279,15 +2285,15 @@ def enqueue_content_generation(
         priority=15,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "action_id": action_id,
-            "brief_id": brief_id,
-            "provider_id": provider.id,
-            "platform_key": payload.platform_key,
-            "actor_user_id": user.id,
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            action_id=action_id,
+            brief_id=brief_id,
+            provider_id=provider.id,
+            platform_key=payload.platform_key,
+        ),
     )
     db.add(job)
     db.flush()

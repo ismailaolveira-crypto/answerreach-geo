@@ -632,7 +632,7 @@ def test_v2_retest_uses_only_selected_completed_target(
     with session_factory() as db:
         action = db.get(GeoOptimizationAction, 1)
         assert action is not None
-        assert action.stage == "ready_for_retest"
+        assert action.stage == "partially_completed"
         assert action.measurement_status == "measured"
         links = list(
             db.scalars(
@@ -642,3 +642,112 @@ def test_v2_retest_uses_only_selected_completed_target(
             )
         )
         assert [(link.action_target_id, link.completion_evidence_id) for link in links] == [(11, 21)]
+
+
+def test_v2_comparable_retest_marks_completed_when_all_targets_final(
+    retest_client: TestClient,
+) -> None:
+    session_factory = retest_client.app.state.retest_session_factory
+    now = datetime.now(timezone.utc)
+    with session_factory() as db:
+        action = db.get(GeoOptimizationAction, 1)
+        assert action is not None
+        action.action_type = "article"
+        action.deliverable_type = "article_asset"
+        action.workflow_version = "action-flow.v2"
+        action.affected_question_ids = [1]
+        action.affected_model_keys = ["deepseek"]
+        action.scope_fingerprint = "f" * 64
+        action.measurement_status = "retesting"
+        action.stage = "retesting"
+        db.add(
+            GeoActionTarget(
+                id=11,
+                workspace_id=1,
+                action_id=1,
+                target_key="article:zhihu",
+                target_type="platform",
+                platform_key="zhihu",
+                display_name="知乎",
+                target_ref="zhihu",
+                delivery_status="publicly_verified",
+                ordinal=1,
+                metadata_json={},
+                completed_at=now,
+                completed_by_user_id=1,
+                verified_at=now,
+            )
+        )
+        db.flush()
+        db.add(
+            GeoActionCompletionEvidence(
+                id=21,
+                workspace_id=1,
+                action_id=1,
+                target_id=11,
+                evidence_type="public_url",
+                source_url="https://zhuanlan.zhihu.com/p/123",
+                sha256="e" * 64,
+                verification_status="verified",
+                detail={"readback": True},
+                submitted_by_user_id=1,
+                verified_by_user_id=1,
+                submitted_at=now,
+                verified_at=now,
+                idempotency_key="target-evidence-all-final",
+            )
+        )
+        db.commit()
+
+    queued = retest_client.post(
+        "/api/v1/workspaces/1/actions/1/retests",
+        json={"target_ids": [11], "idempotency_key": "all-final-retest-round-1"},
+    )
+    assert queued.status_code == 202, queued.text
+
+    with session_factory() as db:
+        action = db.get(GeoOptimizationAction, 1)
+        row = db.scalar(select(models.GeoReobservation).where(models.GeoReobservation.action_id == 1))
+        assert action is not None
+        assert row is not None
+        assert action.stage == "retesting"
+        db.add(
+            GeoObservationRun(
+                id=3,
+                workspace_id=1,
+                adapter_key="official_api",
+                status="completed",
+                request_context={},
+                started_at=now,
+                completed_at=now,
+            )
+        )
+        tasks = list(
+            db.scalars(
+                select(GeoObservationTask)
+                .where(GeoObservationTask.batch_id == row.retest_batch_id)
+                .order_by(GeoObservationTask.id)
+            )
+        )
+        for index, task in enumerate(tasks, start=401):
+            db.add(_evidence(index, 3, task.model_key, "mentioned"))
+            task.run_id = 3
+            task.evidence_id = index
+            task.status = "completed"
+            task.completed_at = now
+            child = db.get(QueueJob, task.queue_job_id)
+            assert child is not None
+            child.status = "success"
+            child.started_at = now
+            child.finished_at = now
+        db.commit()
+
+    completed = retest_client.post("/api/v1/workspaces/1/actions/1/retest/refresh")
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "completed"
+    with session_factory() as db:
+        action = db.get(GeoOptimizationAction, 1)
+        assert action is not None
+        assert action.stage == "completed"
+        assert action.measurement_status == "measured"
+        assert action.completed_at is not None

@@ -1,14 +1,45 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    column,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
 from app.models.base import TimestampMixin
 
+_PAYLOAD_JSON = column("payload_json", JSON)
+
 
 class QueueJob(TimestampMixin, Base):
     __tablename__ = "queue_jobs"
+    __table_args__ = (
+        Index(
+            "uq_queue_job_active_fingerprint",
+            "job_type",
+            _PAYLOAD_JSON["workspace_id"].as_string(),
+            _PAYLOAD_JSON["input_fingerprint"].as_string(),
+            unique=True,
+            sqlite_where=text(
+                "status IN ('pending', 'running', 'recovering') "
+                "AND json_extract(payload_json, '$.input_fingerprint') IS NOT NULL "
+                "AND json_extract(payload_json, '$.input_fingerprint') != ''"
+            ),
+            postgresql_where=text(
+                "status IN ('pending', 'running', 'recovering') "
+                "AND COALESCE(payload_json->>'input_fingerprint', '') <> ''"
+            ),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     job_type: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
