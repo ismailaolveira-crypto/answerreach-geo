@@ -6,6 +6,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, get_current_user, require_roles
@@ -15,7 +16,6 @@ from app.models.cleanroom_v1 import (
     GeoAgentConversation,
     GeoAgentConversationEvent,
     GeoAgentConversationMessage,
-    GeoAgentRun,
     GeoActionTarget,
     GeoObservationBatch,
     GeoOptimizationAction,
@@ -24,7 +24,11 @@ from app.models.cleanroom_v1 import (
 from app.models.job import QueueJob
 from app.models.user import User
 from app.services.agent_runtime import RUNTIME_KEYS, diagnose_agent_runtime
-from app.services.job_queue import user_visible_job_error
+from app.services.job_queue import (
+    count_workspace_agent_reservations,
+    geo_job_payload,
+    user_visible_job_error,
+)
 from app.services.workspace_access import require_workspace_access
 from app.v1.action_workflow import (
     MANAGER_ROLES,
@@ -330,7 +334,7 @@ def create_agent_workspace_message(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    require_workspace_access(db, user, workspace_id)
+    workspace, _membership = require_workspace_access(db, user, workspace_id)
     conversation = _conversation_or_404(db, workspace_id, conversation_id, user.id)
     if conversation.status != "active":
         raise HTTPException(status_code=409, detail="已归档的对话不能继续发送")
@@ -353,35 +357,8 @@ def create_agent_workspace_message(
     )
     if active_in_conversation:
         raise HTTPException(status_code=409, detail="这段对话仍在处理中")
-    workspace_conversations = int(
-        db.scalar(
-            select(func.count())
-            .select_from(GeoAgentConversationMessage)
-            .outerjoin(QueueJob, QueueJob.id == GeoAgentConversationMessage.job_id)
-            .where(
-                GeoAgentConversationMessage.workspace_id == workspace_id,
-                GeoAgentConversationMessage.status.in_(["queued", "running"]),
-                or_(
-                    GeoAgentConversationMessage.job_id.is_(None),
-                    QueueJob.status.in_(active_queue_statuses),
-                ),
-            )
-        )
-        or 0
-    )
-    action_runs = int(
-        db.scalar(
-            select(func.count())
-            .select_from(GeoAgentRun)
-            .where(
-                GeoAgentRun.workspace_id == workspace_id,
-                GeoAgentRun.status.in_(["queued", "running"]),
-            )
-        )
-        or 0
-    )
     limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 10))
-    if workspace_conversations + action_runs >= limit:
+    if count_workspace_agent_reservations(db, workspace_id) >= limit:
         raise HTTPException(status_code=409, detail=f"Agent 当前容量已满（{limit} 个并行任务）")
 
     runtime_key = payload.runtime_key
@@ -437,20 +414,24 @@ def create_agent_workspace_message(
     conversation.reasoning_effort = payload.reasoning_effort or diagnostic.get("default_reasoning_effort")
     conversation.last_message_at = now
     db.add_all([conversation, user_message, assistant_message])
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="这段对话仍在处理中") from None
     job = QueueJob(
         job_type="geo_agent.conversation",
         status="pending",
         priority=10,
         max_attempts=1,
         scheduled_at=now,
-        payload_json={
-            "workspace_id": workspace_id,
-            "project_id": workspace_id,
-            "conversation_id": conversation.id,
-            "message_id": assistant_message.id,
-            "actor_user_id": user.id,
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            conversation_id=conversation.id,
+            message_id=assistant_message.id,
+        ),
     )
     db.add(job)
     db.flush()

@@ -23,6 +23,7 @@ from app.models.cleanroom_v1 import (
     GeoDistributionTarget,
     GeoOptimizationAction,
     GeoPlatformVariant,
+    GeoReobservation,
 )
 from app.models.user import User
 from app.models.workspace_access import WorkspaceMembership
@@ -45,6 +46,7 @@ ACTION_STAGES = {
     "awaiting_approval",
     "executing",
     "partially_completed",
+    "ready_for_retest",
     "completed",
     "blocked",
     "changes_requested",
@@ -397,19 +399,6 @@ def _article_target_truth(
     the status keeps the API explainable and prevents UI labels from guessing.
     """
 
-    verified_publication = db.scalar(
-        select(GeoActionCompletionEvidence)
-        .where(
-            GeoActionCompletionEvidence.action_id == action.id,
-            GeoActionCompletionEvidence.target_id == target.id,
-            GeoActionCompletionEvidence.evidence_type == "public_url",
-            GeoActionCompletionEvidence.verification_status == "verified",
-        )
-        .order_by(GeoActionCompletionEvidence.id.desc())
-    )
-    if verified_publication is not None:
-        return "publicly_verified", "completion_evidence", "公开页面已经完成服务器回读核验。", None
-
     distribution_rows = db.execute(
         select(GeoDistributionTarget, GeoDistributionRun)
         .join(
@@ -602,6 +591,75 @@ def synchronize_article_action_targets(
     return changes
 
 
+def _has_comparable_retest(db: Session, action: GeoOptimizationAction) -> bool:
+    return (
+        db.scalar(
+            select(GeoReobservation.id)
+            .where(
+                GeoReobservation.action_id == action.id,
+                GeoReobservation.status == "completed",
+                GeoReobservation.conclusion.in_(("improved", "unchanged", "regressed")),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def mark_matching_distribution_published(
+    db: Session,
+    action: GeoOptimizationAction,
+    target: GeoActionTarget,
+    *,
+    public_url: str,
+    user_id: int,
+) -> GeoDistributionTarget | None:
+    """Keep command-center evidence and workbench publication receipts aligned."""
+
+    row = db.execute(
+        select(GeoDistributionTarget, GeoDistributionRun)
+        .join(
+            GeoDistributionRun,
+            GeoDistributionRun.id == GeoDistributionTarget.distribution_run_id,
+        )
+        .where(
+            GeoDistributionRun.action_id == action.id,
+            GeoDistributionTarget.platform_key == target.platform_key,
+            GeoDistributionTarget.draft_readback_status == "draft_saved",
+        )
+        .order_by(GeoDistributionRun.id.desc(), GeoDistributionTarget.id.desc())
+        .limit(1)
+    ).first()
+    if row is None:
+        return None
+    distribution_target, distribution_run = row
+    now = utcnow()
+    distribution_target.human_publish_status = "published"
+    distribution_target.public_url = public_url
+    distribution_target.publication_verification_status = "publicly_verified"
+    distribution_target.published_at = now
+    distribution_target.published_by_user_id = user_id
+    distribution_target.final_action_clicked = False
+    db.add(distribution_target)
+    siblings = list(
+        db.scalars(
+            select(GeoDistributionTarget).where(
+                GeoDistributionTarget.distribution_run_id == distribution_run.id
+            )
+        )
+    )
+    all_published = bool(siblings) and all(
+        item.human_publish_status == "published"
+        and item.public_url
+        and item.publication_verification_status == "publicly_verified"
+        for item in siblings
+    )
+    distribution_run.stage = "published" if all_published else "awaiting_publication"
+    distribution_run.status = "published" if all_published else "partial"
+    db.add(distribution_run)
+    return distribution_target
+
+
 def derive_delivery_stage(
     db: Session,
     action: GeoOptimizationAction,
@@ -619,7 +677,9 @@ def derive_delivery_stage(
         )
     )
     if final_count == len(targets):
-        return "completed"
+        if _has_comparable_retest(db, action):
+            return "completed"
+        return "ready_for_retest"
     if final_count:
         return "partially_completed"
     if any(
@@ -645,6 +705,9 @@ def refresh_action_delivery_stage(db: Session, action: GeoOptimizationAction) ->
     if stage == "completed":
         action.status = "in_progress"
         action.completed_at = utcnow()
+    elif stage == "ready_for_retest":
+        action.status = "in_progress"
+        action.completed_at = None
     elif stage not in {"proposed"}:
         action.status = "in_progress"
 

@@ -22,6 +22,7 @@ from app.models.cleanroom_v1 import (
     GeoWorkspace,
 )
 from app.models.user import User
+from app.models.workspace_access import WorkspaceMembership
 from app.services.workspace_access import add_membership
 
 
@@ -511,6 +512,18 @@ def test_business_entry_can_be_reversed_without_deleting_original(
 
 def test_global_viewer_cannot_write_business_metrics(results_client: TestClient) -> None:
     results_client.app.state.results_user.role = "viewer"
+    sessions = results_client.app.state.results_sessions
+    with sessions() as db:
+        membership = db.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == 1,
+                WorkspaceMembership.user_id == 1,
+            )
+        )
+        assert membership is not None
+        membership.role = "viewer"
+        db.add(membership)
+        db.commit()
     response = results_client.post(
         "/api/v1/workspaces/1/business-metrics",
         json={

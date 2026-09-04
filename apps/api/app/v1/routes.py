@@ -5,11 +5,13 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, get_current_user, require_roles
 from app.db.session import get_db
 from app.models import QueueJob
+from app.services.job_queue import geo_job_payload
 from app.models.cleanroom_v1 import (
     GeoActionCompletionEvidence,
     GeoActionEvent,
@@ -97,6 +99,7 @@ from app.v1.action_workflow import (
     create_opportunity_targets,
     is_past as v2_is_past,
     opportunity_scope_fields,
+    refresh_action_delivery_stage as v2_refresh_action_delivery_stage,
     target_is_final as v2_target_is_final,
 )
 from app.v1.action_workflow_schemas import ActionRetestCreate
@@ -325,7 +328,7 @@ def discover_action_opportunities(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     effective_batch_id = payload.batch_id or db.scalar(
         select(GeoObservationBatch.id)
         .where(
@@ -383,7 +386,7 @@ def discover_action_opportunities(
             select(QueueJob)
             .where(
                 QueueJob.job_type == "geo_opportunity.discover",
-                QueueJob.status.in_(("pending", "running")),
+                QueueJob.status.in_(("pending", "running", "recovering")),
             )
             .order_by(QueueJob.id.desc())
         )
@@ -429,24 +432,47 @@ def discover_action_opportunities(
         priority=25,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "batch_id": int(effective_batch_id),
-            "model_keys": selected_model_keys,
-            "question_plan_ids": payload.question_plan_ids,
-            "max_items": payload.max_items,
-            "input_fingerprint": context["input_fingerprint"],
-            "evidence_count": len(context["evidence"]),
-            "runtime_key": payload.runtime_key,
-            "model": agent_model,
-            "reasoning_effort": reasoning_effort,
-            "actor_user_id": user.id,
-            "stage": "queued",
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            batch_id=int(effective_batch_id),
+            model_keys=selected_model_keys,
+            question_plan_ids=payload.question_plan_ids,
+            max_items=payload.max_items,
+            input_fingerprint=context["input_fingerprint"],
+            evidence_count=len(context["evidence"]),
+            runtime_key=payload.runtime_key,
+            model=agent_model,
+            reasoning_effort=reasoning_effort,
+            stage="queued",
+        ),
     )
     db.add(job)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = next(
+            (
+                row
+                for row in db.scalars(
+                    select(QueueJob)
+                    .where(
+                        QueueJob.job_type == "geo_opportunity.discover",
+                        QueueJob.status.in_(("pending", "running", "recovering")),
+                    )
+                    .order_by(QueueJob.id.desc())
+                )
+                if int((row.payload_json or {}).get("workspace_id") or 0) == workspace_id
+                and (row.payload_json or {}).get("input_fingerprint")
+                == context["input_fingerprint"]
+            ),
+            None,
+        )
+        if existing is not None:
+            return _opportunity_analysis_read(existing)
+        raise
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -544,7 +570,7 @@ def create_website_gap_analysis(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(*WRITE_ROLES)),
 ):
-    workspace_or_404(db, user, workspace_id)
+    workspace = workspace_or_404(db, user, workspace_id)
     scoped_or_404(db, GeoObservationBatch, workspace_id, payload.batch_id)
     selected_models = sorted({value.strip() for value in payload.model_keys if value.strip()})
     selected_questions = sorted({int(value) for value in payload.question_plan_ids})
@@ -568,7 +594,7 @@ def create_website_gap_analysis(
             select(QueueJob)
             .where(
                 QueueJob.job_type == WEBSITE_GAP_JOB_TYPE,
-                QueueJob.status.in_(("pending", "running")),
+                QueueJob.status.in_(("pending", "running", "recovering")),
             )
             .order_by(QueueJob.id.desc())
         )
@@ -614,26 +640,49 @@ def create_website_gap_analysis(
         priority=26,
         scheduled_at=datetime.now(timezone.utc),
         max_attempts=1,
-        payload_json={
-            "project_id": 0,
-            "workspace_id": workspace_id,
-            "batch_id": payload.batch_id,
-            "model_keys": selected_models,
-            "question_plan_ids": selected_questions,
-            "input_fingerprint": context["input_fingerprint"],
-            "evidence_count": len(context["evidence"]),
-            "official_metrics": context["deterministic_metrics"],
-            "skill_name": skill["name"],
-            "skill_sha256": skill["sha256"],
-            "runtime_key": payload.runtime_key,
-            "model": agent_model,
-            "reasoning_effort": reasoning_effort,
-            "actor_user_id": user.id,
-            "stage": "queued",
-        },
+        payload_json=geo_job_payload(
+            workspace_id=workspace_id,
+            company_id=workspace.company_id,
+            actor_user_id=user.id,
+            batch_id=payload.batch_id,
+            model_keys=selected_models,
+            question_plan_ids=selected_questions,
+            input_fingerprint=context["input_fingerprint"],
+            evidence_count=len(context["evidence"]),
+            official_metrics=context["deterministic_metrics"],
+            skill_name=skill["name"],
+            skill_sha256=skill["sha256"],
+            runtime_key=payload.runtime_key,
+            model=agent_model,
+            reasoning_effort=reasoning_effort,
+            stage="queued",
+        ),
     )
     db.add(job)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = next(
+            (
+                row
+                for row in db.scalars(
+                    select(QueueJob)
+                    .where(
+                        QueueJob.job_type == WEBSITE_GAP_JOB_TYPE,
+                        QueueJob.status.in_(("pending", "running", "recovering")),
+                    )
+                    .order_by(QueueJob.id.desc())
+                )
+                if int((row.payload_json or {}).get("workspace_id") or 0) == workspace_id
+                and (row.payload_json or {}).get("input_fingerprint")
+                == context["input_fingerprint"]
+            ),
+            None,
+        )
+        if existing is not None:
+            return _website_gap_analysis_read(existing)
+        raise
     db.add(
         GeoActionEvent(
             workspace_id=workspace_id,
@@ -1214,8 +1263,9 @@ def _refresh_action_retest(db: Session, row: GeoReobservation) -> dict:
                     row.retest_metrics = retest_metrics
                     row.conclusion = conclusion
                     row.measured_delta = measured_delta
-                    row.status = "completed"
-                    row.completed_at = datetime.now(timezone.utc)
+                    comparable = conclusion in {"improved", "unchanged", "regressed"}
+                    row.status = "completed" if comparable else "failed"
+                    row.completed_at = datetime.now(timezone.utc) if comparable else None
                     if action:
                         if conclusion in {"improved", "unchanged", "regressed"}:
                             if action.workflow_version == "action-flow.v2":
@@ -1264,6 +1314,9 @@ def _refresh_action_retest(db: Session, row: GeoReobservation) -> dict:
                                     "measured" if fully_measured else "partially_measured"
                                 )
                                 action.status = "verified" if fully_measured else "in_progress"
+                                v2_refresh_action_delivery_stage(db, action)
+                                if fully_measured:
+                                    action.status = "verified"
                             else:
                                 action.status = "verified"
                                 action.stage = "verified"

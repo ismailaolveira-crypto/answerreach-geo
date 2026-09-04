@@ -21,6 +21,16 @@ from app.models.cleanroom_v1 import (
 from app.services.agent_runtime import get_agent_runtime, sanitize_agent_error
 
 
+def agent_workspace_artifact_root(source_file: Path | None = None) -> Path:
+    """Resolve the Agent workspace artifact root for local and container layouts.
+
+    ``apps/api/app/v1/agent_workspace.py`` is ``parents[2]`` away from the API
+    root in both the repository checkout and the flattened ``/app`` image.
+    """
+
+    return (source_file or Path(__file__)).resolve().parents[2] / "private_artifacts" / "agent-workspace"
+
+
 OUTPUT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -249,9 +259,7 @@ def execute_agent_workspace_message(
 
         result = runtime.run_structured(
             task_directory=(
-                Path(__file__).resolve().parents[4]
-                / "private_artifacts"
-                / "agent-workspace"
+                agent_workspace_artifact_root()
                 / str(conversation.workspace_id)
                 / str(conversation.id)
             ),

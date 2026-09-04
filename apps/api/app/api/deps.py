@@ -15,6 +15,13 @@ ADMIN_ROLES = {"super_admin"}
 CONTENT_ROLES = {"super_admin", "company_admin", "content_operator"}
 REVIEW_ROLES = {"super_admin", "company_admin", "reviewer"}
 WORKSPACE_PATH = re.compile(r"^/api/v1/workspaces/(\d+)(?:/|$)")
+WORKSPACE_ROLE_TO_COMPANY_ROLE = {
+    "owner": "company_admin",
+    "admin": "company_admin",
+    "operator": "content_operator",
+    "reviewer": "reviewer",
+    "viewer": "viewer",
+}
 
 
 def get_current_user(
@@ -55,10 +62,23 @@ def get_current_user(
 def require_roles(*roles: str) -> Callable[[User], User]:
     allowed_roles = set(roles)
 
-    def dependency(user: User = Depends(get_current_user)) -> User:
-        if user.role not in allowed_roles:
-            raise HTTPException(status_code=403, detail="Insufficient role permission")
-        return user
+    def dependency(
+        request: Request,
+        user: User = Depends(get_current_user),
+        db: Session = Depends(get_db),
+    ) -> User:
+        if user.role in allowed_roles:
+            return user
+        match = WORKSPACE_PATH.match(request.url.path)
+        if match and user.role != "super_admin":
+            membership = membership_for(db, int(match.group(1)), user.id)
+            effective_role = WORKSPACE_ROLE_TO_COMPANY_ROLE.get(
+                membership.role if membership is not None else "",
+                "",
+            )
+            if effective_role in allowed_roles:
+                return user
+        raise HTTPException(status_code=403, detail="Insufficient role permission")
 
     return dependency
 
