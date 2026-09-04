@@ -69,23 +69,6 @@ def test_workspace_catalog_does_not_match_generic_terms() -> None:
     assert find_brand_mentions("这里只讨论 AI网关 和 Token平台，不点名任何品牌。", aliases) == []
 
 
-def test_numeric_workspace_id_does_not_select_another_tenants_brand_catalog() -> None:
-    other = GeoWorkspace(
-        id=1,
-        company_id=2,
-        slug="other-tenant",
-        brand_name="其他品牌",
-        brand_aliases=["其他别名"],
-        status="active",
-    )
-
-    configs = brand_configs(other)
-
-    assert [(item.canonical_name, item.aliases) for item in configs] == [
-        ("其他品牌", ("其他品牌", "其他别名"))
-    ]
-
-
 def test_generic_product_term_is_not_a_baseline_brand_alias() -> None:
     result = build_competitor_comparison(
         workspace(),

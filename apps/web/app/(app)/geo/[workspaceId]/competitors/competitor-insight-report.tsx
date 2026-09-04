@@ -78,7 +78,7 @@ export function CompetitorInsightReport({
         {loadError ? <div className={styles.syncWarning} role="alert"><b>账号报告状态暂未确认</b><span>当前显示浏览器缓存。{loadError}</span></div> : null}
         {insight.is_stale ? <div className={styles.staleWarning} role="status"><b>这是一份历史快照</b><span>当前筛选数据已经变化。报告内容保持原样，避免把旧结论伪装成当前结论；请返回竞品对比重新生成。</span></div> : null}
         <header className={styles.reportHeader}>
-          <div><span>GEO · 范围分析报告</span><h1>竞品对比洞察</h1><p>{insight.analysis.scope_summary}</p></div>
+          <div><span>春秋元泉 GEO · 范围分析报告</span><h1>竞品对比洞察</h1><p>{insight.analysis.scope_summary}</p></div>
           <dl><div><dt>分析范围</dt><dd>{insight.scope.period}</dd></div><div><dt>真实回答</dt><dd>{insight.scope.answer_count} 条</dd></div><div><dt>生成模型</dt><dd>{insight.provider} · {insight.model}</dd></div><div><dt>保存状态</dt><dd>{insight.persisted ? `账号报告${insight.snapshot_id ? ` #${insight.snapshot_id}` : ""}` : "浏览器缓存"}</dd></div></dl>
         </header>
 

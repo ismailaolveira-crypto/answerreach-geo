@@ -7,8 +7,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import WRITE_ROLES, get_current_user, require_roles
@@ -84,7 +83,7 @@ def _agent_capacity(
     workspace_id: int,
     *,
     exclude_run_id: int | None = None,
-) -> tuple[int, int, object | None]:
+) -> tuple[int, list[object]]:
     limit = max(1, min(int(get_settings().agent_max_concurrent_runs), 10))
     query = select(GeoAgentRun).where(
         GeoAgentRun.workspace_id == workspace_id,
@@ -92,20 +91,18 @@ def _agent_capacity(
     )
     if exclude_run_id is not None:
         query = query.where(GeoAgentRun.id != exclude_run_id)
-    active_run_count = int(db.scalar(select(func.count()).select_from(query.subquery())) or 0)
-    job_query = select(QueueJob).where(
-        QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
-        QueueJob.status.in_(("pending", "running")),
-        QueueJob.payload_json["workspace_id"].as_integer() == workspace_id,
-    )
-    active_job_count = int(db.scalar(select(func.count()).select_from(job_query.subquery())) or 0)
-    active_count = active_run_count + active_job_count
-    busy = None
-    if active_count >= limit:
-        busy = db.scalar(query.order_by(GeoAgentRun.id.desc()).limit(1))
-        if busy is None:
-            busy = db.scalar(job_query.order_by(QueueJob.id.desc()).limit(1))
-    return limit, active_count, busy
+    active_runs: list[object] = list(db.scalars(query.order_by(GeoAgentRun.id.desc())))
+    active_discovery_jobs = [
+        job
+        for job in db.scalars(
+            select(QueueJob).where(
+                QueueJob.job_type.in_(("geo_opportunity.discover", WEBSITE_GAP_JOB_TYPE)),
+                QueueJob.status.in_(("pending", "running")),
+            )
+        )
+        if int((job.payload_json or {}).get("workspace_id") or 0) == workspace_id
+    ]
+    return limit, [*active_runs, *active_discovery_jobs]
 
 
 def _agent_runtime_diagnostic(
@@ -119,12 +116,12 @@ def _agent_runtime_diagnostic(
         diagnostic = _diagnose_runtime_for_request(runtime_key, invalidate=invalidate)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Agent runtime not found") from exc
-    limit, active_count, _busy = _agent_capacity(db, workspace_id)
+    limit, active_runs = _agent_capacity(db, workspace_id)
     return {
         **diagnostic,
-        "active_run_count": active_count,
+        "active_run_count": len(active_runs),
         "max_concurrent_runs": limit,
-        "capacity_available": active_count < limit,
+        "capacity_available": len(active_runs) < limit,
         "run_timeout_seconds": max(
             60,
             min(int(get_settings().agent_run_timeout_seconds), 3600),
@@ -138,12 +135,6 @@ def _diagnose_runtime_for_request(runtime_key: str, *, invalidate: bool = False)
             invalidate_local_codex_diagnostic_cache()
         return diagnose_local_codex()
     return diagnose_agent_runtime(runtime_key, invalidate=invalidate)
-
-
-def _runtime_unavailable_detail(diagnostic: dict, default: str) -> str:
-    if diagnostic.get("login_status") == "capacity_busy":
-        return "Agent 当前客户端容量繁忙，请等待正在运行的任务结束"
-    return str(diagnostic.get("error") or default)
 
 
 def _resolve_agent_execution(
@@ -201,58 +192,17 @@ def _assert_agent_capacity(
     *,
     exclude_run_id: int | None = None,
 ) -> None:
-    limit, active_count, busy = _agent_capacity(db, workspace_id, exclude_run_id=exclude_run_id)
-    if active_count < limit:
+    limit, active_runs = _agent_capacity(db, workspace_id, exclude_run_id=exclude_run_id)
+    if len(active_runs) < limit:
         return
+    busy = active_runs[0]
     raise HTTPException(
         status_code=409,
         detail=(
-            f"Workspace Agent capacity is busy ({active_count}/{limit}) with run {getattr(busy, 'id', 'unknown')}; "
+            f"Workspace Agent capacity is busy ({len(active_runs)}/{limit}) with run {busy.id}; "
             "wait for it to finish or interrupt it before starting another run"
         ),
     )
-
-
-def _active_agent_run_for_action(
-    db: Session,
-    workspace_id: int,
-    action_id: int,
-    *,
-    exclude_run_id: int | None = None,
-) -> GeoAgentRun | None:
-    query = select(GeoAgentRun).where(
-        GeoAgentRun.workspace_id == workspace_id,
-        GeoAgentRun.action_id == action_id,
-        GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),
-    )
-    if exclude_run_id is not None:
-        query = query.where(GeoAgentRun.id != exclude_run_id)
-    return db.scalar(query.order_by(GeoAgentRun.id.desc()).limit(1))
-
-
-def _raise_active_agent_run_conflict(active: GeoAgentRun) -> None:
-    raise HTTPException(status_code=409, detail=f"Agent run {active.id} is already active")
-
-
-def _commit_agent_run_transition(
-    db: Session,
-    run: GeoAgentRun,
-    *,
-    exclude_run_id: int | None = None,
-) -> None:
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        active = _active_agent_run_for_action(
-            db,
-            run.workspace_id,
-            run.action_id,
-            exclude_run_id=exclude_run_id,
-        )
-        if active is not None:
-            _raise_active_agent_run_conflict(active)
-        raise
 
 
 @router.get(
@@ -278,11 +228,11 @@ def read_agent_runtimes(
     user: User = Depends(get_current_user),
 ):
     workspace_or_404(db, user, workspace_id)
-    limit, active_count, _busy = _agent_capacity(db, workspace_id)
+    limit, active_runs = _agent_capacity(db, workspace_id)
     shared = {
-        "active_run_count": active_count,
+        "active_run_count": len(active_runs),
         "max_concurrent_runs": limit,
-        "capacity_available": active_count < limit,
+        "capacity_available": len(active_runs) < limit,
         "run_timeout_seconds": max(60, min(int(get_settings().agent_run_timeout_seconds), 3600)),
     }
     return [{**diagnostic, **shared} for diagnostic in list_agent_runtimes()]
@@ -300,19 +250,19 @@ def test_agent_runtime(
     workspace_or_404(db, user, workspace_id)
     diagnostic = _agent_runtime_diagnostic(db, workspace_id, invalidate=True)
     started = perf_counter()
+    if not diagnostic.get("ready"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": diagnostic.get("error") or "Codex login is required",
+        }
     if not diagnostic.get("capacity_available"):
         return {
             "ok": False,
             "runtime": diagnostic,
             "latency_ms": int((perf_counter() - started) * 1000),
             "error": "Codex Agent 当前容量已满，请等待正在运行的任务结束",
-        }
-    if not diagnostic.get("ready"):
-        return {
-            "ok": False,
-            "runtime": diagnostic,
-            "latency_ms": int((perf_counter() - started) * 1000),
-            "error": _runtime_unavailable_detail(diagnostic, "Codex login is required"),
         }
     import tempfile
 
@@ -366,19 +316,19 @@ def test_selected_agent_runtime(
         invalidate=True,
     )
     started = perf_counter()
+    if not diagnostic.get("ready"):
+        return {
+            "ok": False,
+            "runtime": diagnostic,
+            "latency_ms": int((perf_counter() - started) * 1000),
+            "error": diagnostic.get("error") or "Agent runtime is not ready",
+        }
     if not diagnostic.get("capacity_available"):
         return {
             "ok": False,
             "runtime": diagnostic,
             "latency_ms": int((perf_counter() - started) * 1000),
             "error": "Agent 当前容量已满，请等待正在运行的任务结束",
-        }
-    if not diagnostic.get("ready"):
-        return {
-            "ok": False,
-            "runtime": diagnostic,
-            "latency_ms": int((perf_counter() - started) * 1000),
-            "error": _runtime_unavailable_detail(diagnostic, "Agent runtime is not ready"),
         }
     import tempfile
 
@@ -485,16 +435,24 @@ def create_agent_run(
                     "已验证搜索事件、公开来源 URL 和原始工件。"
                 ),
             )
-    active = _active_agent_run_for_action(db, workspace_id, action_id)
-    if active:
-        _raise_active_agent_run_conflict(active)
-    _assert_agent_capacity(db, workspace_id)
     diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
     if not diagnostic.get("ready"):
         raise HTTPException(
             status_code=409,
-            detail=_runtime_unavailable_detail(diagnostic, "Selected Agent is not ready"),
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
         )
+    active = db.scalar(
+        select(GeoAgentRun)
+        .where(
+            GeoAgentRun.workspace_id == workspace_id,
+            GeoAgentRun.action_id == action_id,
+            GeoAgentRun.status.in_(ACTIVE_AGENT_RUN_STATUSES),
+        )
+        .order_by(GeoAgentRun.id.desc())
+    )
+    if active:
+        raise HTTPException(status_code=409, detail=f"Agent run {active.id} is already active")
+    _assert_agent_capacity(db, workspace_id)
     platforms = list(dict.fromkeys(payload.selected_platforms or _default_agent_platforms(db, action)))
     if not platforms:
         raise HTTPException(status_code=422, detail="Select at least one target platform")
@@ -537,14 +495,7 @@ def create_agent_run(
         },
     )
     db.add(run)
-    try:
-        db.flush()
-    except IntegrityError:
-        db.rollback()
-        active = _active_agent_run_for_action(db, workspace_id, action_id)
-        if active is not None:
-            _raise_active_agent_run_conflict(active)
-        raise
+    db.flush()
     job = QueueJob(
         job_type="geo_agent.run",
         status="pending",
@@ -1143,9 +1094,6 @@ def resume_agent_run(
     run = _agent_run_or_404(db, workspace_id, run_id)
     if run.status not in {"cancelled", "failed"} or not _agent_run_session_id(run):
         raise HTTPException(status_code=409, detail="Only an interrupted/failed run with an Agent session can resume")
-    active = _active_agent_run_for_action(db, workspace_id, run.action_id, exclude_run_id=run.id)
-    if active is not None:
-        _raise_active_agent_run_conflict(active)
     _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     job = QueueJob(
         job_type="geo_agent.run",
@@ -1170,7 +1118,7 @@ def resume_agent_run(
     run.error_code = None
     run.error_message = None
     run.finished_at = None
-    _commit_agent_run_transition(db, run, exclude_run_id=run.id)
+    db.commit()
     append_agent_event(
         db,
         run,
@@ -1205,9 +1153,6 @@ def revise_agent_run(
             status_code=409,
             detail="Only the current rejected draft with an existing Agent session can be revised",
         )
-    active = _active_agent_run_for_action(db, workspace_id, run.action_id, exclude_run_id=run.id)
-    if active is not None:
-        _raise_active_agent_run_conflict(active)
     _assert_agent_capacity(db, workspace_id, exclude_run_id=run.id)
     review = db.scalar(
         select(GeoContentReview)
@@ -1254,7 +1199,7 @@ def revise_agent_run(
     action = scoped_or_404(db, GeoOptimizationAction, workspace_id, run.action_id)
     action.stage = "generating"
     action.blocked_reason = None
-    _commit_agent_run_transition(db, run, exclude_run_id=run.id)
+    db.commit()
     append_agent_event(
         db,
         run,

@@ -74,7 +74,6 @@ from app.v1.content_delivery_routes import (
 from app.v1.agent_run_routes import (
     _assert_agent_capacity,
     _diagnose_runtime_for_request,
-    _runtime_unavailable_detail,
     _resolve_agent_execution,
 )
 from app.v1.action_opportunities import WEBSITE_RULE_VERSION, valid_action_evidence
@@ -377,6 +376,18 @@ def discover_action_opportunities(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
+        )
+    agent_model, reasoning_effort = _resolve_agent_execution(
+        diagnostic,
+        requested_model=payload.model or payload.codex_model,
+        requested_reasoning_effort=payload.reasoning_effort,
+    )
+
     active_jobs = [
         job
         for job in db.scalars(
@@ -396,14 +407,8 @@ def discover_action_opportunities(
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
             and (job.payload_json or {}).get("runtime_key", "local_codex") == payload.runtime_key
-            and (
-                not (payload.model or payload.codex_model)
-                or (job.payload_json or {}).get("model") == (payload.model or payload.codex_model)
-            )
-            and (
-                not payload.reasoning_effort
-                or (job.payload_json or {}).get("reasoning_effort") == payload.reasoning_effort
-            )
+            and (job.payload_json or {}).get("model") == agent_model
+            and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
     )
@@ -411,18 +416,6 @@ def discover_action_opportunities(
         return _opportunity_analysis_read(same_scope)
 
     _assert_agent_capacity(db, workspace_id)
-    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
-    if not diagnostic.get("ready"):
-        raise HTTPException(
-            status_code=409,
-            detail=_runtime_unavailable_detail(diagnostic, "Selected Agent is not ready"),
-        )
-    agent_model, reasoning_effort = _resolve_agent_execution(
-        diagnostic,
-        requested_model=payload.model or payload.codex_model,
-        requested_reasoning_effort=payload.reasoning_effort,
-    )
-
     job = QueueJob(
         job_type="geo_opportunity.discover",
         status="pending",
@@ -562,6 +555,20 @@ def create_website_gap_analysis(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
+    if not diagnostic.get("ready"):
+        raise HTTPException(
+            status_code=409,
+            detail=diagnostic.get("error") or "Selected Agent is not ready",
+        )
+    agent_model, reasoning_effort = _resolve_agent_execution(
+        diagnostic,
+        requested_model=payload.model or payload.codex_model,
+        requested_reasoning_effort=payload.reasoning_effort,
+    )
+
     active_jobs = [
         job
         for job in db.scalars(
@@ -581,14 +588,8 @@ def create_website_gap_analysis(
             if (job.payload_json or {}).get("input_fingerprint")
             == context["input_fingerprint"]
             and (job.payload_json or {}).get("runtime_key", "local_codex") == payload.runtime_key
-            and (
-                not (payload.model or payload.codex_model)
-                or (job.payload_json or {}).get("model") == (payload.model or payload.codex_model)
-            )
-            and (
-                not payload.reasoning_effort
-                or (job.payload_json or {}).get("reasoning_effort") == payload.reasoning_effort
-            )
+            and (job.payload_json or {}).get("model") == agent_model
+            and (job.payload_json or {}).get("reasoning_effort") == reasoning_effort
         ),
         None,
     )
@@ -596,18 +597,6 @@ def create_website_gap_analysis(
         return _website_gap_analysis_read(same_scope)
 
     _assert_agent_capacity(db, workspace_id)
-    diagnostic = _diagnose_runtime_for_request(payload.runtime_key, invalidate=True)
-    if not diagnostic.get("ready"):
-        raise HTTPException(
-            status_code=409,
-            detail=_runtime_unavailable_detail(diagnostic, "Selected Agent is not ready"),
-        )
-    agent_model, reasoning_effort = _resolve_agent_execution(
-        diagnostic,
-        requested_model=payload.model or payload.codex_model,
-        requested_reasoning_effort=payload.reasoning_effort,
-    )
-
     job = QueueJob(
         job_type=WEBSITE_GAP_JOB_TYPE,
         status="pending",

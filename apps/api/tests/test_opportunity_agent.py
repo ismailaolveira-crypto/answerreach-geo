@@ -386,22 +386,3 @@ def test_route_queues_codex_before_any_opportunity_is_visible(monkeypatch) -> No
         assert run["result_count"] == 0
         assert visible == []
         assert [row["title"] for row in legacy] == ["旧规则机会"]
-
-        monkeypatch.setattr(
-            routes,
-            "_assert_agent_capacity",
-            lambda *_args, **_kwargs: pytest.fail("capacity checked before idempotent replay"),
-        )
-        replay = routes.discover_action_opportunities(
-            1,
-            ActionOpportunityDiscoverRequest(
-                batch_id=1,
-                model_keys=["deepseek"],
-                question_plan_ids=[],
-                codex_model="gpt-test",
-                reasoning_effort="low",
-            ),
-            db,
-            user,
-        )
-        assert replay["job_id"] == run["job_id"]

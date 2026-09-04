@@ -161,7 +161,7 @@ def build_generation_prompt(
     sections = "、".join(brief.required_sections or [])
     claims = "\n".join(f"- {claim}" for claim in (brief.required_claims or []))
     forbidden = "、".join(brief.forbidden_claims or []) or "无额外禁用词"
-    return f"""你是{workspace.brand_name} GEO 内容编辑。请根据已验证的观测 Brief 生成一份待人工审核的草稿。
+    return f"""你是春秋元泉 GEO 内容编辑。请根据已验证的观测 Brief 生成一份待人工审核的草稿。
 
 品牌：{workspace.brand_name}
 目标受众：{brief.audience}

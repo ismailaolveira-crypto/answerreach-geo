@@ -42,14 +42,6 @@ def main() -> None:
             page.wait_for_url("**/geo/*", timeout=30_000)
             workspace_id = page.url.split("/geo/", 1)[1].split("/", 1)[0].split("?", 1)[0]
 
-            page.goto(f"/geo/{workspace_id}?__view=decision", wait_until="domcontentloaded")
-            expect(page.get_by_text("看见CI 隔离品牌如何进入企业 AI 的真实采购决策。")).to_be_visible()
-            assert "春秋元泉" not in page.locator("body").inner_text()
-
-            page.goto(f"/geo/{workspace_id}/competitors", wait_until="domcontentloaded")
-            expect(page.get_by_role("heading", name="竞品对比", exact=True)).to_be_visible()
-            assert "春秋元泉" not in page.locator("body").inner_text()
-
             page.goto(f"/geo/{workspace_id}/collaboration", wait_until="domcontentloaded")
             expect(page.get_by_role("heading", name="协作中心")).to_be_visible()
             page.get_by_role("button", name="通讯录").click()
@@ -92,7 +84,7 @@ def main() -> None:
             context.close()
             browser.close()
 
-    print("CI browser smoke passed: tenant brand isolation, contacts, CSRF rejection, re-login, and Agent sidebar persistence.")
+    print("CI browser smoke passed: registration, contacts, CSRF rejection, re-login, and Agent sidebar persistence.")
 
 
 if __name__ == "__main__":

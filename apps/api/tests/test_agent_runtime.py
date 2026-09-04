@@ -87,7 +87,7 @@ def test_runtime_route_uses_parallel_catalog(monkeypatch) -> None:
     expected = [{"runtime_key": key} for key in agent_runtime.RUNTIME_KEYS]
     monkeypatch.setattr(routes, "workspace_or_404", lambda *_args: None)
     monkeypatch.setattr(routes, "list_agent_runtimes", lambda: expected, raising=False)
-    monkeypatch.setattr(routes, "_agent_capacity", lambda *_args: (10, 0, None))
+    monkeypatch.setattr(routes, "_agent_capacity", lambda *_args: (10, []))
     monkeypatch.setattr(routes, "get_settings", lambda: SimpleNamespace(agent_run_timeout_seconds=900))
     monkeypatch.setattr(
         routes,

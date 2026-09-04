@@ -33,8 +33,8 @@ class BrandConfig:
     is_baseline: bool = False
 
 
-WORKSPACE_DEFAULTS: dict[str, tuple[BrandConfig, ...]] = {
-    "spring-yuan": (
+WORKSPACE_DEFAULTS: dict[int, tuple[BrandConfig, ...]] = {
+    1: (
         BrandConfig(
             "chunqiu-yuanquan",
             "春秋元泉",
@@ -71,17 +71,17 @@ WORKSPACE_DEFAULTS: dict[str, tuple[BrandConfig, ...]] = {
 
 
 def brand_configs(workspace: GeoWorkspace) -> tuple[BrandConfig, ...]:
-    configured = WORKSPACE_DEFAULTS.get(workspace.slug)
+    configured = WORKSPACE_DEFAULTS.get(workspace.id)
     if configured:
         return configured
     aliases = tuple(dict.fromkeys([workspace.brand_name, *(workspace.brand_aliases or [])]))
     return (BrandConfig("workspace-brand", workspace.brand_name, aliases, True),)
 
 
-def _win_reason_label(reason_type: str, baseline_name: str) -> str:
-    if reason_type == "explicit_rank_ahead":
-        return f"明确排序在{baseline_name}之前"
-    return f"竞品入选而{baseline_name}缺席"
+WIN_REASON_LABELS = {
+    "explicit_rank_ahead": "明确排序在春秋元泉之前",
+    "selected_baseline_absent": "竞品入选而春秋元泉缺席",
+}
 
 
 def _table_position(answer: str, match: BrandTextMatch) -> int | None:
@@ -459,7 +459,7 @@ def _action_diagnostics(
                 analysis["comparisons"][competitor_key]["comparable"] for analysis in scoped
             ),
             "reason_type": reason_type,
-            "reason_label": _win_reason_label(reason_type, baseline.canonical_name),
+            "reason_label": WIN_REASON_LABELS[reason_type],
             "evidence_count": len(wins),
             "evidence_ids": [analysis["evidence"].id for analysis in ordered_wins],
             "evidence": [
@@ -549,7 +549,7 @@ def build_competitor_comparison(
             "negative": "否定词优先于推荐词；不推荐、不建议、非首选等上下文计入负面。",
             "appearance_order": "同一回答内品牌首次出现的文本顺序，仅用于定位，绝不作为排名或胜负依据。",
             "explicit_rank": "只认编号列表或可识别表格的数据行顺序；同一品牌保留最靠前的明确排名，Top 3 与平均位置只使用该字段。",
-            "win": f"同一回答中，竞品明确排名在{configs[0].canonical_name}之前；或竞品进入候选/推荐而{configs[0].canonical_name}缺席，才计为胜出。后续推荐文本不会覆盖更早的明确排名。",
+            "win": "同一回答中，竞品明确排名在春秋元泉之前；或竞品进入候选/推荐而春秋元泉缺席，才计为胜出。后续推荐文本不会覆盖更早的明确排名。",
             "comparable": "双方都有明确排名，或一方进入候选/推荐而另一方缺席，才计为可比较回答。",
             "diagnostic": "行动诊断按竞品、模型、问题聚合真实胜出证据；建议由胜出类型固定映射，不是模型原话。",
             "denominator": "提及率分母是当前筛选范围内已解析的真实回答数；同一回答内同一品牌多个别名只计 1 条。模型/问题分组各自使用本组回答数，不按调用次数隐式加权。",
