@@ -189,7 +189,7 @@ export const agentStageLabels: Record<string, string> = {
 };
 
 export const platformOptions = [
-	{ key: "official_site", label: "品牌官网", logo: "/brand/answerreach-mark.svg" },
+	{ key: "official_site", label: "春秋元泉官网", logo: "/brand/spring-yuan-workspace.svg" },
 	{ key: "zhihu", label: "知乎", logo: "/brand/zhihu.svg" },
 	{ key: "juejin", label: "掘金", logo: "/brand/platforms/juejin.png" },
 	{ key: "csdn", label: "CSDN", logo: "/brand/platforms/csdn.ico" },

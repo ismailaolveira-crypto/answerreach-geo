@@ -312,11 +312,11 @@ def build_website_gap_context(
     }
 
 
-def _developer_instructions(skill: dict, brand_name: str) -> str:
+def _developer_instructions(skill: dict) -> str:
     rendered = "\n\n".join(
         f"--- {document['path']} ---\n{document['content']}" for document in skill["documents"]
     )
-    return f"""You are the official-site gap analyst for {brand_name} GEO. The following Skill is a
+    return f"""You are the official-site gap analyst for 春秋元泉 GEO. The following Skill is a
 mandatory execution contract injected by the backend. Follow every rule. Do not inspect local files,
 databases, credentials, browser profiles, or other batches. Do not edit, publish, or generate an article.
 Return only JSON matching the supplied schema.
@@ -653,9 +653,7 @@ def execute_website_gap_analysis(
         task_directory=task_directory,
         prompt=_prompt(context),
         output_schema=OUTPUT_SCHEMA,
-        developer_instructions=_developer_instructions(
-            skill, str(context["workspace"]["brand_name"])
-        ),
+        developer_instructions=_developer_instructions(skill),
         model=payload.get("model"),
         reasoning_effort=payload.get("reasoning_effort"),
         on_started=on_started,

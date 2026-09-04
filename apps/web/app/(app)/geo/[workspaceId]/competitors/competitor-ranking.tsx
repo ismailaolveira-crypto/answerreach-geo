@@ -81,7 +81,7 @@ function buildSignalGroups(items: ActionDiagnostic[]) {
   }, new Map<string, SignalGroup>());
 }
 
-function SignalDrawer({ workspaceId, baselineName, brand, group }: { workspaceId: string; baselineName: string; brand: CompetitorBrandStat; group: SignalGroup }) {
+function SignalDrawer({ workspaceId, brand, group }: { workspaceId: string; brand: CompetitorBrandStat; group: SignalGroup }) {
   return <div className={styles.rankingSignalDrawer} aria-label={`${brand.canonical_name} 对比信号详情`}>
     <header>
       <span>对比信号 · {group.signalCount}</span>
@@ -95,7 +95,7 @@ function SignalDrawer({ workspaceId, baselineName, brand, group }: { workspaceId
           <div className={styles.signalTimelineHead}><b>{item.model_label}</b><span>{item.reason_label}</span></div>
           <dl>
             <div><dt>对应问题</dt><dd>{item.question}</dd></div>
-            <div><dt>量化差值</dt><dd>竞品 {item.competitor_hit_count} 次，{baselineName} {item.baseline_hit_count} 次，差值 {signedGap}。</dd></div>
+            <div><dt>量化差值</dt><dd>竞品 {item.competitor_hit_count} 次，春秋元泉 {item.baseline_hit_count} 次，差值 {signedGap}。</dd></div>
             <div><dt>原回答摘要</dt><dd>{evidence ? cleanEvidenceExcerpt(evidence.context_snippet) : "该信号没有可展示的单条证据摘要。"}</dd></div>
           </dl>
           {evidence ? <Link href={`/geo/${workspaceId}/evidence/${evidence.evidence_id}`}>查看原回答和关联引用 <span aria-hidden="true">↗</span></Link> : null}
@@ -147,7 +147,7 @@ export function CompetitorRanking({
               <td>{brand.model_count}</td>
               <td><EvidenceDisclosure workspaceId={workspaceId} rows={brand.evidence} /></td>
             </tr>
-            {signalGroup && isOpen ? <tr className={styles.rankingSignalRow}><td colSpan={8}><div id={`signal-drawer-${brand.key}`}><SignalDrawer workspaceId={workspaceId} baselineName={baseline?.canonical_name ?? "基准品牌"} brand={brand} group={signalGroup} /></div></td></tr> : null}
+            {signalGroup && isOpen ? <tr className={styles.rankingSignalRow}><td colSpan={8}><div id={`signal-drawer-${brand.key}`}><SignalDrawer workspaceId={workspaceId} brand={brand} group={signalGroup} /></div></td></tr> : null}
           </Fragment>;
         })}</tbody>
       </table>
@@ -161,7 +161,7 @@ export function CompetitorRanking({
         return <article key={brand.key} data-baseline={brand.is_baseline || undefined}>
           <header><i className={styles.rankNumber}>{rank}</i><span><b>{brand.canonical_name}</b><small>{brand.is_baseline ? "基准品牌（我们）" : "固定追踪竞品"}</small></span><strong>{brand.mention_rate}%<small>{brand.hit_answer_count}/{brand.sample_answer_count} 条</small></strong></header>
           <dl><div><dt>对比信号</dt><dd>{brand.is_baseline ? "—" : signalGroup ? <button type="button" className={styles.signalTrigger} onClick={() => toggleSignal(brand.key)} aria-expanded={isOpen}>{signalGroup.signalCount} 次 <i aria-hidden="true">⌄</i></button> : "0 次"}</dd></div><div><dt>Top 3</dt><dd>{brand.top3_rate}%</dd></div><div><dt>平均位置</dt><dd>{explicitPositionLabel(brand)}</dd></div><div><dt>覆盖</dt><dd>{brand.model_count} 模型</dd></div></dl>
-          {signalGroup && isOpen ? <SignalDrawer workspaceId={workspaceId} baselineName={baseline?.canonical_name ?? "基准品牌"} brand={brand} group={signalGroup} /> : null}
+          {signalGroup && isOpen ? <SignalDrawer workspaceId={workspaceId} brand={brand} group={signalGroup} /> : null}
           <EvidenceDisclosure workspaceId={workspaceId} rows={brand.evidence} />
         </article>;
       })}

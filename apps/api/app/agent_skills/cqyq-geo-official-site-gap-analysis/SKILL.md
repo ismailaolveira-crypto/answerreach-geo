@@ -1,13 +1,11 @@
 ---
 name: cqyq-geo-official-site-gap-analysis
-description: Analyze how the current workspace's official website performs inside one frozen GEO observation scope. Use only when the product explicitly starts an official-site gap analysis for a selected completed batch, model range, and question range; compare official citations with competitor content, then return evidence-linked website recommendations without editing or publishing anything.
+description: Analyze how the 春秋元泉 official website performs inside one frozen GEO observation scope. Use only when the product explicitly starts an official-site gap analysis for a selected completed batch, model range, and question range; compare official citations with competitor content, then return evidence-linked website recommendations without editing or publishing anything.
 ---
 
 # 官网差距分析
 
 Treat the supplied scope bundle as the complete universe for observed metrics.
-
-The workspace and brand identity come only from the runtime task context. Never assume, substitute, or reuse a tenant name from this Skill.
 
 1. Repeat the exact batch, resolved models, resolved questions, and evidence IDs before reasoning.
 2. Stop with `insufficient_scope` when the evidence gate fails. Never fall back to another batch, model, question, or historical result.

@@ -54,8 +54,7 @@ ALLOWED_STRATEGIES = {
 ALLOWED_TYPES = {"brand_absent", "competitor_gap", "citation_gap"}
 
 
-def developer_instructions(brand_name: str) -> str:
-    return f"""You are the opportunity analyst for {brand_name} GEO.
+DEVELOPER_INSTRUCTIONS = """You are the opportunity analyst for 春秋元泉 GEO.
 Analyze only the observation evidence supplied in the prompt. Do not inspect local files, the parent
 repository, databases, environment variables, credentials, or browser profiles. Do not publish, submit,
 log in, or generate article drafts. Do not invent an opportunity merely to fill the output. A recommendation
@@ -590,7 +589,7 @@ def execute_opportunity_analysis(
         task_directory=task_directory,
         prompt=_prompt(context),
         output_schema=OUTPUT_SCHEMA,
-        developer_instructions=developer_instructions(context["workspace"]["brand_name"]),
+        developer_instructions=DEVELOPER_INSTRUCTIONS,
         model=payload.get("model"),
         reasoning_effort=payload.get("reasoning_effort"),
         on_started=on_started,

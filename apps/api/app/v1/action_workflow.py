@@ -410,7 +410,7 @@ def _article_target_truth(
     if verified_publication is not None:
         return "publicly_verified", "completion_evidence", "公开页面已经完成服务器回读核验。", None
 
-    distribution_rows = db.execute(
+    distribution_row = db.execute(
         select(GeoDistributionTarget, GeoDistributionRun)
         .join(
             GeoDistributionRun,
@@ -421,8 +421,9 @@ def _article_target_truth(
             GeoDistributionTarget.platform_key == target.platform_key,
         )
         .order_by(GeoDistributionRun.id.desc(), GeoDistributionTarget.id.desc())
-    ).all()
-    for distribution_target, _distribution_run in distribution_rows:
+    ).first()
+    if distribution_row is not None:
+        distribution_target, distribution_run = distribution_row
         distribution_target_id = int(distribution_target.id)
         if (
             distribution_target.human_publish_status == "published"
@@ -435,8 +436,6 @@ def _article_target_truth(
                 "人工发布结果和公开页面均已核验。",
                 distribution_target_id,
             )
-    for distribution_target, _distribution_run in distribution_rows:
-        distribution_target_id = int(distribution_target.id)
         if (
             distribution_target.draft_readback_status == "draft_saved"
             and distribution_target.draft_url
@@ -447,8 +446,6 @@ def _article_target_truth(
                 "草稿已由用户确认可见，等待在目标平台人工发布。",
                 distribution_target_id,
             )
-    for distribution_target, _distribution_run in distribution_rows:
-        distribution_target_id = int(distribution_target.id)
         if (
             distribution_target.request_status == "draft_link_returned"
             and distribution_target.draft_readback_status == "awaiting_human_confirmation"
@@ -460,26 +457,17 @@ def _article_target_truth(
                 "助手已返回候选草稿地址，仍需用户打开并确认正文可见。",
                 distribution_target_id,
             )
-    if distribution_rows:
-        distribution_target, distribution_run = distribution_rows[0]
-        distribution_target_id = int(distribution_target.id)
         if distribution_target.request_status in {
             "mcp_request_accepted",
             "request_accepted",
             "pending",
-        } or (
-            distribution_run.assistant_task_issued_at is not None
-            and distribution_run.status in {"pending", "partial"}
-        ):
+        } or distribution_run.assistant_task_issued_at is not None:
             return (
                 "draft_write_requested",
                 "distribution_request",
                 "草稿写入任务已发出，正在等待逐平台结果。",
                 distribution_target_id,
             )
-    if distribution_rows:
-        distribution_target, _distribution_run = distribution_rows[0]
-        distribution_target_id = int(distribution_target.id)
         if distribution_target.request_status == "failed":
             return (
                 "draft_ready",

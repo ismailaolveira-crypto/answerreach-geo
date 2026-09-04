@@ -207,7 +207,7 @@ def test_connection(provider: str, mode: str, credentials: dict[str, str]) -> Pr
             provider,
             mode,
             credentials,
-            text="AnswerReach GEO 协作渠道连接测试。",
+            text="春秋元泉 GEO 协作渠道连接测试。",
             external_user_id=None,
             external_id_type="user_id",
         )

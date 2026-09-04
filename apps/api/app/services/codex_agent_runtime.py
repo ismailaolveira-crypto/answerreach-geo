@@ -18,10 +18,6 @@ class CodexRuntimeUnavailable(RuntimeError):
     pass
 
 
-class CodexRuntimeCapacityBusy(CodexRuntimeUnavailable):
-    pass
-
-
 class CodexRunInterrupted(RuntimeError):
     pass
 
@@ -52,9 +48,8 @@ class _WarmCodexClientPool:
         self._slots: list[_WarmCodexSlot] = []
 
     @contextmanager
-    def use(self, *, timeout_seconds: float = 30.0):
+    def use(self):
         slot: _WarmCodexSlot
-        deadline = monotonic() + max(0.1, float(timeout_seconds))
         with self._condition:
             while True:
                 slot = next((candidate for candidate in self._slots if not candidate.in_use), None)
@@ -69,12 +64,7 @@ class _WarmCodexClientPool:
                     )
                     self._slots.append(slot)
                     break
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    raise CodexRuntimeCapacityBusy(
-                        f"Codex client capacity remained busy for {timeout_seconds:g} seconds"
-                    )
-                self._condition.wait(remaining)
+                self._condition.wait()
             slot.in_use = True
             slot.reuse_count += 1
 
@@ -180,7 +170,7 @@ def _probe_local_codex() -> dict:
         }
 
     try:
-        with _warm_codex_client.use(timeout_seconds=0.1) as codex:
+        with _warm_codex_client.use() as codex:
             account_response = codex.account()
             model_response = codex.models()
             account = getattr(account_response, "account", None)
@@ -235,16 +225,6 @@ def _probe_local_codex() -> dict:
                 "error": None,
                 **_warm_codex_client.snapshot(),
             }
-    except CodexRuntimeCapacityBusy as exc:
-        return {
-            "runtime_key": "local_codex",
-            "sdk_installed": True,
-            "sdk_version": openai_codex.__version__,
-            "ready": False,
-            "login_status": "capacity_busy",
-            "error": str(exc),
-            **_warm_codex_client.snapshot(),
-        }
     except Exception as exc:
         return {
             "runtime_key": "local_codex",
@@ -284,8 +264,6 @@ def diagnose_local_codex() -> dict:
         if cached and now - cached[0] < _DIAGNOSTIC_CACHE_TTL_SECONDS:
             return dict(cached[1])
         result = _probe_local_codex()
-        if result.get("login_status") == "capacity_busy":
-            return dict(result)
         _diagnostic_cache = (monotonic(), dict(result))
         return dict(result)
 
@@ -318,11 +296,7 @@ class LocalCodexRuntime:
         compact_events: list[dict] = []
         interrupted = False
 
-        with _warm_codex_client.use(
-            timeout_seconds=min(float(timeout_seconds), 30.0)
-            if timeout_seconds and timeout_seconds > 0
-            else 30.0
-        ) as codex:
+        with _warm_codex_client.use() as codex:
             if thread_id:
                 thread = codex.thread_resume(
                     thread_id,
@@ -471,7 +445,7 @@ class LocalCodexRuntime:
         revised_prompt: str | None = None
         usage: dict = {}
         completed_status = ""
-        with _warm_codex_client.use(timeout_seconds=min(float(timeout_seconds), 30.0)) as codex:
+        with _warm_codex_client.use() as codex:
             thread = codex.thread_start(
                 cwd=str(task_directory),
                 developer_instructions=(

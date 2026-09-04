@@ -495,7 +495,7 @@ async function DecisionMapContent({
 				<section className="sy-heading">
 					<div>
 						<h1>决策地图</h1>
-						<p>看见{decisionMap.workspace.brand_name}如何进入企业 AI 的真实采购决策。</p>
+						<p>看见春秋元泉如何进入企业 AI 的真实采购决策。</p>
 					</div>
 					<div className="sy-cta-row">
 						<form className="sy-filters" method="get" aria-label="筛选决策地图">
@@ -571,7 +571,7 @@ async function DecisionMapContent({
 								metricValue(metrics.mention_count),
 								metricValue(metrics.mention_rate),
 							),
-							numerator: `${metricValue(metrics.mention_count)} 条回答出现${decisionMap.workspace.brand_name}（含负面提及 ${metricValue(metrics.negative_mention_count)} 条）`,
+							numerator: `${metricValue(metrics.mention_count)} 条回答出现春秋元泉（含负面提及 ${metricValue(metrics.negative_mention_count)} 条）`,
 							denominator: denominatorLabel,
 							scope: metricScopeLabel,
 							rules: [
@@ -633,13 +633,13 @@ async function DecisionMapContent({
 									? `${measurementLabel}未引用`
 									: sampleNote
 						}
-						detail={`${measurementLabel}回答中引用${decisionMap.workspace.brand_name}或其来源的比例`}
+						detail={`${measurementLabel}回答中引用春秋元泉或其来源的比例`}
 						explanation={{
 							formula: ratioFormula(
 								metricValue(metrics.citation_count),
 								metricValue(metrics.citation_rate),
 							),
-							numerator: `${metricValue(metrics.citation_count)} 条回答引用${decisionMap.workspace.brand_name}品牌来源`,
+							numerator: `${metricValue(metrics.citation_count)} 条回答引用春秋元泉品牌来源`,
 							denominator: denominatorLabel,
 							scope: metricScopeLabel,
 							rules: [
