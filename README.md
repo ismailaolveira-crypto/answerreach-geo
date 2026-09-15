@@ -37,7 +37,7 @@
   <img src="docs/screenshots/agent-workspace.png" width="100%" alt="入答 AnswerReach Agent 工作台" />
 </p>
 
-> 上图来自当前产品的真实页面；“春秋元泉”是示例工作区，不是产品名。页面中的模型、批次和状态会随部署数据变化，不代表持续在线或 GEO 效果已改善。
+> 上图于 2026-09-15 登录测试账号后从入答实际运行页面截取，工作区品牌名称已模糊处理。页面中的模型、批次和状态会随部署数据变化，不代表持续在线或 GEO 效果已改善。
 
 ## 入答解决什么
 
@@ -60,8 +60,8 @@
     <td width="50%"><img src="docs/screenshots/decision-map.jpg" alt="入答决策地图" /></td>
   </tr>
   <tr>
-    <td align="center"><strong>真实观测</strong><br />按模型、问题和次数创建独立批次</td>
-    <td align="center"><strong>决策地图</strong><br />统一查看提及、候选、推荐、引用和位置</td>
+    <td align="center"><strong>真实观测</strong><br />查看独立批次的逐模型完成状态</td>
+    <td align="center"><strong>决策地图</strong><br />查看自然提及、候选进入、引用与事实核验</td>
   </tr>
 </table>
 
@@ -69,11 +69,11 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/source-map.jpg" alt="入答信源地图" /></td>
+    <td width="50%"><img src="docs/screenshots/source-map.jpg" alt="入答信源看板" /></td>
     <td width="50%"><img src="docs/screenshots/competitor-comparison.jpg" alt="入答竞品对比" /></td>
   </tr>
   <tr>
-    <td align="center"><strong>信源地图</strong><br />从域名和页面回到原始回答与引用证据</td>
+    <td align="center"><strong>信源看板</strong><br />从域名和页面回到原始回答与引用证据</td>
     <td align="center"><strong>竞品对比</strong><br />在同一数据范围中对比品牌表现</td>
   </tr>
 </table>
@@ -86,7 +86,7 @@
     <td width="50%"><img src="docs/screenshots/content-library.jpg" alt="入答内容库" /></td>
   </tr>
   <tr>
-    <td align="center"><strong>执行状态</strong><br />区分队列、Agent、审核、交付与复测进度</td>
+    <td align="center"><strong>执行状态</strong><br />查看模型连接、采集队列和证据归档</td>
     <td align="center"><strong>内容库</strong><br />保留事实依据、版本、平台稿和审核状态</td>
   </tr>
 </table>
@@ -96,21 +96,21 @@
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/maturity-collaboration-contacts.jpg" alt="入答协作中心通讯录和办公平台入口" /></td>
-    <td width="50%"><img src="docs/screenshots/maturity-observation-limits.jpg" alt="入答真实观测范围和费用提示" /></td>
+    <td width="50%"><img src="docs/screenshots/maturity-observation-limits.jpg" alt="入答真实观测配置与任务量" /></td>
   </tr>
   <tr>
     <td align="center"><strong>通讯录与办公入口</strong><br />独立连接企业微信、飞书和钉钉</td>
-    <td align="center"><strong>观测范围</strong><br />提交前显示任务量、上限和真实费用风险</td>
+    <td align="center"><strong>观测范围</strong><br />提交前确认模型、问题、次数与任务量</td>
   </tr>
 </table>
 
 <p align="center">
-  <img src="docs/screenshots/maturity-security-settings.jpg" width="100%" alt="入答安全设置与真实状态边界" />
+  <img src="docs/screenshots/maturity-security-settings.jpg" width="100%" alt="入答工作区设置" />
 </p>
 
-<p align="center"><strong>安全设置</strong><br />凭证不回显，连接、登录、草稿、发布和 GEO 改善分别记录。</p>
+<p align="center"><strong>工作区设置</strong><br />管理品牌口径、成员权限、设备与交付设置。</p>
 
-> 上述图片均来自本仓库的真实产品验收页面。部分历史截图保留了采集时的“春秋元泉 GEO”旧品牌字样；它们展示的是功能和数据状态，不是外部平台已连接或 GEO 效果承诺。
+> 上述图片于 2026-09-15 使用测试账号从入答实际运行页面重新截取，涉及工作区品牌的字样已模糊处理。画面保留当时的历史数据与真实状态，不代表外部平台已连接或 GEO 效果承诺。
 
 ## <a id="product"></a>产品能力
 
